@@ -607,8 +607,6 @@ function ProjectCard({
 
       {/* Info tambahan */}
       <div className="flex items-center gap-3 text-xs text-neutral-500 mb-4">
-        <span>Sales: {project.sales_pic.name}</span>
-        <span>•</span>
         <span>
           Target: {new Date(project.target_submit).toLocaleDateString("id-ID")}
         </span>

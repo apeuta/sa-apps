@@ -120,7 +120,7 @@ async def get_pending_projects(
     ]
 
     return success_response(
-        data={"projects": projects_data, "total": len(projects_data)},
+        data=projects_data,
         message=f"Ditemukan {len(projects_data)} proyek menunggu assignment.",
     )
 
@@ -177,7 +177,7 @@ async def get_available_sa(
     ]
 
     return success_response(
-        data={"sa_list": sa_data, "total": len(sa_data)},
+        data=sa_data,
         message=f"Ditemukan {len(sa_data)} SA tersedia.",
     )
 

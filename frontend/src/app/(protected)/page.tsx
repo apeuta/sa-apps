@@ -1,33 +1,19 @@
 "use client";
 
 import { useAuthStore } from "@/store/auth";
-import dynamic from "next/dynamic";
+import SalesDashboard from "./dashboard/sales/page";
+import SADashboard from "./dashboard/sa/page";
+import LeadSADashboard from "./dashboard/lead-sa/page";
 
 /**
- * Halaman utama (/) — redirect ke dashboard sesuai role
+ * Halaman utama (/) — render dashboard sesuai role
  *
- * Menggunakan dynamic import untuk menghindari loading semua dashboard sekaligus.
  * Setiap role punya dashboard fungsional sendiri:
  * - Sales: listing proyek miliknya
  * - SA: listing proyek assigned + activity
  * - Lead_SA: overview + utilisasi SA + effort per proyek
  * - Admin: sama dengan Lead_SA
  */
-
-const SalesDashboard = dynamic(
-  () => import("./dashboard/sales/page"),
-  { loading: () => <DashboardSkeleton /> }
-);
-
-const SADashboard = dynamic(
-  () => import("./dashboard/sa/page"),
-  { loading: () => <DashboardSkeleton /> }
-);
-
-const LeadSADashboard = dynamic(
-  () => import("./dashboard/lead-sa/page"),
-  { loading: () => <DashboardSkeleton /> }
-);
 
 function DashboardSkeleton() {
   return (
