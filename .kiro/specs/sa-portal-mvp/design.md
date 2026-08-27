@@ -464,6 +464,66 @@ volumes:
 
 ---
 
+## API Endpoints (Implementasi Aktual)
+
+Berikut daftar endpoint REST API yang sudah diimplementasikan di backend:
+
+### Projects
+
+| Method | Endpoint | Deskripsi |
+|--------|----------|-----------|
+| GET | `/api/v1/projects` | Daftar proyek dengan filter (sales_pic, assigned_to, status) dan sort |
+| GET | `/api/v1/projects/{id}` | Detail proyek (termasuk PIC Sales/SA enrichment) |
+| GET | `/api/v1/projects/status-summary` | Ringkasan count proyek per status untuk dashboard |
+| POST | `/api/v1/projects` | Submit request proyek baru (form data + file upload) |
+| POST | `/api/v1/projects/{id}/assign` | Assignment SA ke proyek (Lead_SA only) |
+| PATCH | `/api/v1/projects/{id}/dq-number` | Input DQ Number pada proyek |
+| PATCH | `/api/v1/projects/{id}/status` | Ubah status proyek (workflow state machine) |
+
+### Activity Logs & Utilisasi
+
+| Method | Endpoint | Deskripsi |
+|--------|----------|-----------|
+| POST | `/api/v1/activity-logs` | Buat activity log baru |
+| POST | `/api/v1/activity-logs/{id}/polish` | Re-trigger AI polishing |
+| GET | `/api/v1/projects/{id}/story` | Project story timeline (filter + pagination) |
+| GET | `/api/v1/sa/utilization` | Utilisasi SA per bulan (jam kerja per SA). Filter: `year`, `sa_id` |
+| GET | `/api/v1/utilization/projects` | Effort per proyek (total jam + personel SA per proyek) |
+
+### Admin
+
+| Method | Endpoint | Deskripsi |
+|--------|----------|-----------|
+| GET | `/api/v1/admin/users` | Daftar semua users (Admin only) |
+| PATCH | `/api/v1/admin/users/{id}/role` | Ubah role user (Admin only). Body: `{ "role": "Sales|SA|Lead_SA|Admin" }` |
+
+### Documents
+
+| Method | Endpoint | Deskripsi |
+|--------|----------|-----------|
+| POST | `/api/v1/projects/{id}/documents` | Tambah entry dokumen baru |
+| PATCH | `/api/v1/documents/{id}/status` | Ubah status dokumen (Draft -> Reviewed -> Final) |
+
+### Auth & Lainnya
+
+| Method | Endpoint | Deskripsi |
+|--------|----------|-----------|
+| GET | `/api/v1/auth/login` | Initiate Google OAuth flow |
+| GET | `/api/v1/auth/callback` | Handle OAuth callback |
+| GET | `/api/v1/health` | Health check (database + api status) |
+| GET | `/api/v1/sa/available` | Daftar SA yang tersedia untuk assignment + workload |
+| POST | `/api/v1/calendar/sync` | Sync Google Calendar events |
+| POST | `/api/v1/calendar/map` | Map calendar event ke proyek |
+
+### Catatan Arsitektur
+
+- **BANT Score hanya internal backend** — Frontend menampilkan data BANT deskriptif (nominal MRR, PIC info, kebutuhan teknis, timeline) tanpa menampilkan skor numerik ke pengguna. Scoring digunakan internal untuk prioritisasi assignment.
+- **Project Story dipindah ke detail proyek** — Timeline aktivitas ditampilkan langsung di halaman detail proyek (bukan di halaman Activity Log terpisah), dengan tombol "Lihat Semua" untuk expand.
+- **Menu Dokumen dihapus dari sidebar** — Link dokumen diakses langsung dari halaman detail proyek masing-masing.
+- **Semua emoji dihapus dari UI** — Frontend menggunakan icon SVG dan teks tanpa emoji.
+
+---
+
 ## Data Models
 
 ### Entity Relationship Diagram

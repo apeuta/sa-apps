@@ -58,6 +58,7 @@ Dokumen ini mendefinisikan scope **MVP (Minimum Viable Product)** yang difokuska
 - **SLA_Timer**: Mekanisme penghitung waktu untuk DQ Number dengan threshold 3 hari (reminder) dan 5 hari (eskalasi + auto-lock)
 - **PMO_Lead**: Person in charge dari tim Project Management Office yang menerima handover proyek Closed-Win
 - **Delivery_Lead**: Person in charge dari tim Delivery/Implementation yang menerima handover proyek Closed-Win
+- **Activity_Category**: Kategori subtask yang digunakan di Activity Log, dapat dikelola (CRUD) oleh Admin melalui halaman Admin Settings
 
 ## Requirements
 
@@ -83,7 +84,7 @@ Dokumen ini mendefinisikan scope **MVP (Minimum Viable Product)** yang difokuska
 
 #### Acceptance Criteria
 
-1. WHEN Sales mengisi form request baru, THE Portal_SA SHALL menerima input: nama proyek (maksimal 150 karakter), nama customer (maksimal 150 karakter), target submit date (tidak boleh tanggal di masa lalu), estimasi nilai proyek dalam mata uang IDR (rentang 0.01 hingga 999,999,999,999.00), dan file attachment (PDF/DOCX, maksimal 20MB per file)
+1. WHEN Sales mengisi form request baru, THE Portal_SA SHALL menerima input: nama proyek (maksimal 150 karakter), nama customer (maksimal 150 karakter), target submit date (tidak boleh tanggal di masa lalu), estimasi nilai proyek dalam mata uang IDR (rentang 0.01 hingga 999,999,999,999.00), DQ Number opsional (alfanumerik + hyphen, 5-20 karakter), dan file attachment (PDF/DOCX, maksimal 20MB per file)
 2. WHEN form request disubmit dengan semua field wajib terisi, THE Portal_SA SHALL membuat record baru di tabel Projects dengan status "New" dan mencatat timestamp pembuatan serta ID Sales sebagai creator
 3. IF field wajib (nama proyek, nama customer, target submit date, estimasi nilai proyek) tidak terisi lengkap, THEN THE Portal_SA SHALL menampilkan pesan validasi pada setiap field yang kosong dan mencegah submission
 4. WHEN request berhasil dibuat dan minimal 1 file attachment tersedia, THE Portal_SA SHALL mengirim file attachment ke Scoring_Engine untuk analisis BANT dalam waktu kurang dari 5 detik setelah record tersimpan
@@ -199,11 +200,16 @@ Dokumen ini mendefinisikan scope **MVP (Minimum Viable Product)** yang difokuska
 
 1. WHEN Sales login, THE Portal_SA SHALL menampilkan dashboard berisi daftar proyek yang disubmit oleh Sales tersebut dengan informasi per proyek: nama proyek, nama customer, status terkini, dan tanggal terakhir perubahan status
 2. WHEN SA login, THE Portal_SA SHALL menampilkan dashboard berisi daftar proyek yang ditugaskan kepada SA tersebut dengan informasi per proyek: nama proyek, nama customer, status, dan progres dokumen berupa rasio jumlah dokumen berstatus "Final" terhadap total dokumen proyek tersebut
-3. WHEN Lead_SA login, THE Portal_SA SHALL menampilkan dashboard berisi semua proyek dengan status selain "Closed-Win", "Handover Complete", dan "Lost", antrian proyek berstatus "Pending Assignment", dan ringkasan utilisasi SA berupa jumlah proyek aktif yang ditangani per masing-masing SA
+3. WHEN Lead_SA login, THE Portal_SA SHALL menampilkan dashboard berisi semua proyek dengan status selain "Closed-Win", "Handover Complete", dan "Lost", antrian proyek berstatus "Pending Assignment", ringkasan utilisasi SA berupa jumlah proyek aktif yang ditangani per masing-masing SA, tabel utilisasi SA per bulan (jam kerja per SA per bulan dengan filter tahun dan filter per individu SA), dan tabel effort per proyek (total jam + personel SA per proyek)
 4. THE Portal_SA SHALL menerapkan workflow status proyek dengan transisi valid sebagai berikut: New → Pending Assignment → Assigned → Ready → Closed-Win → Handover Complete, dan status "Lost" hanya dapat diterapkan oleh Lead_SA dari status manapun kecuali "Handover Complete"
 5. IF pengguna mencoba mengubah status proyek ke status yang bukan transisi valid berikutnya dalam workflow, THEN THE Portal_SA SHALL menolak perubahan dan menampilkan pesan error yang menunjukkan transisi yang diperbolehkan dari status saat ini
 6. WHEN status proyek berubah, THE Portal_SA SHALL mencatat perubahan status beserta timestamp, status sebelumnya, status baru, dan user yang mengubah di audit log
 7. WHEN Lead_SA mengakses dashboard, THE Portal_SA SHALL menampilkan tabel utilisasi SA per bulan yang menunjukkan total jam kerja (dari activity logs) setiap SA per bulan dalam tahun terpilih, dengan opsi filter per tahun dan per individu SA, serta baris ringkasan total jam kerja semua SA per bulan
+8. WHEN Lead_SA mengakses dashboard, THE Portal_SA SHALL menampilkan tabel effort per proyek yang menunjukkan total jam kerja dan daftar personel SA (beserta jam masing-masing) untuk setiap proyek yang memiliki activity log
+9. THE Portal_SA SHALL menyediakan fitur search bar dan dropdown filter status pada listing proyek, agar pengguna dapat mencari proyek berdasarkan nama dan memfilter berdasarkan status
+10. WHEN pengguna mengakses halaman detail proyek, THE Portal_SA SHALL menampilkan data BANT deskriptif (nominal MRR, nama/jabatan/email PIC, deskripsi kebutuhan teknis, target timeline) tanpa menampilkan skor numerik BANT ke pengguna — scoring hanya digunakan internal backend untuk prioritisasi
+11. WHEN pengguna mengakses halaman detail proyek, THE Portal_SA SHALL menampilkan ringkasan Project Story (3-5 entry terbaru) dengan tombol "Lihat Semua" yang meng-expand seluruh timeline aktivitas proyek
+12. THE Portal_SA SHALL menyediakan tombol Edit pada halaman detail proyek yang memungkinkan pengguna dengan akses yang sesuai untuk mengedit informasi proyek
 
 ---
 
@@ -369,3 +375,33 @@ Dokumen ini mendefinisikan scope **MVP (Minimum Viable Product)** yang difokuska
 8. WHEN pengguna melakukan aksi utama (submit form, assign project, update status) dan aksi berhasil, THE Portal_SA SHALL menampilkan konfirmasi sukses berupa toast notification yang non-blocking dan auto-dismiss dalam 3 detik
 9. IF aksi utama (submit form, assign project, update status) gagal, THEN THE Portal_SA SHALL menampilkan toast notification error yang non-blocking, berwarna berbeda dari toast sukses, dan auto-dismiss dalam 5 detik, disertai pesan yang menjelaskan penyebab kegagalan
 10. WHILE Portal_SA dimuat pertama kali (initial page load), THE Portal_SA SHALL menampilkan first contentful paint dalam waktu kurang dari 1.5 detik pada koneksi 4G standar (RTT 50ms, throughput 10 Mbps)
+
+---
+
+### Requirement 20: Admin Settings — Kategori Aktivitas dan User Role Management
+
+**User Story:** Sebagai Admin, saya ingin bisa mengelola kategori aktivitas (subtask categories) dan mengubah role pengguna, agar konfigurasi sistem bisa disesuaikan tanpa perlu mengubah kode.
+
+#### Acceptance Criteria
+
+1. THE Portal_SA SHALL menyediakan halaman Admin Settings yang hanya dapat diakses oleh pengguna dengan role Admin
+2. THE Portal_SA SHALL menampilkan section "Kategori Aktivitas" pada halaman Admin Settings yang menampilkan daftar semua subtask categories yang tersedia di sistem
+3. WHEN Admin menambah, mengedit, atau menghapus kategori aktivitas, THE Portal_SA SHALL menyimpan perubahan ke database dan memperbarui daftar kategori yang tersedia di form Activity Log
+4. THE Portal_SA SHALL menampilkan section "User & Role Management" pada halaman Admin Settings yang menampilkan daftar semua user yang terdaftar beserta role masing-masing
+5. WHEN Admin mengubah role user melalui halaman Admin Settings, THE Portal_SA SHALL memperbarui role user di database dan mencatat perubahan di audit log (role sebelumnya dan role baru)
+6. THE Portal_SA SHALL menyediakan endpoint `GET /admin/users` yang mengembalikan daftar semua user (hanya Admin yang bisa akses)
+7. THE Portal_SA SHALL menyediakan endpoint `PATCH /admin/users/{id}/role` yang mengubah role user ke role baru (hanya Admin yang bisa akses), dengan validasi role valid: Sales, SA, Lead_SA, Admin
+8. IF pengguna selain Admin mencoba mengakses halaman Admin Settings atau endpoint admin, THEN THE Portal_SA SHALL menolak akses dengan HTTP 403 dan menampilkan pesan error
+
+---
+
+### Requirement 21: Navigasi dan Sidebar
+
+**User Story:** Sebagai pengguna Portal SA, saya ingin navigasi yang jelas dan tidak mengandung menu yang tidak relevan, agar saya bisa fokus pada fitur utama.
+
+#### Acceptance Criteria
+
+1. THE Portal_SA SHALL menampilkan sidebar navigation dengan menu: Dashboard, Proyek, Activity Log, Notifikasi, dan Admin Settings (hanya untuk role Admin)
+2. THE Portal_SA SHALL TIDAK menampilkan menu "Dokumen" sebagai item terpisah di sidebar — akses dokumen tersedia langsung dari halaman detail masing-masing proyek
+3. THE Portal_SA SHALL TIDAK menggunakan emoji di seluruh elemen UI (teks, label, menu, badge)
+

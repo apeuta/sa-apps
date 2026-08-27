@@ -470,24 +470,77 @@ docker compose logs -f  # Monitor startup
 - [x] 13. Implementasi Dashboard per Role dan UI/UX polish
   - [x] 13.1 Implementasi dashboard Sales
     - Tampilkan daftar proyek yang disubmit Sales: nama proyek, nama customer, status, tanggal perubahan terakhir
+    - Implementasi search bar dan dropdown filter status pada listing proyek
     - Implementasi loading skeleton (bukan spinner) untuk data fetching > 200ms
-    - _Requirements: 9.1, 19.5_
+    - _Requirements: 9.1, 9.9, 19.5_
 
   - [x] 13.2 Implementasi dashboard SA
     - Tampilkan daftar proyek yang ditugaskan ke SA: nama proyek, customer, status, progres dokumen (rasio Final/total)
-    - _Requirements: 9.2_
+    - Implementasi search bar dan filter status
+    - _Requirements: 9.2, 9.9_
 
-  - [x] 13.3 Implementasi UI/UX design system dan PWA polish
+  - [x] 13.3 Implementasi dashboard Lead SA (extended)
+    - Tampilkan antrian proyek "Pending Assignment" + overview proyek per status
+    - Tampilkan section utilisasi SA (jumlah proyek aktif per SA)
+    - Implementasi tabel utilisasi SA per bulan (jam kerja) — endpoint GET /sa/utilization
+    - Filter tahun dan filter per individu SA
+    - Baris ringkasan total jam per bulan
+    - Implementasi section effort per proyek — endpoint GET /utilization/projects
+    - Tabel total jam + personel SA per proyek
+    - _Requirements: 9.3, 9.7, 9.8_
+
+  - [x] 13.4 Implementasi UI/UX design system dan PWA polish
     - Terapkan font Open Sans, palet warna netral + accent color
     - Implementasi toast notifications: sukses (auto-dismiss 3s), error (auto-dismiss 5s, warna berbeda)
     - Implementasi responsive layout 320px–1440px, touch targets min 44x44px, teks body min 16px
     - Implementasi transisi/animasi max 200ms, feedback visual < 100ms
     - Implementasi offline support: queue submission saat offline, sync otomatis saat online, indikator "Menunggu Sinkronisasi"
+    - Hapus semua emoji dari UI
     - Target Lighthouse PWA score minimal 80
-    - _Requirements: 12.3, 12.4, 12.5, 19.1, 19.2, 19.3, 19.4, 19.5, 19.6, 19.7, 19.8, 19.9, 19.10_
+    - _Requirements: 12.3, 12.4, 12.5, 19.1, 19.2, 19.3, 19.4, 19.5, 19.6, 19.7, 19.8, 19.9, 19.10, 21.3_
 
-- [x] 14. Final checkpoint — Pastikan semua tests pass dan integrasi lengkap
-  - Ensure all tests pass, ask the user if questions arise.
+  - [x] 13.5 Implementasi halaman detail proyek (enhanced)
+    - Tampilkan data BANT deskriptif (nominal MRR, PIC, kebutuhan teknis, timeline) — BUKAN skor numerik
+    - Tampilkan Project Story langsung di halaman detail (bukan halaman terpisah)
+    - Tombol "Lihat Semua" untuk expand timeline lengkap
+    - Tombol Edit untuk mengedit informasi proyek
+    - _Requirements: 9.10, 9.11, 9.12_
+
+- [x] 15. Implementasi Admin Settings
+  - [x] 15.1 Implementasi backend Admin endpoints
+    - Endpoint GET /admin/users — daftar semua users (Admin only)
+    - Endpoint PATCH /admin/users/{id}/role — ubah role user (Admin only)
+    - Validasi role: Sales, SA, Lead_SA, Admin
+    - _Requirements: 20.6, 20.7, 20.8_
+
+  - [x] 15.2 Implementasi frontend halaman Admin Settings
+    - Buat halaman Admin Settings dengan 2 section
+    - Section "Kategori Aktivitas": list, tambah, edit, hapus subtask categories
+    - Section "User & Role Management": list users, ubah role via dropdown
+    - Proteksi akses: hanya role Admin yang bisa lihat menu dan halaman ini
+    - _Requirements: 20.1, 20.2, 20.3, 20.4, 20.5_
+
+  - [x] 15.3 Update navigasi dan sidebar
+    - Hapus menu "Dokumen" dari sidebar
+    - Tambah menu "Admin Settings" (hanya visible untuk Admin)
+    - _Requirements: 21.1, 21.2_
+
+- [x] 16. Implementasi routing dashboard per role
+  - [x] 16.1 Halaman / render dashboard sesuai role
+    - Sales → SalesDashboard (listing proyek + search/filter)
+    - SA → SADashboard (proyek assigned)
+    - Lead_SA/Admin → LeadSADashboard (overview + utilisasi + effort)
+    - _Requirements: 9.1, 9.2, 9.3_
+
+- [x] 17. Seed data demo diperkaya
+  - [x] 17.1 Update seed script
+    - 7 users (Sales, SA, Lead_SA, Admin)
+    - 8 proyek dengan berbagai status
+    - 21 activity logs tersebar Jun-Aug 2026
+    - bant_detail berisi data deskriptif (bukan skor numerik)
+    - DQ Number terisi di beberapa proyek
+
+- [x] 18. Final checkpoint — Pastikan semua fitur terintegrasi dan berfungsi
 
 ## Notes
 
@@ -524,7 +577,9 @@ docker compose logs -f  # Monitor startup
     { "id": 15, "tasks": ["11.2", "11.4", "11.5"] },
     { "id": 16, "tasks": ["12.1", "12.3"] },
     { "id": 17, "tasks": ["12.2", "12.4"] },
-    { "id": 18, "tasks": ["13.1", "13.2", "13.3"] }
+    { "id": 18, "tasks": ["13.1", "13.2", "13.3", "13.4", "13.5"] },
+    { "id": 19, "tasks": ["15.1", "15.2", "15.3"] },
+    { "id": 20, "tasks": ["16.1", "17.1"] }
   ]
 }
 ```
