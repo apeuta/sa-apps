@@ -190,7 +190,7 @@ export default function NewProjectPage() {
         formData.append("project_name", form.projectName.trim());
         formData.append("customer_name", form.customerName.trim());
         formData.append("target_submit", form.targetSubmit);
-        formData.append("estimated_value", parseIDR(form.estimatedValue).toString());
+        formData.append("estimasi_nilai", parseIDR(form.estimatedValue).toString());
 
         // Tambahkan file valid
         validFiles.forEach((item) => {
