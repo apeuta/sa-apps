@@ -42,7 +42,7 @@ Portal SA adalah Progressive Web App (PWA) untuk manajemen proyek pre-sales dan 
 ## Struktur Project
 
 ```
-SA Application/                 # Root aplikasi Portal SA
+sa-apps/                        # Root repository (= root di VM)
 ├── backend/                    # FastAPI backend
 │   ├── app/
 │   │   ├── api/               # API routers (endpoints)
@@ -65,8 +65,7 @@ SA Application/                 # Root aplikasi Portal SA
 │   ├── public/                # PWA manifest, service worker, icons
 │   ├── Dockerfile             # Multi-stage build
 │   └── package.json
-├── Portal Activity Mapping & Report.pdf  # Dokumen referensi
-├── Spesifikasi_Teknis_Portal_SA.md       # Spesifikasi teknis
+├── .kiro/specs/sa-portal-mvp/ # Spec documents (requirements, design, tasks)
 ├── docker-compose.yml          # Orchestration (3 services)
 ├── deploy.sh                   # Script deployment otomatis
 ├── .env.example                # Template environment variables
@@ -80,7 +79,7 @@ SA Application/                 # Root aplikasi Portal SA
 ```bash
 # 1. Clone repo
 git clone git@github.com:apeuta/sa-apps.git
-cd sa-apps/SA\ Application
+cd sa-apps
 
 # 2. Konfigurasi environment
 cp .env.example .env
@@ -260,7 +259,7 @@ docker compose up -d --build
 
 ```bash
 ssh sa-portal@your-vm-ip
-cd ~/sa-portal/SA\ Application
+cd ~/sa-portal
 git pull origin main
 docker compose down
 docker compose up -d --build
