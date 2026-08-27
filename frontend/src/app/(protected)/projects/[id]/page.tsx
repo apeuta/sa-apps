@@ -215,7 +215,7 @@ export default function ProjectDetailPage() {
                   <p className="text-neutral-800 font-medium">
                     {project.bant_detail.budget_mrr
                       ? `Rp ${Number(project.bant_detail.budget_mrr).toLocaleString("id-ID")}`
-                      : "Belum diinput"}
+                      : <span className="text-red-600 font-bold">Belum diinput</span>}
                   </p>
                 </div>
                 {/* PIC / Authority */}
@@ -230,14 +230,14 @@ export default function ProjectDetailPage() {
                       </p>
                     </div>
                   ) : (
-                    <p className="text-neutral-500">Belum diinput</p>
+                    <p className="text-red-600 font-bold">Belum diinput</p>
                   )}
                 </div>
                 {/* Need */}
                 <div className="p-3 bg-neutral-50 rounded-lg md:col-span-2">
                   <p className="text-xs font-medium text-neutral-500 mb-1">Kebutuhan Teknis</p>
                   <p className="text-neutral-800">
-                    {project.bant_detail.need_description || "Belum diinput"}
+                    {project.bant_detail.need_description || <span className="text-red-600 font-bold">Belum diinput</span>}
                   </p>
                 </div>
                 {/* Timeline */}
@@ -248,7 +248,7 @@ export default function ProjectDetailPage() {
                       ? new Date(project.bant_detail.timeline_target).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
                       : project.target_submit
                         ? new Date(project.target_submit).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
-                        : "Belum diinput"}
+                        : <span className="text-red-600 font-bold">Belum diinput</span>}
                   </p>
                 </div>
               </div>
@@ -314,10 +314,13 @@ export default function ProjectDetailPage() {
 // === Sub-komponen ===
 
 function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  const isBelum = value.startsWith("Belum");
   return (
     <div>
       <span className="text-neutral-500">{label}:</span>
-      <span className={`ml-2 font-medium text-neutral-800 ${mono ? "font-mono text-sm" : ""}`}>
+      <span className={`ml-2 font-medium ${
+        isBelum ? "text-red-600 font-bold" : mono ? "font-mono text-sm text-neutral-800" : "text-neutral-800"
+      }`}>
         {value}
       </span>
     </div>
