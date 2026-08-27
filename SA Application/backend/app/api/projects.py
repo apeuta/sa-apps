@@ -17,10 +17,12 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     UploadFile,
     status,
 )
 from fastapi.responses import JSONResponse
+from sqlalchemy import select, func, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -149,6 +151,116 @@ async def _trigger_scoring_engine(
         pass
     except Exception as e:
         logger.error(f"[ScoringEngine] Gagal memproses proyek {project_id}: {e}")
+
+
+@router.get(
+    "",
+    summary="Daftar proyek",
+    description=(
+        "Menampilkan daftar proyek berdasarkan role user yang login. "
+        "Sales hanya melihat proyeknya sendiri, SA melihat proyek yang ditugaskan, "
+        "Lead_SA melihat semua proyek aktif."
+    ),
+)
+async def list_projects(
+    sales_pic: Optional[str] = Query(None, description="Filter: 'me' untuk proyek milik user login"),
+    assigned_to: Optional[str] = Query(None, description="Filter: 'me' untuk proyek yang ditugaskan ke user login"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter berdasarkan status proyek"),
+    sort: Optional[str] = Query("-updated_at", description="Sort: field name, prefix '-' untuk desc"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ambil daftar proyek dengan filter berdasarkan role.
+
+    Filter:
+    - sales_pic=me → proyek yang dibuat oleh user saat ini
+    - assigned_to=me → proyek yang ditugaskan ke user saat ini
+    - status=<value> → filter berdasarkan status
+
+    Sort:
+    - -updated_at (default): terbaru diupdate
+    - updated_at: terlama diupdate
+    - -created_at: terbaru dibuat
+    """
+    query = select(Project)
+
+    # Filter berdasarkan ownership
+    if sales_pic == "me":
+        query = query.where(Project.sales_pic == current_user.id)
+    elif assigned_to == "me":
+        query = query.where(Project.assigned_sa == current_user.id)
+
+    # Filter status
+    if status_filter:
+        query = query.where(Project.status == status_filter)
+
+    # Sorting
+    if sort:
+        if sort.startswith("-"):
+            field_name = sort[1:]
+            if hasattr(Project, field_name):
+                query = query.order_by(desc(getattr(Project, field_name)))
+            else:
+                query = query.order_by(desc(Project.updated_at))
+        else:
+            if hasattr(Project, sort):
+                query = query.order_by(asc(getattr(Project, sort)))
+            else:
+                query = query.order_by(desc(Project.updated_at))
+    else:
+        query = query.order_by(desc(Project.updated_at))
+
+    result = await db.execute(query)
+    projects = result.scalars().all()
+
+    # Format response
+    projects_data = []
+    for p in projects:
+        projects_data.append({
+            "id_project": p.id_project,
+            "project_name": p.project_name,
+            "customer_name": p.customer_name,
+            "status": p.status,
+            "dq_number": p.dq_number,
+            "bant_score": p.bant_score,
+            "use_case_tags": p.use_case_tags or [],
+            "target_submit": p.target_submit.isoformat() if p.target_submit else None,
+            "assigned_sa": str(p.assigned_sa) if p.assigned_sa else None,
+            "gdrive_folder_id": p.gdrive_folder_id,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        })
+
+    return success_response(
+        data=projects_data,
+        message=f"Ditemukan {len(projects_data)} proyek.",
+    )
+
+
+@router.get(
+    "/status-summary",
+    summary="Ringkasan jumlah proyek per status",
+    description="Mengembalikan count proyek per status untuk overview dashboard.",
+)
+async def get_status_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hitung jumlah proyek per status."""
+    result = await db.execute(
+        select(Project.status, func.count(Project.id_project))
+        .group_by(Project.status)
+        .order_by(func.count(Project.id_project).desc())
+    )
+    rows = result.all()
+
+    summary = [{"status": row[0], "count": row[1]} for row in rows]
+
+    return success_response(
+        data=summary,
+        message=f"Ringkasan {len(summary)} status.",
+    )
 
 
 @router.post(

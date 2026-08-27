@@ -156,72 +156,8 @@ export function BANTManualForm({
             Input BANT Manual
           </h3>
           <p className="text-sm text-neutral-500 mt-0.5">
-            Isi informasi proyek — skor dihitung otomatis
+            Isi informasi proyek — scoring diproses oleh sistem
           </p>
-        </div>
-      </div>
-
-      {/* Total Score Display */}
-      <div
-        className={`rounded-lg border p-4 ${getScoreBgColor(totalScore)}`}
-        role="status"
-        aria-live="polite"
-        aria-label={`Total BANT Score: ${totalScore} dari 100`}
-      >
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-neutral-600">
-              Total BANT Score
-            </p>
-            <p className={`text-3xl font-bold ${getScoreColor(totalScore)}`}>
-              {totalScore}
-              <span className="text-base font-normal text-neutral-400">
-                /100
-              </span>
-            </p>
-          </div>
-          <div className="text-right">
-            <span
-              className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
-                totalScore >= 60
-                  ? "bg-green-100 text-green-700"
-                  : "bg-red-100 text-red-700"
-              }`}
-            >
-              {getScoreLabel(totalScore)}
-            </span>
-            <p className="text-xs text-neutral-500 mt-1">Threshold: ≥ 60</p>
-          </div>
-        </div>
-
-        {/* Progress bar visual */}
-        <div className="mt-3 h-2 bg-neutral-200 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all duration-200 ${
-              totalScore >= 60 ? "bg-green-500" : "bg-red-400"
-            }`}
-            style={{ width: `${totalScore}%` }}
-          />
-        </div>
-
-        {/* Sub-score breakdown */}
-        <div className="mt-3 grid grid-cols-4 gap-2 text-xs text-neutral-600">
-          <div className="text-center">
-            <p className="font-medium">Budget</p>
-            <p className="font-bold">{budgetScore}/25</p>
-          </div>
-          <div className="text-center">
-            <p className="font-medium">Authority</p>
-            <p className="font-bold">{authorityScore}/25</p>
-          </div>
-          <div className="text-center">
-            <p className="font-medium">Need</p>
-            <p className="font-bold">{needScore}/25</p>
-          </div>
-          <div className="text-center">
-            <p className="font-medium">Timeline</p>
-            <p className="font-bold">{timelineScore}/25</p>
-          </div>
         </div>
       </div>
 
@@ -232,11 +168,6 @@ export function BANTManualForm({
         </legend>
         <p className="text-xs text-neutral-500">
           Masukkan estimasi pendapatan bulanan dari proyek ini.
-          {budgetScore > 0 && (
-            <span className="ml-2 text-green-600 font-medium">
-              ✓ Skor: {budgetScore}/25
-            </span>
-          )}
         </p>
         <div className="relative">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-neutral-500">
@@ -265,11 +196,6 @@ export function BANTManualForm({
         </legend>
         <p className="text-xs text-neutral-500">
           Data kontak pengambil keputusan di sisi customer.
-          {authorityScore > 0 && (
-            <span className="ml-2 text-green-600 font-medium">
-              ✓ Skor: {authorityScore}/25
-            </span>
-          )}
         </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
@@ -342,11 +268,6 @@ export function BANTManualForm({
         </legend>
         <p className="text-xs text-neutral-500">
           Jelaskan kebutuhan teknis customer.
-          {needScore > 0 && (
-            <span className="ml-2 text-green-600 font-medium">
-              ✓ Skor: {needScore}/25
-            </span>
-          )}
         </p>
         <textarea
           value={needDescription}
@@ -362,14 +283,6 @@ export function BANTManualForm({
         />
         <p className="text-xs text-neutral-400">
           {needDescription.trim().length} karakter
-          {needDescription.trim().length <= 10 && " — minimal 10 karakter untuk skor"}
-          {needDescription.trim().length > 10 &&
-            needDescription.trim().length <= 50 &&
-            " — >50 untuk skor lebih tinggi"}
-          {needDescription.trim().length > 50 &&
-            needDescription.trim().length <= 100 &&
-            " — >100 untuk skor maksimal"}
-          {needDescription.trim().length > 100 && " — skor maksimal ✓"}
         </p>
       </fieldset>
 
@@ -380,11 +293,6 @@ export function BANTManualForm({
         </legend>
         <p className="text-xs text-neutral-500">
           Kapan dokumen proposal harus diserahkan ke customer?
-          {timelineScore > 0 && (
-            <span className="ml-2 text-green-600 font-medium">
-              ✓ Skor: {timelineScore}/25
-            </span>
-          )}
         </p>
         <input
           type="date"

@@ -24,6 +24,7 @@ export interface BANTResult {
   };
   use_case_tags: string[];
   status: string;
+  feedback?: string | null;
 }
 
 /** Tipe response setelah project dibuat */
@@ -140,7 +141,16 @@ export async function submitManualBANT(
   }
 
   const json = await response.json();
-  return json.data ?? json;
+  const rawData = json.data ?? json;
+
+  // Map backend response (total_score, sub_scores) ke frontend interface (bant_score, bant_detail)
+  return {
+    bant_score: rawData.total_score ?? rawData.bant_score ?? 0,
+    bant_detail: rawData.sub_scores ?? rawData.bant_detail ?? { budget: 0, authority: 0, need: 0, timeline: 0 },
+    use_case_tags: rawData.use_case_tags ?? [],
+    status: rawData.status ?? "Unknown",
+    feedback: rawData.feedback ?? null,
+  };
 }
 
 /**
