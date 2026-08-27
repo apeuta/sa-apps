@@ -126,7 +126,7 @@ git config --global user.email "your-email@domain.com"
 ```bash
 # Clone repo
 git clone git@github.com:apeuta/sa-apps.git ~/sa-portal
-cd ~/sa-portal
+cd ~/sa-portal/SA\ Application
 
 # Buat file environment dari template
 cp .env.example .env
@@ -185,7 +185,7 @@ GMAIL_CREDENTIALS=
 ## Step 5: Build dan Jalankan Aplikasi
 
 ```bash
-cd ~/sa-portal
+cd ~/sa-portal/SA\ Application
 
 # Build dan jalankan semua service (pertama kali butuh 2-3 menit)
 docker compose up -d --build
@@ -392,7 +392,7 @@ sudo certbot renew --dry-run
 Setelah SSL aktif, update `.env`:
 
 ```bash
-cd ~/sa-portal
+cd ~/sa-portal/SA\ Application
 nano .env
 ```
 
@@ -433,7 +433,7 @@ curl http://your-domain.com/health
 
 ```bash
 ssh sa-portal@your-vm-ip
-cd ~/sa-portal
+cd ~/sa-portal/SA\ Application
 git pull origin main
 docker compose down
 docker compose up -d --build
@@ -444,7 +444,7 @@ docker compose logs -f --tail=20  # Monitor startup
 
 ```bash
 ssh sa-portal@your-vm-ip
-cd ~/sa-portal
+cd ~/sa-portal/SA\ Application
 ./deploy.sh
 ```
 

@@ -87,7 +87,7 @@ git clone git@github.com:apeuta/sa-apps.git ~/sa-portal
 # git clone https://github.com/apeuta/sa-apps.git ~/sa-portal
 
 # 10. Buat file .env dari template
-cd ~/sa-portal
+cd ~/sa-portal/SA\ Application
 cp .env.example .env
 nano .env  # Isi semua credentials (Google OAuth, Gemini API key, dll.)
 
@@ -159,7 +159,7 @@ sudo certbot --nginx -d your-domain.com
 # Login ke VM sebagai sa-portal
 ssh sa-portal@your-vm-ip
 
-cd ~/sa-portal
+cd ~/sa-portal/SA\ Application
 git pull origin main
 docker compose down
 docker compose up -d --build

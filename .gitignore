@@ -10,9 +10,9 @@ venv/
 
 # Build output
 .next/
-frontend/.next/
-frontend/out/
-frontend/node_modules/
+SA Application/frontend/.next/
+SA Application/frontend/out/
+SA Application/frontend/node_modules/
 
 # IDE
 .vscode/
@@ -31,13 +31,14 @@ dist/
 build/
 
 # === Folder SA Docs yang TIDAK masuk Git ===
-# Hanya folder portal-sa-mvp (backend/, frontend/, .kiro/specs/) yang di-track
+# Hanya folder SA Application (backend/, frontend/) dan .kiro/specs/ yang di-track
 Astra International/
 Batch Data Analytics/
 Bedrock/
 Reverse Machine/
 S3 OCBC/
 Session Log/
+docs/
 AWS_Redshift_Documentation_References.md
 Amazon_Redshift_PoC_HLD_v1.0.md
 Redshift_Architecture_Diagram.drawio
