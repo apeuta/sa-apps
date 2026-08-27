@@ -3,10 +3,11 @@
 import { useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import useSWR from "swr";
-import { fetcher } from "@/lib/fetcher";
+import { fetcher, apiRequest } from "@/lib/fetcher";
 import { useAuthStore } from "@/store/auth";
 import { HandoverModal } from "@/components/HandoverModal";
 import { HandoverConfigForm } from "@/components/HandoverConfigForm";
+import { AssignmentModal } from "@/components/AssignmentModal";
 import type { HandoverStatus } from "@/lib/api/handover";
 
 /**
@@ -54,6 +55,7 @@ export default function ProjectDetailPage() {
   const { user } = useAuthStore();
 
   const [showHandoverModal, setShowHandoverModal] = useState(true);
+  const [showAssignModal, setShowAssignModal] = useState(false);
 
   // Fetch detail proyek
   const { data: project, error: projError, isLoading } = useSWR<ProjectDetail>(
@@ -106,6 +108,17 @@ export default function ProjectDetailPage() {
               <p className="text-xs text-neutral-400 mt-0.5 font-mono">{project.id_project}</p>
             </div>
             <div className="flex items-center gap-2">
+              {/* Tombol Assign SA — hanya Lead_SA/Admin dan status Pending Assignment */}
+              {project.status === "Pending Assignment" &&
+                (user?.role === "Lead_SA" || user?.role === "Admin") && (
+                <button
+                  onClick={() => setShowAssignModal(true)}
+                  className="px-3 py-1.5 text-sm font-medium text-white bg-primary-600
+                             rounded-lg hover:bg-primary-700 transition-colors min-h-[36px]"
+                >
+                  Assign SA
+                </button>
+              )}
               {/* Tombol Edit */}
               <button
                 onClick={() => router.push(`/projects/${projectId}/edit`)}
@@ -261,6 +274,29 @@ export default function ProjectDetailPage() {
             </div>
           )}
         </>
+      )}
+
+      {/* Modal Assignment SA */}
+      {showAssignModal && project && (
+        <AssignmentModal
+          project={{
+            id_project: project.id_project,
+            project_name: project.project_name,
+            customer_name: project.customer_name,
+            bant_score: project.bant_score || 0,
+            use_case_tags: project.use_case_tags || [],
+            status: project.status,
+            target_submit: project.target_submit || "",
+            gdrive_folder_id: null,
+            created_at: project.created_at,
+            sales_pic: { id: project.sales_pic?.id || "", name: project.sales_pic?.name || "", email: project.sales_pic?.email || "" },
+          }}
+          onClose={() => setShowAssignModal(false)}
+          onSuccess={() => {
+            setShowAssignModal(false);
+            window.location.reload();
+          }}
+        />
       )}
 
       {/* Modal Closed-Win */}
