@@ -1,0 +1,688 @@
+"use client";
+
+import { useState, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { FileUpload, FileItem } from "@/components/FileUpload";
+import { BANTManualForm, BANTScores } from "./bant-manual";
+import {
+  createProject,
+  submitManualBANT,
+  BANTResult,
+  CreateProjectResponse,
+} from "@/lib/api/projects";
+
+/**
+ * Halaman Form Request Proyek Baru
+ *
+ * Fitur:
+ * - Input fields: nama proyek, nama customer, target submit, estimasi nilai
+ * - File upload drag-and-drop (PDF/DOCX, max 20MB, max 5 file)
+ * - Client-side validation
+ * - BANT manual form sebagai fallback (jika tanpa file)
+ * - Feedback BANT score dan status perubahan
+ *
+ * Requirements: 2.1, 2.3, 2.7, 3.6
+ */
+
+// ==================== Types ====================
+
+interface FormData {
+  projectName: string;
+  customerName: string;
+  targetSubmit: string;
+  estimatedValue: string;
+}
+
+interface FormErrors {
+  projectName?: string;
+  customerName?: string;
+  targetSubmit?: string;
+  estimatedValue?: string;
+}
+
+// ==================== Helpers ====================
+
+/**
+ * Format angka ke format IDR (titik sebagai pemisah ribuan)
+ */
+function formatIDR(value: string): string {
+  // Hapus semua karakter non-digit dan non-dot/comma
+  const cleaned = value.replace(/[^\d]/g, "");
+  if (!cleaned) return "";
+
+  // Format dengan pemisah ribuan
+  return cleaned.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+/**
+ * Parse string IDR ke angka
+ */
+function parseIDR(value: string): number {
+  const cleaned = value.replace(/\./g, "");
+  return parseInt(cleaned) || 0;
+}
+
+/**
+ * Dapatkan tanggal hari ini dalam format YYYY-MM-DD (untuk min date picker)
+ */
+function getTodayString(): string {
+  const today = new Date();
+  return today.toISOString().split("T")[0];
+}
+
+// ==================== Component ====================
+
+export default function NewProjectPage() {
+  const router = useRouter();
+
+  // Form state
+  const [form, setForm] = useState<FormData>({
+    projectName: "",
+    customerName: "",
+    targetSubmit: "",
+    estimatedValue: "",
+  });
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [errors, setErrors] = useState<FormErrors>({});
+
+  // Submission state
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Post-submit state
+  const [createdProject, setCreatedProject] = useState<CreateProjectResponse | null>(null);
+  const [showBANTManual, setShowBANTManual] = useState(false);
+  const [bantResult, setBantResult] = useState<BANTResult | null>(null);
+  const [isSubmittingBANT, setIsSubmittingBANT] = useState(false);
+
+  // Toast notification
+  const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  // Tampilkan toast dengan auto-dismiss
+  const showToast = useCallback((type: "success" | "error", message: string) => {
+    setToast({ type, message });
+    const timeout = type === "success" ? 3000 : 5000;
+    setTimeout(() => setToast(null), timeout);
+  }, []);
+
+  // File valid saja (untuk dikirim ke backend)
+  const validFiles = useMemo(
+    () => files.filter((f) => f.status === "valid"),
+    [files]
+  );
+
+  // ==================== Validation ====================
+
+  /**
+   * Validasi form sebelum submit
+   * Returns true jika valid, false jika ada error
+   */
+  const validateForm = useCallback((): boolean => {
+    const newErrors: FormErrors = {};
+
+    // Nama proyek: wajib, max 150 karakter
+    if (!form.projectName.trim()) {
+      newErrors.projectName = "Nama proyek wajib diisi";
+    } else if (form.projectName.trim().length > 150) {
+      newErrors.projectName = "Nama proyek maksimal 150 karakter";
+    }
+
+    // Nama customer: wajib, max 150 karakter
+    if (!form.customerName.trim()) {
+      newErrors.customerName = "Nama customer wajib diisi";
+    } else if (form.customerName.trim().length > 150) {
+      newErrors.customerName = "Nama customer maksimal 150 karakter";
+    }
+
+    // Target submit: wajib, tidak boleh di masa lalu
+    if (!form.targetSubmit) {
+      newErrors.targetSubmit = "Target submit wajib diisi";
+    } else {
+      const selectedDate = new Date(form.targetSubmit);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (selectedDate < today) {
+        newErrors.targetSubmit = "Target submit tidak boleh tanggal di masa lalu";
+      }
+    }
+
+    // Estimasi nilai: wajib, rentang 0.01 - 999,999,999,999
+    const numericValue = parseIDR(form.estimatedValue);
+    if (!form.estimatedValue.trim()) {
+      newErrors.estimatedValue = "Estimasi nilai proyek wajib diisi";
+    } else if (numericValue < 1) {
+      newErrors.estimatedValue = "Estimasi nilai minimal Rp 1";
+    } else if (numericValue > 999999999999) {
+      newErrors.estimatedValue = "Estimasi nilai maksimal Rp 999.999.999.999";
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  }, [form]);
+
+  // ==================== Handlers ====================
+
+  // Update form field
+  const updateField = useCallback(
+    (field: keyof FormData, value: string) => {
+      setForm((prev) => ({ ...prev, [field]: value }));
+      // Clear error saat user mulai mengetik
+      if (errors[field]) {
+        setErrors((prev) => ({ ...prev, [field]: undefined }));
+      }
+    },
+    [errors]
+  );
+
+  // Handle submit form utama
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      setSubmitError(null);
+
+      if (!validateForm()) return;
+
+      setIsSubmitting(true);
+
+      try {
+        // Buat FormData untuk multipart/form-data
+        const formData = new window.FormData();
+        formData.append("project_name", form.projectName.trim());
+        formData.append("customer_name", form.customerName.trim());
+        formData.append("target_submit", form.targetSubmit);
+        formData.append("estimated_value", parseIDR(form.estimatedValue).toString());
+
+        // Tambahkan file valid
+        validFiles.forEach((item) => {
+          formData.append("files", item.file);
+        });
+
+        const response = await createProject(formData);
+        setCreatedProject(response);
+
+        // Jika tidak ada file → tampilkan BANT manual form
+        if (validFiles.length === 0) {
+          setShowBANTManual(true);
+          showToast("success", "Proyek berhasil dibuat. Silakan isi BANT manual.");
+        } else {
+          showToast("success", "Proyek berhasil dibuat! File sedang diproses untuk scoring.");
+          // Redirect ke detail proyek setelah 2 detik
+          setTimeout(() => {
+            router.push(`/projects/${response.id_project}`);
+          }, 2000);
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Terjadi kesalahan saat submit";
+        setSubmitError(message);
+        showToast("error", message);
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [form, validFiles, validateForm, router, showToast]
+  );
+
+  // Handle submit BANT manual
+  const handleBANTSubmit = useCallback(
+    async (scores: BANTScores) => {
+      if (!createdProject) return;
+
+      setIsSubmittingBANT(true);
+
+      try {
+        const result = await submitManualBANT(createdProject.id_project, scores);
+        setBantResult(result);
+
+        if (result.bant_score >= 60) {
+          showToast("success", `BANT Score: ${result.bant_score} — Proyek masuk antrian assignment!`);
+        } else {
+          showToast("error", `BANT Score: ${result.bant_score} — Perlu klarifikasi tambahan.`);
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Gagal submit skor BANT";
+        showToast("error", message);
+      } finally {
+        setIsSubmittingBANT(false);
+      }
+    },
+    [createdProject, showToast]
+  );
+
+  // ==================== Render ====================
+
+  // Jika sudah submit dan ada hasil BANT → tampilkan feedback
+  if (bantResult && createdProject) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <BANTResultFeedback
+          result={bantResult}
+          projectName={createdProject.project_name}
+          onViewProject={() => router.push(`/projects/${createdProject.id_project}`)}
+        />
+      </div>
+    );
+  }
+
+  // Jika sudah submit dan perlu BANT manual
+  if (showBANTManual && createdProject) {
+    return (
+      <div className="max-w-2xl mx-auto space-y-6">
+        {/* Info proyek yang dibuat */}
+        <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
+          <p className="text-sm text-primary-800">
+            <span className="font-semibold">Proyek dibuat:</span>{" "}
+            {createdProject.project_name}
+          </p>
+          <p className="text-xs text-primary-600 mt-1">
+            Karena tidak ada file attachment, silakan isi skor BANT secara manual
+            untuk melanjutkan proses scoring.
+          </p>
+        </div>
+
+        {/* BANT Manual Form */}
+        <div className="bg-white rounded-lg border border-neutral-200 p-6">
+          <BANTManualForm
+            onSubmit={handleBANTSubmit}
+            isSubmitting={isSubmittingBANT}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Form utama
+  return (
+    <div className="max-w-2xl mx-auto">
+      {/* Page Header */}
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-neutral-900">
+          Request Proyek Baru
+        </h1>
+        <p className="text-sm text-neutral-500 mt-1">
+          Ajukan request proyek pre-sales dengan mengisi form berikut
+        </p>
+      </div>
+
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="bg-white rounded-lg border border-neutral-200 p-6 space-y-5">
+          {/* Nama Proyek */}
+          <div>
+            <label
+              htmlFor="projectName"
+              className="block text-sm font-medium text-neutral-700 mb-1"
+            >
+              Nama Proyek <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="projectName"
+              type="text"
+              maxLength={150}
+              value={form.projectName}
+              onChange={(e) => updateField("projectName", e.target.value)}
+              disabled={isSubmitting}
+              placeholder="Contoh: Migrasi Data Warehouse ke Cloud"
+              className={`
+                w-full px-3 py-2.5 border rounded-lg text-sm
+                focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+                disabled:opacity-50 disabled:bg-neutral-100
+                ${errors.projectName ? "border-red-300 bg-red-50" : "border-neutral-300"}
+              `}
+              aria-invalid={!!errors.projectName}
+              aria-describedby={errors.projectName ? "projectName-error" : undefined}
+            />
+            {errors.projectName && (
+              <p id="projectName-error" className="text-xs text-red-600 mt-1" role="alert">
+                {errors.projectName}
+              </p>
+            )}
+            <p className="text-xs text-neutral-400 mt-1">
+              {form.projectName.length}/150 karakter
+            </p>
+          </div>
+
+          {/* Nama Customer */}
+          <div>
+            <label
+              htmlFor="customerName"
+              className="block text-sm font-medium text-neutral-700 mb-1"
+            >
+              Nama Customer <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="customerName"
+              type="text"
+              maxLength={150}
+              value={form.customerName}
+              onChange={(e) => updateField("customerName", e.target.value)}
+              disabled={isSubmitting}
+              placeholder="Contoh: PT Astra International"
+              className={`
+                w-full px-3 py-2.5 border rounded-lg text-sm
+                focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+                disabled:opacity-50 disabled:bg-neutral-100
+                ${errors.customerName ? "border-red-300 bg-red-50" : "border-neutral-300"}
+              `}
+              aria-invalid={!!errors.customerName}
+              aria-describedby={errors.customerName ? "customerName-error" : undefined}
+            />
+            {errors.customerName && (
+              <p id="customerName-error" className="text-xs text-red-600 mt-1" role="alert">
+                {errors.customerName}
+              </p>
+            )}
+            <p className="text-xs text-neutral-400 mt-1">
+              {form.customerName.length}/150 karakter
+            </p>
+          </div>
+
+          {/* Target Submit Date */}
+          <div>
+            <label
+              htmlFor="targetSubmit"
+              className="block text-sm font-medium text-neutral-700 mb-1"
+            >
+              Target Submit <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="targetSubmit"
+              type="date"
+              min={getTodayString()}
+              value={form.targetSubmit}
+              onChange={(e) => updateField("targetSubmit", e.target.value)}
+              disabled={isSubmitting}
+              className={`
+                w-full px-3 py-2.5 border rounded-lg text-sm
+                focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+                disabled:opacity-50 disabled:bg-neutral-100
+                ${errors.targetSubmit ? "border-red-300 bg-red-50" : "border-neutral-300"}
+              `}
+              aria-invalid={!!errors.targetSubmit}
+              aria-describedby={errors.targetSubmit ? "targetSubmit-error" : undefined}
+            />
+            {errors.targetSubmit && (
+              <p id="targetSubmit-error" className="text-xs text-red-600 mt-1" role="alert">
+                {errors.targetSubmit}
+              </p>
+            )}
+          </div>
+
+          {/* Estimasi Nilai Proyek */}
+          <div>
+            <label
+              htmlFor="estimatedValue"
+              className="block text-sm font-medium text-neutral-700 mb-1"
+            >
+              Estimasi Nilai Proyek (IDR) <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-neutral-500">
+                Rp
+              </span>
+              <input
+                id="estimatedValue"
+                type="text"
+                inputMode="numeric"
+                value={form.estimatedValue}
+                onChange={(e) => updateField("estimatedValue", formatIDR(e.target.value))}
+                disabled={isSubmitting}
+                placeholder="0"
+                className={`
+                  w-full pl-9 pr-3 py-2.5 border rounded-lg text-sm
+                  focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+                  disabled:opacity-50 disabled:bg-neutral-100
+                  ${errors.estimatedValue ? "border-red-300 bg-red-50" : "border-neutral-300"}
+                `}
+                aria-invalid={!!errors.estimatedValue}
+                aria-describedby={errors.estimatedValue ? "estimatedValue-error" : undefined}
+              />
+            </div>
+            {errors.estimatedValue && (
+              <p id="estimatedValue-error" className="text-xs text-red-600 mt-1" role="alert">
+                {errors.estimatedValue}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* File Upload Section */}
+        <div className="bg-white rounded-lg border border-neutral-200 p-6">
+          <div className="mb-4">
+            <h2 className="text-sm font-medium text-neutral-700">
+              File Attachment
+            </h2>
+            <p className="text-xs text-neutral-500 mt-0.5">
+              Upload dokumen referensi (opsional). Jika tidak ada file, Anda bisa
+              mengisi BANT secara manual setelah submit.
+            </p>
+          </div>
+
+          <FileUpload
+            files={files}
+            onChange={setFiles}
+            disabled={isSubmitting}
+          />
+        </div>
+
+        {/* Error message global */}
+        {submitError && (
+          <div
+            className="bg-red-50 border border-red-200 rounded-lg p-4"
+            role="alert"
+          >
+            <p className="text-sm text-red-800 font-medium">Gagal submit:</p>
+            <p className="text-sm text-red-700 mt-0.5">{submitError}</p>
+          </div>
+        )}
+
+        {/* Submit Button */}
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className={`
+            w-full py-3 px-4 rounded-lg font-medium text-white transition-all duration-200
+            ${isSubmitting
+              ? "bg-neutral-400 cursor-not-allowed"
+              : "bg-primary-600 hover:bg-primary-700 active:bg-primary-800"
+            }
+            disabled:opacity-50 disabled:cursor-not-allowed
+            min-h-touch
+          `}
+        >
+          {isSubmitting ? (
+            <span className="flex items-center justify-center gap-2">
+              <svg
+                className="animate-spin w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+              Mengirim request...
+            </span>
+          ) : (
+            `Submit Request${validFiles.length > 0 ? ` (${validFiles.length} file)` : ""}`
+          )}
+        </button>
+
+        {/* Hint tentang BANT manual */}
+        {validFiles.length === 0 && (
+          <p className="text-xs text-neutral-500 text-center">
+            Tanpa file attachment, Anda akan diminta mengisi skor BANT secara
+            manual setelah submit.
+          </p>
+        )}
+      </form>
+
+      {/* Toast Notification */}
+      {toast && <Toast type={toast.type} message={toast.message} />}
+    </div>
+  );
+}
+
+// ==================== Sub-Components ====================
+
+/**
+ * Komponen Toast Notification
+ * Auto-dismiss: sukses 3s, error 5s (Requirement 19.4)
+ */
+function Toast({ type, message }: { type: "success" | "error"; message: string }) {
+  return (
+    <div
+      className={`
+        fixed bottom-6 right-6 z-50 max-w-sm px-4 py-3 rounded-lg shadow-lg
+        animate-[slideIn_200ms_ease-out]
+        ${type === "success" ? "toast-success" : "toast-error"}
+      `}
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex items-start gap-2">
+        {type === "success" ? (
+          <svg className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+            <path
+              fillRule="evenodd"
+              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+              clipRule="evenodd"
+            />
+          </svg>
+        ) : (
+          <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+            <path
+              fillRule="evenodd"
+              d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
+              clipRule="evenodd"
+            />
+          </svg>
+        )}
+        <p className="text-sm">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Komponen feedback hasil BANT scoring
+ * Tampil setelah BANT manual disubmit
+ */
+function BANTResultFeedback({
+  result,
+  projectName,
+  onViewProject,
+}: {
+  result: BANTResult;
+  projectName: string;
+  onViewProject: () => void;
+}) {
+  const isPass = result.bant_score >= 60;
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="text-center">
+        <div
+          className={`inline-flex items-center justify-center w-16 h-16 rounded-full mb-4 ${
+            isPass ? "bg-green-100" : "bg-red-100"
+          }`}
+        >
+          {isPass ? (
+            <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          ) : (
+            <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+          )}
+        </div>
+        <h2 className="text-xl font-bold text-neutral-900">{projectName}</h2>
+        <p className="text-sm text-neutral-500 mt-1">Hasil Scoring BANT</p>
+      </div>
+
+      {/* Score Card */}
+      <div
+        className={`rounded-lg border p-6 ${
+          isPass ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"
+        }`}
+      >
+        <div className="text-center">
+          <p className={`text-4xl font-bold ${isPass ? "text-green-600" : "text-red-600"}`}>
+            {result.bant_score}
+            <span className="text-lg font-normal text-neutral-400">/100</span>
+          </p>
+          <p className={`text-sm font-medium mt-1 ${isPass ? "text-green-700" : "text-red-700"}`}>
+            {isPass ? "Lolos Threshold — Masuk Antrian Assignment" : "Perlu Klarifikasi Tambahan"}
+          </p>
+        </div>
+
+        {/* Detail per kriteria */}
+        <div className="grid grid-cols-2 gap-3 mt-4">
+          {(["budget", "authority", "need", "timeline"] as const).map((key) => (
+            <div key={key} className="bg-white rounded-md p-3 border border-neutral-100">
+              <p className="text-xs text-neutral-500 capitalize">{key}</p>
+              <p className="text-lg font-semibold text-neutral-800">
+                {result.bant_detail[key]}
+                <span className="text-xs font-normal text-neutral-400">/25</span>
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Status perubahan */}
+      <div className="bg-white rounded-lg border border-neutral-200 p-4">
+        <p className="text-sm text-neutral-600">
+          <span className="font-medium">Status proyek diubah:</span>{" "}
+          <span
+            className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+              isPass
+                ? "bg-blue-100 text-blue-700"
+                : "bg-yellow-100 text-yellow-700"
+            }`}
+          >
+            {result.status}
+          </span>
+        </p>
+
+        {/* Use case tags jika ada */}
+        {result.use_case_tags && result.use_case_tags.length > 0 && (
+          <div className="mt-3">
+            <p className="text-xs text-neutral-500 mb-1">Use Case Tags:</p>
+            <div className="flex flex-wrap gap-1.5">
+              {result.use_case_tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-block px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded text-xs"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Action button */}
+      <button
+        onClick={onViewProject}
+        className="w-full py-3 px-4 rounded-lg font-medium text-white bg-primary-600 hover:bg-primary-700 active:bg-primary-800 transition-all duration-200 min-h-touch"
+      >
+        Lihat Detail Proyek
+      </button>
+    </div>
+  );
+}

@@ -1,0 +1,11 @@
+Alembic Migration Environment untuk Portal SA
+==============================================
+
+Folder ini berisi konfigurasi dan script migration database.
+
+Cara Penggunaan:
+- Buat migration baru: alembic revision --autogenerate -m "deskripsi perubahan"
+- Jalankan migration: alembic upgrade head
+- Rollback satu step: alembic downgrade -1
+- Lihat history: alembic history
+- Lihat status: alembic current

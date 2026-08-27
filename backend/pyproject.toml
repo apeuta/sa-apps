@@ -1,0 +1,40 @@
+[project]
+name = "portal-sa-backend"
+version = "1.0.0"
+description = "Backend API untuk Portal SA — manajemen proyek pre-sales dan aktivitas harian SA"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "asyncpg==0.30.0",
+    "sqlalchemy[asyncio]==2.0.36",
+    "alembic==1.14.0",
+    "pydantic==2.10.3",
+    "pydantic-settings==2.7.0",
+    "python-jose[cryptography]==3.3.0",
+    "passlib[bcrypt]==1.7.4",
+    "google-auth==2.37.0",
+    "google-auth-oauthlib==1.2.1",
+    "google-api-python-client==2.155.0",
+    "httpx==0.28.1",
+    "python-multipart==0.0.19",
+    "python-dotenv==1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "hypothesis==6.119.3",
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

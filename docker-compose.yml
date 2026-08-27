@@ -1,0 +1,95 @@
+# Docker Compose untuk Portal SA MVP
+# Dependency order: database → backend → frontend
+# Jalankan dengan: docker compose up -d --build
+
+services:
+  # ============================================
+  # PostgreSQL 15 Database
+  # ============================================
+  database:
+    image: postgres:15-alpine
+    container_name: sa-portal-db
+    restart: on-failure:3
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sa_portal}
+      POSTGRES_USER: ${POSTGRES_USER:-sa_portal_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Database password harus diset di .env}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sa_portal_user} -d ${POSTGRES_DB:-sa_portal}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ============================================
+  # FastAPI Backend (Python 3.11)
+  # ============================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sa-portal-backend
+    restart: on-failure:3
+    environment:
+      # Database
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sa_portal_user}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-sa_portal}
+      # Google OAuth
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/auth/callback}
+      # Google APIs
+      GOOGLE_DRIVE_CREDENTIALS: ${GOOGLE_DRIVE_CREDENTIALS}
+      GOOGLE_CALENDAR_CREDENTIALS: ${GOOGLE_CALENDAR_CREDENTIALS}
+      GMAIL_CREDENTIALS: ${GMAIL_CREDENTIALS}
+      # LLM Provider
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # App Config
+      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
+      SECRET_KEY: ${SECRET_KEY:?Secret key harus diset di .env}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      # Frontend URL (untuk CORS)
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # Next.js Frontend (Node 20)
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: sa-portal-frontend
+    restart: on-failure:3
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Portal SA}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+# Volume untuk persistence data PostgreSQL
+volumes:
+  pgdata:
+    name: sa-portal-pgdata

@@ -1,0 +1,31 @@
+# Environment variables (berisi secrets)
+.env
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build output
+.next/
+frontend/.next/
+frontend/out/
+frontend/node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# Python
+*.egg-info/
+dist/
+build/

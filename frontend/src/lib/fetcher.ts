@@ -1,0 +1,149 @@
+/**
+ * SWR Fetcher Configuration untuk Portal SA
+ *
+ * Konfigurasi data fetching menggunakan SWR dengan:
+ * - Base URL dari environment variable
+ * - Auto-attach auth token ke request header
+ * - Standard error handling sesuai API response format
+ * - Revalidation strategy untuk freshness data
+ */
+
+// Base URL API backend
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+
+/**
+ * Error class khusus untuk API errors
+ * Menyimpan status code dan response data untuk handling di UI
+ */
+export class ApiError extends Error {
+  status: number;
+  data: unknown;
+
+  constructor(message: string, status: number, data?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
+/**
+ * Fetcher default untuk SWR
+ * Menghandle auth header dan standard error response
+ *
+ * Penggunaan dengan SWR:
+ *   const { data, error } = useSWR("/projects", fetcher);
+ */
+export async function fetcher<T>(endpoint: string): Promise<T> {
+  const url = endpoint.startsWith("http")
+    ? endpoint
+    : `${API_BASE_URL}${endpoint}`;
+
+  // Ambil token dari localStorage (akan diganti cookie di production)
+  const token =
+    typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+  };
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, { headers });
+
+  // Handle response sesuai standard format API:
+  // { status: "success|error", data: {...}, message: "..." }
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    throw new ApiError(
+      errorData?.message || `Request gagal dengan status ${response.status}`,
+      response.status,
+      errorData
+    );
+  }
+
+  const json = await response.json();
+  return json.data ?? json;
+}
+
+/**
+ * POST/PUT/PATCH/DELETE request helper
+ * Untuk mutasi data yang bukan GET request
+ */
+export async function apiRequest<T>(
+  endpoint: string,
+  options: {
+    method?: "POST" | "PUT" | "PATCH" | "DELETE";
+    body?: unknown;
+  } = {}
+): Promise<T> {
+  const { method = "POST", body } = options;
+  const url = endpoint.startsWith("http")
+    ? endpoint
+    : `${API_BASE_URL}${endpoint}`;
+
+  const token =
+    typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+  };
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    throw new ApiError(
+      errorData?.message || `Request gagal dengan status ${response.status}`,
+      response.status,
+      errorData
+    );
+  }
+
+  const json = await response.json();
+  return json.data ?? json;
+}
+
+/**
+ * Konfigurasi default SWR
+ * Digunakan di SWRConfig provider
+ *
+ * - Revalidation on focus: aktif (data fresh saat user kembali ke tab)
+ * - Revalidation on reconnect: aktif (sync saat online kembali)
+ * - Retry: 3 kali dengan exponential backoff
+ * - Dedupe interval: 2 detik
+ */
+export const swrConfig = {
+  fetcher,
+  revalidateOnFocus: true,
+  revalidateOnReconnect: true,
+  errorRetryCount: 3,
+  dedupingInterval: 2000,
+  // Jangan retry jika unauthorized (401) — redirect ke login
+  onErrorRetry: (
+    error: ApiError,
+    _key: string,
+    _config: unknown,
+    revalidate: (opts?: { retryCount: number }) => void,
+    { retryCount }: { retryCount: number }
+  ) => {
+    if (error.status === 401) return;
+    if (error.status === 403) return;
+    if (retryCount >= 3) return;
+
+    // Exponential backoff
+    const timeout = Math.min(1000 * 2 ** retryCount, 30000);
+    setTimeout(() => revalidate({ retryCount }), timeout);
+  },
+};

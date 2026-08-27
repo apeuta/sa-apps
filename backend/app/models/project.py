@@ -1,0 +1,149 @@
+"""
+Model SQLAlchemy untuk tabel Projects.
+Menyimpan data proyek yang dikelola oleh Sales dan SA.
+"""
+
+import uuid
+from datetime import date, datetime
+from typing import Optional
+
+from sqlalchemy import (
+    String,
+    Integer,
+    Date,
+    DateTime,
+    ForeignKey,
+    CheckConstraint,
+    Index,
+    Text,
+)
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+
+
+class Project(Base):
+    """Model untuk tabel projects - data proyek presales."""
+
+    __tablename__ = "projects"
+
+    # Kolom utama
+    id_project: Mapped[str] = mapped_column(
+        String(50),
+        primary_key=True,
+        comment="ID proyek (format custom)",
+    )
+    project_name: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+        comment="Nama proyek",
+    )
+    customer_name: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+        comment="Nama customer/perusahaan",
+    )
+    dq_number: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="Nomor DQ (Deal Qualification)",
+    )
+    sales_pic: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+        comment="FK ke user Sales yang bertanggung jawab",
+    )
+    assigned_sa: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=True,
+        comment="FK ke user SA yang ditugaskan",
+    )
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="New",
+        comment="Status proyek saat ini",
+    )
+    target_submit: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+        comment="Target tanggal submit proposal",
+    )
+    bant_score: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Skor BANT (0-100)",
+    )
+    bant_detail: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Detail breakdown skor BANT per kriteria",
+    )
+    use_case_tags: Mapped[Optional[list]] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=list,
+        comment="Tags use case proyek (array JSON)",
+    )
+    gdrive_folder_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="ID folder Google Drive proyek",
+    )
+    # Konfigurasi handover PMO/Delivery (per-proyek, requirement 17.6)
+    pmo_lead_email: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Email PMO Lead untuk handover proyek",
+    )
+    delivery_lead_email: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Email Delivery Lead untuk handover proyek",
+    )
+
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Waktu SA ditugaskan ke proyek",
+    )
+
+    # Timestamp (timezone-aware)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=datetime.utcnow,
+        comment="Waktu pembuatan record",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        comment="Waktu update terakhir",
+    )
+
+    # Constraints
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('New', 'Pending Assignment', 'Assigned', 'Ready', "
+            "'Closed-Win', 'Handover Complete', 'Lost', 'Need Clarification', "
+            "'Scoring Pending', 'Manual Review Required')",
+            name="chk_projects_status",
+        ),
+        CheckConstraint(
+            "bant_score IS NULL OR (bant_score BETWEEN 0 AND 100)",
+            name="chk_projects_bant_score",
+        ),
+        CheckConstraint(
+            "dq_number IS NULL OR dq_number ~ '^[A-Za-z0-9\\-]{5,20}$'",
+            name="chk_dq_number_format",
+        ),
+        {"comment": "Tabel proyek presales Portal SA"},
+    )
+
+    def __repr__(self) -> str:
+        return f"<Project(id={self.id_project}, name={self.project_name}, status={self.status})>"

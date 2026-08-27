@@ -1,0 +1,73 @@
+"""
+Portal SA MVP — Backend FastAPI Application
+Entry point utama untuk API backend.
+"""
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config import settings
+from app.core.exceptions import register_exception_handlers
+from app.core.rate_limiter import RateLimiterMiddleware
+from app.schemas.response import success_response
+from app.api.auth import router as auth_router
+from app.api.scoring import router as scoring_router
+from app.api.projects import router as projects_router
+from app.api.assignment import router as assignment_router
+from app.api.workflow import router as workflow_router
+from app.api.documents import router as documents_router
+from app.api.dq_number import router as dq_number_router
+from app.api.activity_logs import router as activity_logs_router
+from app.api.calendar import router as calendar_router
+from app.api.sla import router as sla_router
+from app.api.notifications import router as notifications_router
+from app.api.handover import router as handover_router
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="Backend API untuk Portal SA MVP — Manajemen Proyek Pre-Sales & Activity Log",
+    version=settings.APP_VERSION,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# Konfigurasi CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Rate limiter middleware (100 req/min/user, sliding window)
+app.add_middleware(RateLimiterMiddleware)
+
+# Daftarkan custom exception handlers agar semua response pakai format standar
+register_exception_handlers(app)
+
+# Register API routers
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(scoring_router, prefix="/api/v1")
+app.include_router(projects_router, prefix="/api/v1")
+app.include_router(assignment_router, prefix="/api/v1")
+app.include_router(workflow_router, prefix="/api/v1")
+app.include_router(documents_router, prefix="/api/v1")
+app.include_router(dq_number_router, prefix="/api/v1")
+app.include_router(activity_logs_router, prefix="/api/v1")
+app.include_router(calendar_router, prefix="/api/v1")
+app.include_router(sla_router, prefix="/api/v1")
+app.include_router(notifications_router, prefix="/api/v1")
+app.include_router(handover_router, prefix="/api/v1")
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint untuk Docker dan monitoring.
+    Tidak memerlukan autentikasi.
+    """
+    return success_response(
+        data={"api": "healthy", "database": "healthy"},
+        message="Service berjalan normal.",
+    )

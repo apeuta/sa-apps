@@ -1,0 +1,645 @@
+"""
+SLA Timer — Modul tracking SLA DQ Number dengan auto-lock/unlock.
+
+Mengelola countdown SLA sejak proyek di-assign ke SA.
+Logic:
+- Hari 0-2: Badge hijau (normal)
+- Hari 3-4: Badge kuning + reminder ke Sales (trigger di hari ke-3)
+- Hari 5+:  Badge merah + eskalasi ke Sales Manager + auto-lock folder Solutions
+
+Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8
+"""
+
+import asyncio
+import logging
+import uuid
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Optional
+
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import AsyncSessionLocal
+from app.models.audit_log import AuditLog
+from app.models.notification_log import NotificationLog
+from app.models.project import Project
+from app.models.sla_tracking import SLATracking
+from app.models.user import User
+from app.services.folder_provisioner import (
+    FolderProvisioningError,
+    folder_provisioner,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class SLAStatus(str, Enum):
+    """Status SLA berdasarkan jumlah hari elapsed."""
+
+    GREEN = "green"    # 0-2 hari
+    YELLOW = "yellow"  # 3-4 hari
+    RED = "red"        # 5+ hari
+
+
+# Threshold hari untuk perubahan status
+SLA_YELLOW_THRESHOLD = 3  # Hari ke-3 mulai kuning
+SLA_RED_THRESHOLD = 5     # Hari ke-5 mulai merah
+
+# Retry configuration untuk GDrive operations
+GDRIVE_MAX_RETRIES = 3
+GDRIVE_RETRY_INTERVAL = 5  # detik
+
+
+def _generate_id(prefix: str = "SLA") -> str:
+    """Generate ID unik untuk record SLA tracking."""
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def _calculate_sla_status(days_elapsed: int) -> SLAStatus:
+    """
+    Hitung status SLA berdasarkan jumlah hari elapsed.
+
+    Args:
+        days_elapsed: Jumlah hari sejak assignment
+
+    Returns:
+        SLAStatus: green (0-2), yellow (3-4), red (5+)
+    """
+    if days_elapsed < SLA_YELLOW_THRESHOLD:
+        return SLAStatus.GREEN
+    elif days_elapsed < SLA_RED_THRESHOLD:
+        return SLAStatus.YELLOW
+    else:
+        return SLAStatus.RED
+
+
+class SLATimer:
+    """
+    Mengelola SLA countdown DQ Number untuk proyek yang di-assign.
+
+    Timer dimulai saat proyek berstatus 'Assigned' dan berhenti saat
+    DQ Number diinput oleh Sales.
+
+    Methods:
+        start_timer: Mulai tracking SLA
+        check_sla_status: Cek status SLA saat ini
+        process_sla_actions: Proses semua proyek aktif (cron job)
+        stop_timer: Hentikan timer saat DQ diinput
+    """
+
+    async def start_timer(
+        self, project_id: str, assigned_at: datetime, db: AsyncSession
+    ) -> SLATracking:
+        """
+        Mulai tracking SLA untuk proyek yang baru di-assign.
+
+        Membuat record SLATracking baru dengan status 'green'.
+
+        Args:
+            project_id: ID proyek yang di-assign
+            assigned_at: Timestamp assignment SA
+            db: Database session
+
+        Returns:
+            SLATracking: Record yang baru dibuat
+        """
+        # Cek apakah sudah ada SLA tracker untuk proyek ini
+        result = await db.execute(
+            select(SLATracking).where(SLATracking.project_id == project_id)
+        )
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            logger.info(
+                f"SLA tracker sudah ada untuk proyek {project_id}, skip pembuatan."
+            )
+            return existing
+
+        # Buat record baru
+        sla_record = SLATracking(
+            id=_generate_id(),
+            project_id=project_id,
+            started_at=assigned_at,
+            days_elapsed=0,
+            current_status=SLAStatus.GREEN.value,
+            is_locked=False,
+        )
+
+        db.add(sla_record)
+        await db.commit()
+        await db.refresh(sla_record)
+
+        logger.info(
+            f"SLA timer dimulai untuk proyek {project_id}, "
+            f"assigned_at: {assigned_at.isoformat()}"
+        )
+
+        return sla_record
+
+    async def check_sla_status(
+        self, project_id: str, db: AsyncSession
+    ) -> Optional[dict]:
+        """
+        Hitung dan kembalikan status SLA saat ini untuk sebuah proyek.
+
+        Args:
+            project_id: ID proyek yang dicek
+            db: Database session
+
+        Returns:
+            dict dengan info status SLA, atau None jika tidak ada tracker
+        """
+        result = await db.execute(
+            select(SLATracking).where(SLATracking.project_id == project_id)
+        )
+        sla = result.scalar_one_or_none()
+
+        if sla is None:
+            return None
+
+        # Jika timer sudah dihentikan, kembalikan status terakhir
+        if sla.stopped_at is not None:
+            return {
+                "project_id": project_id,
+                "status": sla.current_status,
+                "days_elapsed": sla.days_elapsed,
+                "is_locked": sla.is_locked,
+                "is_active": False,
+                "started_at": sla.started_at.isoformat(),
+                "stopped_at": sla.stopped_at.isoformat(),
+            }
+
+        # Hitung hari elapsed dari sekarang
+        now = datetime.now(timezone.utc)
+        days_elapsed = (now - sla.started_at).days
+        current_status = _calculate_sla_status(days_elapsed)
+
+        # Update record di database
+        sla.days_elapsed = days_elapsed
+        sla.current_status = current_status.value
+        await db.commit()
+
+        return {
+            "project_id": project_id,
+            "status": current_status.value,
+            "days_elapsed": days_elapsed,
+            "is_locked": sla.is_locked,
+            "is_active": True,
+            "started_at": sla.started_at.isoformat(),
+            "stopped_at": None,
+        }
+
+    async def process_sla_actions(self) -> dict:
+        """
+        Cron job: cek SEMUA proyek dengan SLA timer aktif dan trigger aksi.
+
+        Aksi yang di-trigger:
+        - Hari ke-3: Kirim reminder ke Sales (status → yellow)
+        - Hari ke-5: Kirim eskalasi ke Sales Manager + auto-lock folder Solutions
+
+        Returns:
+            dict: Ringkasan hasil proses (jumlah proyek diproses, reminder, eskalasi)
+        """
+        async with AsyncSessionLocal() as db:
+            # Ambil semua SLA tracker yang masih aktif (belum stopped)
+            result = await db.execute(
+                select(SLATracking).where(SLATracking.stopped_at.is_(None))
+            )
+            active_slas = result.scalars().all()
+
+            stats = {
+                "total_checked": 0,
+                "reminders_sent": 0,
+                "escalations_sent": 0,
+                "locks_performed": 0,
+                "errors": [],
+            }
+
+            now = datetime.now(timezone.utc)
+
+            for sla in active_slas:
+                stats["total_checked"] += 1
+
+                try:
+                    days_elapsed = (now - sla.started_at).days
+                    new_status = _calculate_sla_status(days_elapsed)
+                    old_status = sla.current_status
+
+                    # Update days_elapsed dan status
+                    sla.days_elapsed = days_elapsed
+                    sla.current_status = new_status.value
+
+                    # Ambil data proyek untuk notifikasi
+                    project_result = await db.execute(
+                        select(Project).where(
+                            Project.id_project == sla.project_id
+                        )
+                    )
+                    project = project_result.scalar_one_or_none()
+
+                    if project is None:
+                        logger.warning(
+                            f"Proyek {sla.project_id} tidak ditemukan, "
+                            f"skip SLA processing."
+                        )
+                        continue
+
+                    # === Trigger reminder di hari ke-3 (yellow) ===
+                    if (
+                        days_elapsed >= SLA_YELLOW_THRESHOLD
+                        and old_status == SLAStatus.GREEN.value
+                    ):
+                        await self._send_sla_reminder(
+                            project=project, days_elapsed=days_elapsed, db=db
+                        )
+                        stats["reminders_sent"] += 1
+
+                    # === Trigger eskalasi + auto-lock di hari ke-5 (red) ===
+                    if (
+                        days_elapsed >= SLA_RED_THRESHOLD
+                        and not sla.is_locked
+                    ):
+                        await self._send_sla_escalation(
+                            project=project, days_elapsed=days_elapsed, db=db
+                        )
+                        stats["escalations_sent"] += 1
+
+                        # Auto-lock folder Solutions
+                        lock_success = await self._lock_solutions_with_retry(
+                            project=project, sla=sla, db=db
+                        )
+                        if lock_success:
+                            stats["locks_performed"] += 1
+
+                except Exception as e:
+                    error_msg = (
+                        f"Error processing SLA untuk proyek {sla.project_id}: {e}"
+                    )
+                    logger.error(error_msg)
+                    stats["errors"].append(error_msg)
+
+            await db.commit()
+
+        logger.info(
+            f"SLA processing selesai: {stats['total_checked']} dicek, "
+            f"{stats['reminders_sent']} reminder, "
+            f"{stats['escalations_sent']} eskalasi, "
+            f"{stats['locks_performed']} lock."
+        )
+
+        return stats
+
+    async def stop_timer(
+        self, project_id: str, db: AsyncSession
+    ) -> Optional[SLATracking]:
+        """
+        Hentikan SLA timer saat DQ Number diinput.
+
+        Jika folder sudah di-lock (H+5 sudah lewat), lakukan auto-unlock.
+
+        Args:
+            project_id: ID proyek yang DQ-nya baru diinput
+            db: Database session
+
+        Returns:
+            SLATracking record yang di-update, atau None jika tidak ada tracker
+        """
+        result = await db.execute(
+            select(SLATracking).where(SLATracking.project_id == project_id)
+        )
+        sla = result.scalar_one_or_none()
+
+        if sla is None:
+            logger.info(
+                f"Tidak ada SLA tracker untuk proyek {project_id}, skip stop."
+            )
+            return None
+
+        # Jika sudah stopped sebelumnya, skip
+        if sla.stopped_at is not None:
+            logger.info(
+                f"SLA timer untuk proyek {project_id} sudah dihentikan sebelumnya."
+            )
+            return sla
+
+        now = datetime.now(timezone.utc)
+        sla.stopped_at = now
+
+        # Jika folder di-lock, lakukan auto-unlock
+        if sla.is_locked:
+            unlock_success = await self._unlock_solutions_with_retry(
+                project_id=project_id, sla=sla, db=db
+            )
+            if unlock_success:
+                sla.is_locked = False
+                sla.unlocked_at = now
+
+                # Catat audit log untuk unlock
+                await self._create_audit_log(
+                    entity_type="folder",
+                    entity_id=project_id,
+                    action="unlock",
+                    old_value={"is_locked": True, "locked_at": sla.locked_at.isoformat() if sla.locked_at else None},
+                    new_value={
+                        "is_locked": False,
+                        "unlocked_at": now.isoformat(),
+                        "delay_days": sla.days_elapsed,
+                    },
+                    db=db,
+                )
+
+        await db.commit()
+        await db.refresh(sla)
+
+        logger.info(
+            f"SLA timer dihentikan untuk proyek {project_id}. "
+            f"Days elapsed: {sla.days_elapsed}, was_locked: {sla.is_locked}"
+        )
+
+        return sla
+
+    # === Private helper methods ===
+
+    async def _send_sla_reminder(
+        self, project: Project, days_elapsed: int, db: AsyncSession
+    ) -> None:
+        """
+        Kirim notifikasi reminder SLA ke Sales yang bersangkutan.
+
+        Args:
+            project: Object Project
+            days_elapsed: Jumlah hari elapsed
+            db: Database session
+        """
+        notification = NotificationLog(
+            id=_generate_id("NOTIF"),
+            event_type="sla_reminder",
+            recipient_user_id=project.sales_pic,
+            channel="in-app",
+            status="sent",
+            reference_id=project.id_project,
+            notification_metadata={
+                "project_name": project.project_name,
+                "customer_name": project.customer_name,
+                "days_elapsed": days_elapsed,
+                "message": (
+                    f"DQ Number untuk proyek '{project.project_name}' "
+                    f"belum diinput selama {days_elapsed} hari. "
+                    f"Harap segera input DQ Number."
+                ),
+            },
+        )
+        db.add(notification)
+
+        logger.info(
+            f"Reminder SLA dikirim ke Sales ({project.sales_pic}) "
+            f"untuk proyek {project.id_project} (H+{days_elapsed})"
+        )
+
+    async def _send_sla_escalation(
+        self, project: Project, days_elapsed: int, db: AsyncSession
+    ) -> None:
+        """
+        Kirim notifikasi eskalasi SLA ke Sales Manager.
+
+        Juga kirim notifikasi ke Sales yang bersangkutan bahwa
+        folder Solutions akan di-lock.
+
+        Args:
+            project: Object Project
+            days_elapsed: Jumlah hari elapsed
+            db: Database session
+        """
+        # Cari Sales Manager (Lead_SA atau Admin) untuk eskalasi
+        # Fallback: kirim ke semua Lead_SA jika Sales Manager spesifik belum dikonfigurasi
+        manager_result = await db.execute(
+            select(User).where(User.role.in_(["Lead_SA", "Admin"]))
+        )
+        managers = manager_result.scalars().all()
+
+        for manager in managers:
+            escalation_notif = NotificationLog(
+                id=_generate_id("NOTIF"),
+                event_type="sla_escalation",
+                recipient_user_id=manager.id,
+                channel="in-app",
+                status="sent",
+                reference_id=project.id_project,
+                notification_metadata={
+                    "project_name": project.project_name,
+                    "customer_name": project.customer_name,
+                    "days_elapsed": days_elapsed,
+                    "sales_pic_id": str(project.sales_pic),
+                    "message": (
+                        f"ESKALASI: DQ Number untuk proyek "
+                        f"'{project.project_name}' ({project.customer_name}) "
+                        f"belum diinput selama {days_elapsed} hari. "
+                        f"Folder Solutions akan di-lock otomatis."
+                    ),
+                },
+            )
+            db.add(escalation_notif)
+
+        # Notifikasi ke Sales bahwa folder akan di-lock
+        lock_notif = NotificationLog(
+            id=_generate_id("NOTIF"),
+            event_type="sla_escalation",
+            recipient_user_id=project.sales_pic,
+            channel="in-app",
+            status="sent",
+            reference_id=project.id_project,
+            notification_metadata={
+                "project_name": project.project_name,
+                "days_elapsed": days_elapsed,
+                "message": (
+                    f"Folder Solutions untuk proyek '{project.project_name}' "
+                    f"telah di-lock karena DQ Number belum diinput "
+                    f"selama {days_elapsed} hari. "
+                    f"Input DQ Number untuk membuka kembali akses."
+                ),
+            },
+        )
+        db.add(lock_notif)
+
+        logger.info(
+            f"Eskalasi SLA dikirim ke {len(managers)} manager(s) "
+            f"untuk proyek {project.id_project} (H+{days_elapsed})"
+        )
+
+    async def _lock_solutions_with_retry(
+        self, project: Project, sla: SLATracking, db: AsyncSession
+    ) -> bool:
+        """
+        Lock folder Solutions via GDrive dengan retry 3x interval 5s.
+
+        Args:
+            project: Object Project
+            sla: SLATracking record
+            db: Database session
+
+        Returns:
+            bool: True jika berhasil lock, False jika gagal
+        """
+        if not project.gdrive_folder_id:
+            logger.warning(
+                f"Proyek {project.id_project} tidak punya gdrive_folder_id, "
+                f"skip auto-lock."
+            )
+            return False
+
+        # Ambil email Sales
+        sales_result = await db.execute(
+            select(User).where(User.id == project.sales_pic)
+        )
+        sales_user = sales_result.scalar_one_or_none()
+
+        if sales_user is None:
+            logger.error(
+                f"User Sales ({project.sales_pic}) tidak ditemukan, skip lock."
+            )
+            return False
+
+        try:
+            # folder_provisioner.lock_solutions_folder sudah punya retry internal
+            # Tapi kita tetap panggil sesuai interface yang ada
+            await folder_provisioner.lock_solutions_folder(
+                solutions_folder_id=project.gdrive_folder_id,
+                sales_email=sales_user.email,
+            )
+
+            # Update SLA record
+            now = datetime.now(timezone.utc)
+            sla.is_locked = True
+            sla.locked_at = now
+
+            # Catat audit log
+            await self._create_audit_log(
+                entity_type="folder",
+                entity_id=project.id_project,
+                action="lock",
+                old_value={"is_locked": False},
+                new_value={
+                    "is_locked": True,
+                    "locked_at": now.isoformat(),
+                    "reason": "SLA DQ Number exceeded 5 days",
+                    "days_elapsed": sla.days_elapsed,
+                },
+                db=db,
+            )
+
+            logger.info(
+                f"Folder Solutions berhasil di-lock untuk proyek "
+                f"{project.id_project} (H+{sla.days_elapsed})"
+            )
+            return True
+
+        except FolderProvisioningError as e:
+            logger.error(
+                f"Gagal lock folder Solutions untuk proyek "
+                f"{project.id_project} setelah retry: {e}"
+            )
+            return False
+
+    async def _unlock_solutions_with_retry(
+        self, project_id: str, sla: SLATracking, db: AsyncSession
+    ) -> bool:
+        """
+        Unlock folder Solutions via GDrive dengan retry 3x interval 5s.
+
+        Dipanggil saat DQ Number diinput setelah folder sudah di-lock.
+
+        Args:
+            project_id: ID proyek
+            sla: SLATracking record
+            db: Database session
+
+        Returns:
+            bool: True jika berhasil unlock, False jika gagal
+        """
+        # Ambil data proyek
+        project_result = await db.execute(
+            select(Project).where(Project.id_project == project_id)
+        )
+        project = project_result.scalar_one_or_none()
+
+        if project is None or not project.gdrive_folder_id:
+            logger.warning(
+                f"Proyek {project_id} tidak ada atau belum punya folder GDrive, "
+                f"skip unlock."
+            )
+            return False
+
+        # Ambil email Sales
+        sales_result = await db.execute(
+            select(User).where(User.id == project.sales_pic)
+        )
+        sales_user = sales_result.scalar_one_or_none()
+
+        if sales_user is None:
+            logger.error(
+                f"User Sales ({project.sales_pic}) tidak ditemukan, skip unlock."
+            )
+            return False
+
+        try:
+            # folder_provisioner.unlock_solutions_folder sudah punya retry internal
+            await folder_provisioner.unlock_solutions_folder(
+                solutions_folder_id=project.gdrive_folder_id,
+                sales_email=sales_user.email,
+            )
+
+            logger.info(
+                f"Folder Solutions berhasil di-unlock untuk proyek "
+                f"{project_id} setelah DQ Number diinput."
+            )
+            return True
+
+        except FolderProvisioningError as e:
+            logger.error(
+                f"Gagal unlock folder Solutions untuk proyek "
+                f"{project_id} setelah retry: {e}"
+            )
+            return False
+
+    async def _create_audit_log(
+        self,
+        entity_type: str,
+        entity_id: str,
+        action: str,
+        old_value: Optional[dict],
+        new_value: dict,
+        db: AsyncSession,
+        performed_by: Optional[uuid.UUID] = None,
+    ) -> None:
+        """
+        Buat entry audit log.
+
+        Jika performed_by tidak diisi, gunakan system user UUID (all zeros).
+
+        Args:
+            entity_type: Tipe entitas (folder, project, dll)
+            entity_id: ID entitas
+            action: Aksi yang dilakukan
+            old_value: Nilai sebelum perubahan
+            new_value: Nilai setelah perubahan
+            db: Database session
+            performed_by: UUID user yang melakukan aksi
+        """
+        # System user UUID (untuk aksi otomatis oleh SLA timer)
+        system_user_id = performed_by or uuid.UUID("00000000-0000-0000-0000-000000000000")
+
+        audit = AuditLog(
+            id=_generate_id("AUDIT"),
+            entity_type=entity_type,
+            entity_id=entity_id,
+            action=action,
+            performed_by=system_user_id,
+            old_value=old_value,
+            new_value=new_value,
+        )
+        db.add(audit)
+
+
+# Singleton instance
+sla_timer = SLATimer()
