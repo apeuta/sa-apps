@@ -264,8 +264,10 @@ function InfoRow({ label, value, mono = false }: { label: string; value: string;
   );
 }
 
-/** Section: Activity Log ringkasan per proyek */
+/** Section: Activity Log ringkasan per proyek + tombol Summarize */
 function ProjectActivitySection({ projectId }: { projectId: string }) {
+  const [showAll, setShowAll] = useState(false);
+
   const { data, isLoading } = useSWR<{
     items: {
       id: string;
@@ -275,15 +277,18 @@ function ProjectActivitySection({ projectId }: { projectId: string }) {
       created_at: string;
     }[];
     total: number;
-  }>(`/projects/${projectId}/story?page=1&page_size=10`, fetcher);
+  }>(`/projects/${projectId}/story?page=1&page_size=${showAll ? 50 : 5}`, fetcher);
+
+  // Hitung total jam
+  const totalHours = data?.items.reduce((sum, log) => sum + log.duration_hours, 0) || 0;
 
   if (isLoading) {
     return (
       <div className="bg-white border border-neutral-200 rounded-lg p-5">
         <div className="h-5 bg-neutral-200 rounded w-1/4 mb-4 animate-pulse" />
         <div className="space-y-3 animate-pulse">
-          <div className="h-12 bg-neutral-100 rounded" />
-          <div className="h-12 bg-neutral-100 rounded" />
+          <div className="h-10 bg-neutral-100 rounded" />
+          <div className="h-10 bg-neutral-100 rounded" />
         </div>
       </div>
     );
@@ -292,9 +297,22 @@ function ProjectActivitySection({ projectId }: { projectId: string }) {
   return (
     <div className="bg-white border border-neutral-200 rounded-lg p-5">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-semibold text-neutral-700">Activity Log</h2>
-        {data && data.total > 0 && (
-          <span className="text-xs text-neutral-400">{data.total} aktivitas</span>
+        <div>
+          <h2 className="text-sm font-semibold text-neutral-700">Project Story</h2>
+          {data && data.total > 0 && (
+            <p className="text-xs text-neutral-400 mt-0.5">
+              {data.total} aktivitas — Total: {totalHours} jam
+            </p>
+          )}
+        </div>
+        {data && data.total > 5 && (
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="px-3 py-1.5 text-xs font-medium text-primary-600 border border-primary-200
+                       rounded-lg hover:bg-primary-50 transition-colors min-h-[36px]"
+          >
+            {showAll ? "Ringkas" : "Lihat Semua"}
+          </button>
         )}
       </div>
 
@@ -303,24 +321,20 @@ function ProjectActivitySection({ projectId }: { projectId: string }) {
           Belum ada activity log untuk proyek ini.
         </p>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {data.items.map((log) => (
-            <div key={log.id} className="flex gap-3 p-3 bg-neutral-50 rounded-lg">
+            <div key={log.id} className="flex items-start gap-3 p-3 bg-neutral-50 rounded-lg">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
+                <div className="flex items-center gap-2 mb-0.5">
                   <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-medium">
                     {log.subtask_category}
                   </span>
-                  <span className="text-xs text-neutral-400">
-                    {log.duration_hours} jam
+                  <span className="text-xs text-neutral-400">{log.duration_hours}h</span>
+                  <span className="text-xs text-neutral-300">
+                    {new Date(log.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
                   </span>
                 </div>
                 <p className="text-sm text-neutral-700 line-clamp-2">{log.raw_notes}</p>
-                <p className="text-xs text-neutral-400 mt-1">
-                  {new Date(log.created_at).toLocaleDateString("id-ID", {
-                    day: "numeric", month: "short", year: "numeric"
-                  })}
-                </p>
               </div>
             </div>
           ))}

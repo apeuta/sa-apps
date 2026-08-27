@@ -310,7 +310,7 @@ async def get_sa_utilization(
 
 
 @router.get(
-    "/projects/utilization",
+    "/utilization/projects",
     summary="Utilisasi per proyek",
     description=(
         "Menampilkan total jam kerja per proyek beserta personel SA. "

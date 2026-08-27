@@ -726,7 +726,7 @@ interface ProjectUtilData {
 /** Komponen section utilisasi per proyek */
 function ProjectUtilizationSection() {
   const { data, isLoading } = useSWR<ProjectUtilData[]>(
-    "/projects/utilization",
+    "/utilization/projects",
     fetcher
   );
 
