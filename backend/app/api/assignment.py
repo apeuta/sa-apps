@@ -244,8 +244,6 @@ async def get_sa_utilization(
     sa_users = sa_result.scalars().all()
 
     # Query activity logs untuk tahun target, grouped by SA + bulan
-    from datetime import date as date_type, datetime as dt_type
-
     year_start = dt_type(target_year, 1, 1, tzinfo=timezone.utc)
     year_end = dt_type(target_year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
 

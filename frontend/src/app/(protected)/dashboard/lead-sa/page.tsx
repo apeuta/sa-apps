@@ -99,8 +99,8 @@ export default function LeadSADashboard() {
   const utilizationUrl = selectedSAId
     ? `/sa/utilization?year=${utilizationYear}&sa_id=${selectedSAId}`
     : `/sa/utilization?year=${utilizationYear}`;
-  const { data: monthlyUtilization, isLoading: isLoadingMonthly } =
-    useSWR<UtilizationResponse>(utilizationUrl, fetcher);
+  const { data: monthlyUtilization, isLoading: isLoadingMonthly, error: monthlyError } =
+    useSWR<UtilizationResponse>(utilizationUrl, fetcher, { keepPreviousData: true });
 
   /**
    * Callback setelah assignment berhasil
@@ -338,7 +338,7 @@ export default function LeadSADashboard() {
           Utilisasi SA per Bulan (Jam Kerja)
         </h2>
 
-        {isLoadingMonthly ? (
+        {isLoadingMonthly && !monthlyUtilization ? (
           <div className="rounded-lg border border-neutral-200 bg-white p-5">
             <div className="space-y-2 animate-pulse">
               <div className="h-8 bg-neutral-200 rounded w-full" />
@@ -346,6 +346,10 @@ export default function LeadSADashboard() {
               <div className="h-6 bg-neutral-100 rounded w-full" />
               <div className="h-6 bg-neutral-100 rounded w-full" />
             </div>
+          </div>
+        ) : monthlyError ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+            <p className="text-sm text-red-700">Gagal memuat data utilisasi.</p>
           </div>
         ) : (
           <MonthlyUtilizationTable
