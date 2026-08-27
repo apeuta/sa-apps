@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
 import { useAuthStore } from "@/store/auth";
@@ -12,15 +12,16 @@ import type { HandoverStatus } from "@/lib/api/handover";
 /**
  * Halaman Detail Proyek
  *
- * Menampilkan informasi proyek dan status workflow.
- * Jika proyek berstatus "Closed-Win", menampilkan:
- * - Modal blocking instruksi HLD (requirement 17.1)
- * - Form konfigurasi email PMO/Delivery jika belum ada (requirement 17.6)
+ * Menampilkan informasi lengkap proyek:
+ * - Header: nama proyek, customer, status
+ * - Info PIC: Sales yang submit, SA yang ditugaskan
+ * - Detail BANT: skor total + breakdown per kriteria
+ * - Info proyek: DQ Number, target submit, use case tags
+ * - Activity logs terkait proyek
  *
  * Requirements: 17.1, 17.6
  */
 
-/** Interface data proyek */
 interface ProjectDetail {
   id_project: string;
   project_name: string;
@@ -28,8 +29,11 @@ interface ProjectDetail {
   status: string;
   dq_number: string | null;
   bant_score: number | null;
+  bant_detail: { budget: number; authority: number; need: number; timeline: number } | null;
   use_case_tags: string[];
-  assigned_sa: string | null;
+  target_submit: string | null;
+  sales_pic: { id: string | null; name: string | null; email: string | null };
+  assigned_sa: { id: string | null; name: string | null; email: string | null } | null;
   gdrive_folder_id: string | null;
   created_at: string;
   updated_at: string;
@@ -37,52 +41,27 @@ interface ProjectDetail {
 
 export default function ProjectDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const projectId = params.id as string;
   const { user } = useAuthStore();
 
-  // State untuk modal/form handover
   const [showHandoverModal, setShowHandoverModal] = useState(true);
-  const [showConfigForm, setShowConfigForm] = useState(false);
 
   // Fetch detail proyek
-  const {
-    data: project,
-    error: projError,
-    isLoading,
-    mutate: mutateProject,
-  } = useSWR<ProjectDetail>(`/projects/${projectId}`, fetcher);
+  const { data: project, error: projError, isLoading } = useSWR<ProjectDetail>(
+    `/projects/${projectId}`,
+    fetcher
+  );
 
   // Fetch handover status (hanya jika proyek Closed-Win)
-  const {
-    data: handoverStatus,
-    mutate: mutateHandoverStatus,
-  } = useSWR<HandoverStatus>(
+  const { data: handoverStatus, mutate: mutateHandoverStatus } = useSWR<HandoverStatus>(
     project?.status === "Closed-Win" ? `/projects/${projectId}/handover-status` : null,
     fetcher
   );
 
-  /**
-   * Handler setelah user acknowledge handover modal
-   */
-  const handleModalAcknowledge = useCallback(() => {
-    setShowHandoverModal(false);
-  }, []);
-
-  /**
-   * Handler setelah konfigurasi handover berhasil disimpan
-   */
-  const handleConfigSuccess = useCallback(() => {
-    setShowConfigForm(false);
-    mutateHandoverStatus();
-  }, [mutateHandoverStatus]);
-
-  // Tentukan apakah perlu tampilkan modal Closed-Win
   const shouldShowHandoverModal =
-    project?.status === "Closed-Win" &&
-    showHandoverModal &&
-    user?.role === "SA";
+    project?.status === "Closed-Win" && showHandoverModal && user?.role === "SA";
 
-  // Tentukan apakah perlu tampilkan form konfigurasi email
   const shouldShowConfigForm =
     project?.status === "Closed-Win" &&
     handoverStatus &&
@@ -90,93 +69,78 @@ export default function ProjectDetailPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      {/* Loading skeleton */}
+      {/* Loading */}
       {isLoading && (
-        <div className="space-y-4 animate-pulse" aria-busy="true">
+        <div className="space-y-4 animate-pulse">
           <div className="h-8 bg-neutral-200 rounded w-1/3" />
           <div className="h-4 bg-neutral-100 rounded w-1/2" />
-          <div className="h-32 bg-neutral-100 rounded" />
+          <div className="h-48 bg-neutral-100 rounded" />
         </div>
       )}
 
-      {/* Error state */}
+      {/* Error */}
       {projError && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-sm text-red-700" role="alert">
-            Gagal memuat detail proyek. Silakan coba lagi.
-          </p>
+          <p className="text-sm text-red-700">Gagal memuat detail proyek. Silakan coba lagi.</p>
         </div>
       )}
 
-      {/* Konten detail proyek */}
+      {/* Konten */}
       {project && (
         <>
-          {/* Page Header */}
+          {/* Header */}
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold text-neutral-900">
                 {project.project_name}
               </h1>
-              <p className="text-sm text-neutral-500 mt-1">
-                {project.customer_name}
-              </p>
+              <p className="text-sm text-neutral-500 mt-1">{project.customer_name}</p>
+              <p className="text-xs text-neutral-400 mt-0.5 font-mono">{project.id_project}</p>
             </div>
-
-            {/* Status badge */}
             <span
-              className={`
-                inline-block px-3 py-1 rounded-full text-xs font-medium
-                ${project.status === "Closed-Win"
-                  ? "bg-green-100 text-green-700"
-                  : project.status === "Lost"
-                    ? "bg-red-100 text-red-700"
-                    : "bg-blue-100 text-blue-700"
-                }
-              `}
+              className={`inline-block px-3 py-1 rounded-full text-xs font-medium shrink-0 ${
+                project.status === "Closed-Win" ? "bg-green-100 text-green-700"
+                : project.status === "Lost" ? "bg-red-100 text-red-700"
+                : project.status === "Ready" ? "bg-emerald-100 text-emerald-700"
+                : project.status === "Assigned" ? "bg-blue-100 text-blue-700"
+                : project.status === "Pending Assignment" ? "bg-yellow-100 text-yellow-700"
+                : "bg-neutral-100 text-neutral-700"
+              }`}
             >
               {project.status}
             </span>
           </div>
 
-          {/* Info proyek */}
+          {/* Section: PIC & Info Utama */}
           <div className="bg-white border border-neutral-200 rounded-lg p-5">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="text-neutral-500">DQ Number:</span>
-                <span className="ml-2 font-medium text-neutral-800">
-                  {project.dq_number || "—"}
-                </span>
-              </div>
-              <div>
-                <span className="text-neutral-500">BANT Score:</span>
-                <span className="ml-2 font-medium text-neutral-800">
-                  {project.bant_score ?? "—"}
-                </span>
-              </div>
-              <div>
-                <span className="text-neutral-500">Dibuat:</span>
-                <span className="ml-2 font-medium text-neutral-800">
-                  {new Date(project.created_at).toLocaleDateString("id-ID")}
-                </span>
-              </div>
-              <div>
-                <span className="text-neutral-500">Terakhir diubah:</span>
-                <span className="ml-2 font-medium text-neutral-800">
-                  {new Date(project.updated_at).toLocaleDateString("id-ID")}
-                </span>
-              </div>
+            <h2 className="text-sm font-semibold text-neutral-700 mb-3">Informasi Proyek</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <InfoRow label="Sales PIC" value={project.sales_pic?.name || "—"} />
+              <InfoRow label="SA Ditugaskan" value={project.assigned_sa?.name || "Belum di-assign"} />
+              <InfoRow label="DQ Number" value={project.dq_number || "Belum diinput"} mono={!!project.dq_number} />
+              <InfoRow
+                label="Target Submit"
+                value={project.target_submit
+                  ? new Date(project.target_submit).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
+                  : "—"}
+              />
+              <InfoRow
+                label="Dibuat"
+                value={new Date(project.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+              />
+              <InfoRow
+                label="Terakhir Diubah"
+                value={new Date(project.updated_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+              />
             </div>
 
             {/* Use case tags */}
-            {project.use_case_tags && project.use_case_tags.length > 0 && (
+            {project.use_case_tags.length > 0 && (
               <div className="mt-4 pt-4 border-t border-neutral-100">
                 <span className="text-xs text-neutral-500">Use Case Tags:</span>
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
                   {project.use_case_tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="px-2 py-0.5 bg-primary-50 text-primary-600 text-xs rounded-full"
-                    >
+                    <span key={tag} className="px-2 py-0.5 bg-primary-50 text-primary-600 text-xs rounded-full">
                       {tag}
                     </span>
                   ))}
@@ -185,35 +149,95 @@ export default function ProjectDetailPage() {
             )}
           </div>
 
-          {/* Section Konfigurasi Handover — tampil jika Closed-Win dan email belum dikonfigurasi */}
+          {/* Section: Detail BANT */}
+          {project.bant_score != null && (
+            <div className="bg-white border border-neutral-200 rounded-lg p-5">
+              <h2 className="text-sm font-semibold text-neutral-700 mb-3">BANT Scoring</h2>
+
+              {/* Total Score */}
+              <div className="flex items-center gap-4 mb-4">
+                <div className={`text-3xl font-bold ${project.bant_score >= 60 ? "text-green-600" : "text-orange-600"}`}>
+                  {project.bant_score}
+                  <span className="text-sm font-normal text-neutral-400">/100</span>
+                </div>
+                <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                  project.bant_score >= 60 ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"
+                }`}>
+                  {project.bant_score >= 60 ? "Lolos Threshold" : "Perlu Klarifikasi"}
+                </span>
+              </div>
+
+              {/* Sub-skor breakdown */}
+              {project.bant_detail && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <BANTCriteriaCard label="Budget" score={project.bant_detail.budget} />
+                  <BANTCriteriaCard label="Authority" score={project.bant_detail.authority} />
+                  <BANTCriteriaCard label="Need" score={project.bant_detail.need} />
+                  <BANTCriteriaCard label="Timeline" score={project.bant_detail.timeline} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Section: Konfigurasi Handover */}
           {shouldShowConfigForm && (
             <div className="bg-white border border-amber-200 rounded-lg p-5">
-              <h2 className="text-base font-semibold text-neutral-800 mb-3">
-                Konfigurasi Handover
-              </h2>
+              <h2 className="text-base font-semibold text-neutral-800 mb-3">Konfigurasi Handover</h2>
               <p className="text-sm text-neutral-600 mb-4">
                 Email PMO Lead dan Delivery Lead belum dikonfigurasi.
-                Lengkapi informasi berikut agar handover dapat diproses.
               </p>
               <HandoverConfigForm
                 projectId={projectId}
                 existingPmoEmail={handoverStatus?.pmo_email}
                 existingDeliveryEmail={handoverStatus?.delivery_email}
-                onSuccess={handleConfigSuccess}
+                onSuccess={() => mutateHandoverStatus()}
               />
             </div>
           )}
         </>
       )}
 
-      {/* Modal Blocking Closed-Win → Instruksi HLD */}
+      {/* Modal Closed-Win */}
       {shouldShowHandoverModal && project && (
         <HandoverModal
           projectId={projectId}
           projectName={project.project_name}
-          onAcknowledge={handleModalAcknowledge}
+          onAcknowledge={() => setShowHandoverModal(false)}
         />
       )}
+    </div>
+  );
+}
+
+// === Sub-komponen ===
+
+function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <span className="text-neutral-500">{label}:</span>
+      <span className={`ml-2 font-medium text-neutral-800 ${mono ? "font-mono text-sm" : ""}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function BANTCriteriaCard({ label, score }: { label: string; score: number }) {
+  const percentage = (score / 25) * 100;
+  return (
+    <div className="bg-neutral-50 rounded-lg p-3 border border-neutral-100">
+      <p className="text-xs text-neutral-500 mb-1">{label}</p>
+      <p className="text-lg font-semibold text-neutral-800">
+        {score}<span className="text-xs font-normal text-neutral-400">/25</span>
+      </p>
+      <div className="mt-2 h-1.5 bg-neutral-200 rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full ${
+            percentage >= 80 ? "bg-green-400" : percentage >= 50 ? "bg-yellow-400" : "bg-red-400"
+          }`}
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
     </div>
   );
 }

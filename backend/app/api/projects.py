@@ -266,16 +266,14 @@ async def get_status_summary(
 @router.get(
     "/{project_id}",
     summary="Detail proyek",
-    description="Mengambil detail satu proyek berdasarkan ID.",
+    description="Mengambil detail satu proyek berdasarkan ID, termasuk info PIC Sales dan SA.",
 )
 async def get_project_detail(
     project_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Ambil detail proyek berdasarkan project_id."""
-    from sqlalchemy import select as sa_select
-
+    """Ambil detail proyek berdasarkan project_id, enriched dengan nama PIC."""
     result = await db.execute(
         select(Project).where(Project.id_project == project_id)
     )
@@ -287,6 +285,30 @@ async def get_project_detail(
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
 
+    # Fetch nama Sales PIC
+    sales_name = None
+    sales_email = None
+    if project.sales_pic:
+        sales_result = await db.execute(
+            select(User).where(User.id == project.sales_pic)
+        )
+        sales_user = sales_result.scalar_one_or_none()
+        if sales_user:
+            sales_name = sales_user.name
+            sales_email = sales_user.email
+
+    # Fetch nama SA assigned
+    sa_name = None
+    sa_email = None
+    if project.assigned_sa:
+        sa_result = await db.execute(
+            select(User).where(User.id == project.assigned_sa)
+        )
+        sa_user = sa_result.scalar_one_or_none()
+        if sa_user:
+            sa_name = sa_user.name
+            sa_email = sa_user.email
+
     data = {
         "id_project": project.id_project,
         "project_name": project.project_name,
@@ -297,7 +319,16 @@ async def get_project_detail(
         "bant_detail": project.bant_detail,
         "use_case_tags": project.use_case_tags or [],
         "target_submit": project.target_submit.isoformat() if project.target_submit else None,
-        "assigned_sa": str(project.assigned_sa) if project.assigned_sa else None,
+        "sales_pic": {
+            "id": str(project.sales_pic) if project.sales_pic else None,
+            "name": sales_name,
+            "email": sales_email,
+        },
+        "assigned_sa": {
+            "id": str(project.assigned_sa) if project.assigned_sa else None,
+            "name": sa_name,
+            "email": sa_email,
+        } if project.assigned_sa else None,
         "gdrive_folder_id": project.gdrive_folder_id,
         "created_at": project.created_at.isoformat() if project.created_at else None,
         "updated_at": project.updated_at.isoformat() if project.updated_at else None,
