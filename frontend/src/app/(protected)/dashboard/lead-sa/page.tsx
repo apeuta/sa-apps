@@ -12,10 +12,11 @@ import { AssignmentModal } from "@/components/AssignmentModal";
 /**
  * Dashboard Lead_SA
  *
- * Tiga section utama:
+ * Empat section utama:
  * 1. Antrian Assignment — proyek berstatus "Pending Assignment"
  * 2. Overview Proyek Aktif — count proyek per status
  * 3. Utilisasi SA — daftar SA dengan jumlah proyek aktif
+ * 4. Utilisasi SA per Bulan — jam kerja per SA per bulan (chart tabel)
  *
  * Requirements: 4.1, 9.3
  */
@@ -24,6 +25,24 @@ import { AssignmentModal } from "@/components/AssignmentModal";
 interface StatusCount {
   status: string;
   count: number;
+}
+
+/** Data utilisasi per SA per bulan */
+interface SAMonthlyData {
+  sa_id: string;
+  sa_name: string;
+  months: Record<string, number>;
+  total_hours: number;
+}
+
+interface UtilizationResponse {
+  year: number;
+  monthly_data: SAMonthlyData[];
+  summary: {
+    months: Record<string, number>;
+    total_hours: number;
+    sa_count: number;
+  };
 }
 
 /** Warna badge per status proyek */
@@ -40,6 +59,9 @@ const STATUS_BADGE_COLORS: Record<string, string> = {
   "Handover Complete": "bg-teal-100 text-teal-700",
 };
 
+/** Nama bulan singkat */
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
 export default function LeadSADashboard() {
   // State untuk modal assignment
   const [assigningProject, setAssigningProject] =
@@ -49,6 +71,12 @@ export default function LeadSADashboard() {
     message: string;
     type: "success" | "error";
   } | null>(null);
+  // State untuk tahun utilisasi
+  const [utilizationYear, setUtilizationYear] = useState<number>(
+    new Date().getFullYear()
+  );
+  // State untuk filter SA individu
+  const [selectedSAId, setSelectedSAId] = useState<string>("");
 
   // Fetch proyek pending assignment
   const {
@@ -62,10 +90,17 @@ export default function LeadSADashboard() {
     StatusCount[]
   >("/projects/status-summary", fetcher);
 
-  // Fetch utilisasi SA
+  // Fetch utilisasi SA (proyek aktif)
   const { data: saUtilization, isLoading: isLoadingSA } = useSWR<
     AvailableSA[]
   >("/sa/available", fetcher);
+
+  // Fetch utilisasi SA per bulan
+  const utilizationUrl = selectedSAId
+    ? `/sa/utilization?year=${utilizationYear}&sa_id=${selectedSAId}`
+    : `/sa/utilization?year=${utilizationYear}`;
+  const { data: monthlyUtilization, isLoading: isLoadingMonthly } =
+    useSWR<UtilizationResponse>(utilizationUrl, fetcher);
 
   /**
    * Callback setelah assignment berhasil
@@ -297,6 +332,33 @@ export default function LeadSADashboard() {
         </section>
       </div>
 
+      {/* Section 4: Utilisasi SA per Bulan */}
+      <section>
+        <h2 className="text-lg font-semibold text-neutral-800 mb-4">
+          Utilisasi SA per Bulan (Jam Kerja)
+        </h2>
+
+        {isLoadingMonthly ? (
+          <div className="rounded-lg border border-neutral-200 bg-white p-5">
+            <div className="space-y-2 animate-pulse">
+              <div className="h-8 bg-neutral-200 rounded w-full" />
+              <div className="h-6 bg-neutral-100 rounded w-full" />
+              <div className="h-6 bg-neutral-100 rounded w-full" />
+              <div className="h-6 bg-neutral-100 rounded w-full" />
+            </div>
+          </div>
+        ) : (
+          <MonthlyUtilizationTable
+            data={monthlyUtilization}
+            year={utilizationYear}
+            onYearChange={setUtilizationYear}
+            saList={saUtilization}
+            selectedSAId={selectedSAId}
+            onSAChange={setSelectedSAId}
+          />
+        )}
+      </section>
+
       {/* Modal Assignment */}
       {assigningProject && (
         <AssignmentModal
@@ -304,6 +366,170 @@ export default function LeadSADashboard() {
           onClose={() => setAssigningProject(null)}
           onSuccess={handleAssignmentSuccess}
         />
+      )}
+    </div>
+  );
+}
+
+// === Sub-komponen ===
+
+/**
+ * Tabel utilisasi SA per bulan
+ * Menampilkan jam kerja per SA per bulan dalam format tabel horizontal
+ */
+function MonthlyUtilizationTable({
+  data,
+  year,
+  onYearChange,
+  saList,
+  selectedSAId,
+  onSAChange,
+}: {
+  data: UtilizationResponse | undefined;
+  year: number;
+  onYearChange: (y: number) => void;
+  saList: AvailableSA[] | undefined;
+  selectedSAId: string;
+  onSAChange: (id: string) => void;
+}) {
+  /** Warna heatmap berdasarkan jam */
+  const getHeatmapBg = (hours: number): string => {
+    if (hours === 0) return "";
+    if (hours < 10) return "bg-blue-50";
+    if (hours < 30) return "bg-blue-100";
+    if (hours < 60) return "bg-blue-200";
+    return "bg-blue-300";
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Pilih tahun */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="util-year" className="text-xs text-neutral-500">
+            Tahun
+          </label>
+          <select
+            id="util-year"
+            value={year}
+            onChange={(e) => onYearChange(Number(e.target.value))}
+            className="px-2 py-1.5 border border-neutral-300 rounded-md text-sm
+              focus:outline-none focus:ring-1 focus:ring-primary-500"
+          >
+            {[year - 1, year, year + 1].map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Filter per SA */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="util-sa" className="text-xs text-neutral-500">
+            SA
+          </label>
+          <select
+            id="util-sa"
+            value={selectedSAId}
+            onChange={(e) => onSAChange(e.target.value)}
+            className="px-2 py-1.5 border border-neutral-300 rounded-md text-sm
+              focus:outline-none focus:ring-1 focus:ring-primary-500"
+          >
+            <option value="">Semua SA</option>
+            {saList?.map((sa) => (
+              <option key={sa.id} value={sa.id}>{sa.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Total ringkasan */}
+        {data && (
+          <div className="ml-auto text-xs text-neutral-500">
+            Total: <span className="font-semibold text-neutral-700">{data.summary.total_hours} jam</span>
+            {" "}dari {data.summary.sa_count} SA
+          </div>
+        )}
+      </div>
+
+      {/* Tabel utilisasi */}
+      {!data ? (
+        <div className="rounded-lg border border-neutral-200 bg-white p-5">
+          <div className="space-y-2 animate-pulse">
+            <div className="h-8 bg-neutral-200 rounded w-full" />
+            <div className="h-6 bg-neutral-100 rounded w-full" />
+            <div className="h-6 bg-neutral-100 rounded w-full" />
+          </div>
+        </div>
+      ) : data.monthly_data.length === 0 ? (
+        <div className="rounded-lg border border-neutral-200 bg-white p-6 text-center">
+          <p className="text-sm text-neutral-500">
+            Belum ada data activity log untuk tahun {year}.
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-neutral-200 bg-white overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-neutral-100">
+                <th className="text-left px-3 py-2.5 font-semibold text-neutral-700 whitespace-nowrap sticky left-0 bg-white z-10">
+                  SA
+                </th>
+                {MONTH_LABELS.map((m, idx) => (
+                  <th key={idx} className="text-center px-2 py-2.5 font-medium text-neutral-600 min-w-[48px]">
+                    {m}
+                  </th>
+                ))}
+                <th className="text-center px-3 py-2.5 font-semibold text-neutral-700 whitespace-nowrap">
+                  Total
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.monthly_data.map((sa) => (
+                <tr key={sa.sa_id} className="border-b border-neutral-50 hover:bg-neutral-50/50">
+                  <td className="px-3 py-2 font-medium text-neutral-800 whitespace-nowrap sticky left-0 bg-white z-10">
+                    {sa.sa_name}
+                  </td>
+                  {MONTH_LABELS.map((_, idx) => {
+                    const hours = sa.months[String(idx + 1)] || 0;
+                    return (
+                      <td
+                        key={idx}
+                        className={`text-center px-2 py-2 ${getHeatmapBg(hours)}`}
+                      >
+                        {hours > 0 ? (
+                          <span className="font-medium text-neutral-700">{hours}</span>
+                        ) : (
+                          <span className="text-neutral-300">-</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                  <td className="text-center px-3 py-2 font-semibold text-neutral-900">
+                    {sa.total_hours}
+                  </td>
+                </tr>
+              ))}
+              {/* Summary row */}
+              <tr className="border-t border-neutral-200 bg-neutral-50">
+                <td className="px-3 py-2.5 font-semibold text-neutral-700 sticky left-0 bg-neutral-50 z-10">
+                  Total
+                </td>
+                {MONTH_LABELS.map((_, idx) => {
+                  const hours = data.summary.months[String(idx + 1)] || 0;
+                  return (
+                    <td key={idx} className="text-center px-2 py-2.5 font-semibold text-neutral-700">
+                      {hours > 0 ? hours : "-"}
+                    </td>
+                  );
+                })}
+                <td className="text-center px-3 py-2.5 font-bold text-neutral-900">
+                  {data.summary.total_hours}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

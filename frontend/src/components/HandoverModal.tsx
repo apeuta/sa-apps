@@ -88,7 +88,7 @@ export function HandoverModal({
           id="handover-modal-title"
           className="text-lg font-bold text-neutral-900 text-center"
         >
-          Proyek Closed-Win! 🎉
+          Proyek Closed-Win!
         </h2>
 
         {/* Nama proyek */}

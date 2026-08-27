@@ -228,7 +228,7 @@ export function BANTManualForm({
       {/* ===== 1. BUDGET ===== */}
       <fieldset className="space-y-2 border border-neutral-200 rounded-lg p-4">
         <legend className="text-sm font-semibold text-neutral-700 px-2">
-          💰 Ekspektasi MRR (Monthly Recurring Revenue)
+          Ekspektasi MRR (Monthly Recurring Revenue)
         </legend>
         <p className="text-xs text-neutral-500">
           Masukkan estimasi pendapatan bulanan dari proyek ini.
@@ -261,7 +261,7 @@ export function BANTManualForm({
       {/* ===== 2. AUTHORITY ===== */}
       <fieldset className="space-y-3 border border-neutral-200 rounded-lg p-4">
         <legend className="text-sm font-semibold text-neutral-700 px-2">
-          👤 Informasi PIC (Person in Charge)
+          Informasi PIC (Person in Charge)
         </legend>
         <p className="text-xs text-neutral-500">
           Data kontak pengambil keputusan di sisi customer.
@@ -338,7 +338,7 @@ export function BANTManualForm({
       {/* ===== 3. NEED ===== */}
       <fieldset className="space-y-2 border border-neutral-200 rounded-lg p-4">
         <legend className="text-sm font-semibold text-neutral-700 px-2">
-          🖥️ Kebutuhan Server & Spesifikasi
+          Kebutuhan Server & Spesifikasi
         </legend>
         <p className="text-xs text-neutral-500">
           Jelaskan kebutuhan teknis customer.
@@ -376,7 +376,7 @@ export function BANTManualForm({
       {/* ===== 4. TIMELINE ===== */}
       <fieldset className="space-y-2 border border-neutral-200 rounded-lg p-4">
         <legend className="text-sm font-semibold text-neutral-700 px-2">
-          📅 Target Submit Dokumen
+          Target Submit Dokumen
         </legend>
         <p className="text-xs text-neutral-500">
           Kapan dokumen proposal harus diserahkan ke customer?

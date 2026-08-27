@@ -136,7 +136,7 @@ function LoginContent() {
           className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 text-center"
           role="status"
         >
-          🧪 Demo Mode — Login tanpa Google OAuth
+          Demo Mode — Login tanpa Google OAuth
         </div>
 
         {/* Error messages */}

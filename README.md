@@ -20,7 +20,7 @@ Portal SA adalah Progressive Web App (PWA) untuk manajemen proyek pre-sales dan 
 | **Notification** | In-app notification + email (Gmail API) untuk semua event penting |
 | **RAG Recommendation** | Rekomendasi template dari proyek Closed-Win serupa |
 | **PMO Handover** | Automasi handover folder + notifikasi ke PMO/Delivery setelah Closed-Win |
-| **Dashboard per Role** | Tampilan berbeda untuk Sales, SA, dan Lead SA |
+| **Dashboard per Role** | Tampilan berbeda untuk Sales, SA, dan Lead SA (termasuk utilisasi SA per bulan) |
 | **PWA + Offline** | Installable, offline-capable, auto-sync saat kembali online |
 
 ---
@@ -290,6 +290,22 @@ Lihat `.env.example` untuk daftar lengkap. Yang **wajib** dikonfigurasi:
 
 ---
 
+## Seed Demo Data
+
+Untuk mengisi data contoh (users, projects, documents, activity logs):
+
+```bash
+docker compose exec backend python -m scripts.seed_demo_data
+```
+
+Script ini idempotent — aman dijalankan berkali-kali. Data demo mencakup:
+- 4 users (Sales, SA, Lead_SA, Admin)
+- 5 proyek dengan berbagai status (termasuk DQ Number untuk proyek Ready dan Closed-Win)
+- 4 dokumen (PropTek, BOQ)
+- 5 activity logs
+
+---
+
 ## API Documentation
 
 Setelah aplikasi berjalan:
@@ -301,7 +317,15 @@ Setelah aplikasi berjalan:
 
 ## Status
 
-🚀 **MVP Ready** — Semua fitur inti sudah terimplementasi dan siap deploy.
+MVP Ready — Semua fitur inti sudah terimplementasi dan siap deploy.
+
+---
+
+## Changelog Terbaru
+
+- **Utilisasi SA per Bulan** — Dashboard Lead SA sekarang menampilkan tabel jam kerja per SA per bulan dengan filter tahun dan per individu
+- **DQ Number di Seed Data** — Proyek demo "Ready" dan "Closed-Win" sudah punya DQ Number sejak awal
+- **Cleanup Emoji** — Semua emoji dekoratif di UI diganti dengan SVG icons/teks untuk konsistensi tampilan
 
 ---
 

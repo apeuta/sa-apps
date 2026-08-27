@@ -203,6 +203,7 @@ Dokumen ini mendefinisikan scope **MVP (Minimum Viable Product)** yang difokuska
 4. THE Portal_SA SHALL menerapkan workflow status proyek dengan transisi valid sebagai berikut: New → Pending Assignment → Assigned → Ready → Closed-Win → Handover Complete, dan status "Lost" hanya dapat diterapkan oleh Lead_SA dari status manapun kecuali "Handover Complete"
 5. IF pengguna mencoba mengubah status proyek ke status yang bukan transisi valid berikutnya dalam workflow, THEN THE Portal_SA SHALL menolak perubahan dan menampilkan pesan error yang menunjukkan transisi yang diperbolehkan dari status saat ini
 6. WHEN status proyek berubah, THE Portal_SA SHALL mencatat perubahan status beserta timestamp, status sebelumnya, status baru, dan user yang mengubah di audit log
+7. WHEN Lead_SA mengakses dashboard, THE Portal_SA SHALL menampilkan tabel utilisasi SA per bulan yang menunjukkan total jam kerja (dari activity logs) setiap SA per bulan dalam tahun terpilih, dengan opsi filter per tahun dan per individu SA, serta baris ringkasan total jam kerja semua SA per bulan
 
 ---
 

@@ -211,7 +211,7 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
               Syncing...
             </span>
           ) : (
-            "🔄 Sync Calendar"
+            "Sync Calendar"
           )}
         </button>
       </div>
@@ -219,7 +219,6 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
       {/* Daftar events */}
       {events.length === 0 ? (
         <div className="p-6 text-center text-neutral-500 border border-neutral-200 rounded-lg">
-          <p className="text-lg mb-1">📅</p>
           <p className="text-sm">Klik &quot;Sync Calendar&quot; untuk mengambil events terbaru</p>
         </div>
       ) : (

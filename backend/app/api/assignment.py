@@ -17,6 +17,7 @@ from app.core.dependencies import get_current_user
 from app.models.notification_log import NotificationLog
 from app.models.project import Project
 from app.models.user import User
+from app.models.activity_log import ActivityLog
 from app.schemas.assignment import (
     AssignmentResponse,
     AssignRequest,
@@ -178,6 +179,139 @@ async def get_available_sa(
     return success_response(
         data={"sa_list": sa_data, "total": len(sa_data)},
         message=f"Ditemukan {len(sa_data)} SA tersedia.",
+    )
+
+
+@router.get(
+    "/sa/utilization",
+    summary="Utilisasi SA per bulan",
+    description=(
+        "Menampilkan total jam kerja (dari activity logs) per SA per bulan. "
+        "Mendukung filter per tahun dan per individu SA. Hanya untuk Lead_SA."
+    ),
+)
+async def get_sa_utilization(
+    year: int | None = None,
+    sa_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ambil data utilisasi SA per bulan berdasarkan activity logs.
+
+    Mengembalikan:
+    - Total jam per SA per bulan (berdasarkan created_at di ActivityLog)
+    - Jika year tidak diisi, default tahun berjalan
+    - Jika sa_id diisi, filter untuk SA tertentu saja
+
+    Response format:
+    {
+      "year": 2026,
+      "monthly_data": [
+        {
+          "sa_id": "...",
+          "sa_name": "...",
+          "months": {
+            "1": 40.5, "2": 35.0, ... "12": 0
+          },
+          "total_hours": 320.5
+        }
+      ],
+      "summary": {
+        "months": {"1": 80.5, "2": 70.0, ...},
+        "total_hours": 640.5,
+        "sa_count": 3
+      }
+    }
+    """
+    _require_lead_sa(current_user)
+
+    from datetime import date as date_type
+
+    # Default tahun berjalan
+    target_year = year or date_type.today().year
+
+    # Query semua SA (atau filter per sa_id)
+    sa_query = select(User).where(User.role == "SA").order_by(User.name)
+    if sa_id:
+        try:
+            sa_uuid = uuid.UUID(sa_id)
+            sa_query = sa_query.where(User.id == sa_uuid)
+        except ValueError:
+            pass  # Abaikan filter jika format uuid tidak valid
+
+    sa_result = await db.execute(sa_query)
+    sa_users = sa_result.scalars().all()
+
+    # Query activity logs untuk tahun target, grouped by SA + bulan
+    utilization_query = (
+        select(
+            ActivityLog.sa_id,
+            func.extract("month", ActivityLog.created_at).label("month"),
+            func.sum(ActivityLog.duration_hours).label("total_hours"),
+        )
+        .where(func.extract("year", ActivityLog.created_at) == target_year)
+    )
+
+    if sa_id:
+        try:
+            sa_uuid = uuid.UUID(sa_id)
+            utilization_query = utilization_query.where(ActivityLog.sa_id == sa_uuid)
+        except ValueError:
+            pass
+
+    utilization_query = utilization_query.group_by(
+        ActivityLog.sa_id,
+        func.extract("month", ActivityLog.created_at),
+    )
+
+    util_result = await db.execute(utilization_query)
+    util_rows = util_result.all()
+
+    # Build lookup: {sa_id: {month: total_hours}}
+    sa_monthly: dict[uuid.UUID, dict[int, float]] = {}
+    for row in util_rows:
+        sid = row[0]
+        month = int(row[1])
+        hours = float(row[2])
+        if sid not in sa_monthly:
+            sa_monthly[sid] = {}
+        sa_monthly[sid][month] = hours
+
+    # Format response per SA
+    monthly_data = []
+    summary_months: dict[int, float] = {m: 0.0 for m in range(1, 13)}
+
+    for sa in sa_users:
+        months_data = sa_monthly.get(sa.id, {})
+        sa_months = {str(m): months_data.get(m, 0.0) for m in range(1, 13)}
+        sa_total = sum(months_data.values())
+
+        monthly_data.append({
+            "sa_id": str(sa.id),
+            "sa_name": sa.name,
+            "months": sa_months,
+            "total_hours": round(sa_total, 2),
+        })
+
+        # Akumulasi summary
+        for m in range(1, 13):
+            summary_months[m] += months_data.get(m, 0.0)
+
+    # Summary all SA
+    summary = {
+        "months": {str(m): round(v, 2) for m, v in summary_months.items()},
+        "total_hours": round(sum(summary_months.values()), 2),
+        "sa_count": len(sa_users),
+    }
+
+    return success_response(
+        data={
+            "year": target_year,
+            "monthly_data": monthly_data,
+            "summary": summary,
+        },
+        message=f"Data utilisasi SA untuk tahun {target_year}.",
     )
 
 

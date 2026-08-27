@@ -284,7 +284,6 @@ export function ProjectStory({ projects }: ProjectStoryProps) {
 
           {data && data.items.length === 0 && (
             <div className="p-6 text-center text-neutral-500 border border-neutral-200 rounded-lg">
-              <p className="text-lg mb-1">📝</p>
               <p className="text-sm">Belum ada activity log untuk proyek ini</p>
             </div>
           )}
@@ -359,7 +358,7 @@ export function ProjectStory({ projects }: ProjectStoryProps) {
                             Memproses...
                           </span>
                         ) : (
-                          "✨ Polish Ulang"
+                          "Polish Ulang"
                         )}
                       </button>
                     </div>

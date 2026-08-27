@@ -109,6 +109,7 @@ async def get_or_create_project(
         bant_score=project_data["bant_score"],
         bant_detail=project_data["bant_detail"],
         use_case_tags=project_data["use_case_tags"],
+        dq_number=project_data.get("dq_number"),
         assigned_at=now if sa_id else None,
         created_at=now,
         updated_at=now,
@@ -215,6 +216,7 @@ async def seed_all():
                     "bant_detail": {"budget": 25, "authority": 20, "need": 15, "timeline": 15},
                     "use_case_tags": ["data-warehouse", "redshift"],
                     "assign_sa": True,
+                    "dq_number": None,
                 },
                 {
                     "id_project": "PRJ-DEMO-002",
@@ -226,6 +228,7 @@ async def seed_all():
                     "bant_detail": {"budget": 25, "authority": 25, "need": 20, "timeline": 15},
                     "use_case_tags": ["kubernetes", "app-mod"],
                     "assign_sa": True,
+                    "dq_number": "DQ-2025-00234",
                 },
                 {
                     "id_project": "PRJ-DEMO-003",
@@ -237,6 +240,7 @@ async def seed_all():
                     "bant_detail": {"budget": 20, "authority": 17, "need": 15, "timeline": 10},
                     "use_case_tags": ["machine-learning", "sagemaker"],
                     "assign_sa": False,
+                    "dq_number": None,
                 },
                 {
                     "id_project": "PRJ-DEMO-004",
@@ -248,6 +252,7 @@ async def seed_all():
                     "bant_detail": {"budget": 10, "authority": 15, "need": 10, "timeline": 10},
                     "use_case_tags": ["dr", "backup"],
                     "assign_sa": False,
+                    "dq_number": None,
                 },
                 {
                     "id_project": "PRJ-DEMO-005",
@@ -259,6 +264,7 @@ async def seed_all():
                     "bant_detail": {"budget": 25, "authority": 25, "need": 20, "timeline": 20},
                     "use_case_tags": ["iot", "kinesis", "data-pipeline"],
                     "assign_sa": True,
+                    "dq_number": "DQ-2025-00189",
                 },
             ]
 

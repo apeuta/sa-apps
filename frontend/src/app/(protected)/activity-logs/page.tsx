@@ -54,7 +54,7 @@ export default function ActivityLogsPage() {
             bg-white border border-neutral-300 text-neutral-700 
             hover:bg-neutral-50 transition-colors"
         >
-          📅 Calendar Sync
+          Calendar Sync
         </a>
       </div>
 
