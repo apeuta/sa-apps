@@ -89,7 +89,6 @@ const allNavItems: NavItem[] = [
   { label: "Dashboard", href: "/", icon: DashboardIcon },
   { label: "Proyek", href: "/projects", icon: FolderIcon },
   { label: "Activity Log", href: "/activity-logs", icon: ActivityLogIcon },
-  { label: "Dokumen", href: "/documents", icon: DocumentIcon },
   { label: "Notifikasi", href: "/notifications", icon: BellIcon },
 ];
 

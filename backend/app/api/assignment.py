@@ -226,7 +226,7 @@ async def get_sa_utilization(
     """
     _require_lead_sa(current_user)
 
-    from datetime import date as date_type
+    from datetime import date as date_type, datetime as dt_type
 
     # Default tahun berjalan
     target_year = year or date_type.today().year
@@ -244,13 +244,19 @@ async def get_sa_utilization(
     sa_users = sa_result.scalars().all()
 
     # Query activity logs untuk tahun target, grouped by SA + bulan
+    from datetime import date as date_type, datetime as dt_type
+
+    year_start = dt_type(target_year, 1, 1, tzinfo=timezone.utc)
+    year_end = dt_type(target_year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+
     utilization_query = (
         select(
             ActivityLog.sa_id,
             func.extract("month", ActivityLog.created_at).label("month"),
             func.sum(ActivityLog.duration_hours).label("total_hours"),
         )
-        .where(func.extract("year", ActivityLog.created_at) == target_year)
+        .where(ActivityLog.created_at >= year_start)
+        .where(ActivityLog.created_at <= year_end)
     )
 
     if sa_id:
