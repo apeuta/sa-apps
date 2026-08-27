@@ -80,20 +80,34 @@ function LoginContent() {
 
       const data = await response.json();
 
+      // Handle berbagai struktur response dari backend:
+      // Struktur 1: { access_token, refresh_token, user }
+      // Struktur 2: { tokens: { access_token, refresh_token }, user }
+      // Struktur 3: { data: { tokens: {...}, user: {...} } }
+      const tokens = data.tokens || data.data?.tokens || data;
+      const userData = data.user || data.data?.user;
+
       // Simpan token ke localStorage
-      localStorage.setItem("access_token", data.access_token);
-      if (data.refresh_token) {
-        localStorage.setItem("refresh_token", data.refresh_token);
+      const accessToken = tokens.access_token;
+      const refreshToken = tokens.refresh_token;
+
+      if (accessToken) {
+        localStorage.setItem("access_token", accessToken);
+      }
+      if (refreshToken) {
+        localStorage.setItem("refresh_token", refreshToken);
       }
 
       // Simpan user info ke Zustand auth store
-      setUser({
-        id: data.user.id,
-        email: data.user.email,
-        full_name: data.user.name || data.user.full_name,
-        role: data.user.role,
-        avatar_url: data.user.avatar_url,
-      });
+      if (userData) {
+        setUser({
+          id: userData.id,
+          email: userData.email,
+          full_name: userData.name || userData.full_name,
+          role: userData.role,
+          avatar_url: userData.avatar_url,
+        });
+      }
 
       // Redirect ke dashboard
       router.push("/");

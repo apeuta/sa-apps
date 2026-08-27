@@ -57,6 +57,16 @@ export async function fetcher<T>(endpoint: string): Promise<T> {
   // Handle response sesuai standard format API:
   // { status: "success|error", data: {...}, message: "..." }
   if (!response.ok) {
+    // Handle 401 — hapus token dan redirect ke login
+    if (response.status === 401) {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("refresh_token");
+        window.location.href = "/login";
+      }
+      throw new ApiError("Unauthorized", 401);
+    }
+
     const errorData = await response.json().catch(() => null);
     throw new ApiError(
       errorData?.message || `Request gagal dengan status ${response.status}`,

@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useSidebarStore } from "@/store/sidebar";
 import { useAuthStore } from "@/store/auth";
 
@@ -12,28 +14,123 @@ import { useAuthStore } from "@/store/auth";
  *
  * Fitur:
  * - Toggle collapse/expand
- * - Navigation links sesuai role user
- * - Menu "Settings" hanya tampil untuk Admin
+ * - Navigation links sesuai role user (Bug #6 fix)
+ * - Next.js Link component untuk navigasi tanpa full reload (Bug #1 fix)
+ * - SVG icons menggantikan emoji (Bug #2 fix)
  * - Touch target min 44x44px (Requirement 12.3)
  */
 
-// Item navigasi utama
-const navItems = [
-  { label: "Dashboard", href: "/", icon: "📊" },
-  { label: "Proyek", href: "/projects", icon: "📁" },
-  { label: "Activity Log", href: "/activity-logs", icon: "📝" },
-  { label: "Dokumen", href: "/documents", icon: "📄" },
-  { label: "Notifikasi", href: "/notifications", icon: "🔔" },
+// --- SVG Icon Components ---
+
+function DashboardIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zm-10 9a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1v-5zm10-2a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1v-7z" />
+    </svg>
+  );
+}
+
+function FolderIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+    </svg>
+  );
+}
+
+function ActivityLogIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function DocumentIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    </svg>
+  );
+}
+
+function BellIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+    </svg>
+  );
+}
+
+function SettingsIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.573-1.066z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+}
+
+// --- Tipe navigasi item ---
+interface NavItem {
+  label: string;
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+// Semua item navigasi yang tersedia
+const allNavItems: NavItem[] = [
+  { label: "Dashboard", href: "/", icon: DashboardIcon },
+  { label: "Proyek", href: "/projects", icon: FolderIcon },
+  { label: "Activity Log", href: "/activity-logs", icon: ActivityLogIcon },
+  { label: "Dokumen", href: "/documents", icon: DocumentIcon },
+  { label: "Notifikasi", href: "/notifications", icon: BellIcon },
 ];
 
 // Item navigasi khusus Admin
-const adminNavItems = [
-  { label: "Settings", href: "/admin/settings", icon: "⚙️" },
+const adminNavItems: NavItem[] = [
+  { label: "Settings", href: "/admin/settings", icon: SettingsIcon },
 ];
+
+/**
+ * Filter item navigasi berdasarkan role user
+ * - Sales: Dashboard, Proyek, Notifikasi
+ * - SA: Dashboard, Proyek, Activity Log, Dokumen, Notifikasi
+ * - Lead_SA: Dashboard, Proyek, Activity Log, Dokumen, Notifikasi
+ * - Admin: Semua + Settings
+ */
+function getNavItemsForRole(role?: string): NavItem[] {
+  switch (role) {
+    case "Sales":
+      return allNavItems.filter((item) =>
+        ["Dashboard", "Proyek", "Notifikasi"].includes(item.label)
+      );
+    case "SA":
+    case "Lead_SA":
+      return allNavItems;
+    case "Admin":
+      return allNavItems;
+    default:
+      // Jika role belum diketahui, tampilkan minimal
+      return allNavItems.filter((item) =>
+        ["Dashboard", "Proyek"].includes(item.label)
+      );
+  }
+}
 
 export function Sidebar() {
   const { isOpen, toggle } = useSidebarStore();
   const { user } = useAuthStore();
+  const pathname = usePathname();
+
+  // Dapatkan item navigasi sesuai role
+  const navItems = getNavItemsForRole(user?.role);
 
   return (
     <aside
@@ -79,28 +176,41 @@ export function Sidebar() {
       {/* Navigation links */}
       <nav className="flex-1 py-4 overflow-y-auto">
         <ul className="space-y-1 px-2">
-          {navItems.map((item) => (
-            <li key={item.href}>
-              <a
-                href={item.href}
-                className={`
-                  flex items-center gap-3 rounded-lg px-3 
-                  min-h-[44px] min-w-[44px]
-                  text-neutral-700 hover:bg-neutral-100 hover:text-primary-600
-                  transition-colors duration-100
-                  ${isOpen ? "" : "justify-center"}
-                `}
-                title={item.label}
-              >
-                <span className="text-xl shrink-0">{item.icon}</span>
-                {isOpen && (
-                  <span className="text-sm font-medium truncate">
-                    {item.label}
-                  </span>
-                )}
-              </a>
-            </li>
-          ))}
+          {navItems.map((item) => {
+            const IconComponent = item.icon;
+            // Cek apakah link aktif (exact match untuk "/" atau startsWith untuk lainnya)
+            const isActive =
+              item.href === "/"
+                ? pathname === "/"
+                : pathname.startsWith(item.href);
+
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className={`
+                    flex items-center gap-3 rounded-lg px-3 
+                    min-h-[44px] min-w-[44px]
+                    transition-colors duration-100
+                    ${isOpen ? "" : "justify-center"}
+                    ${
+                      isActive
+                        ? "bg-primary-50 text-primary-600 font-medium"
+                        : "text-neutral-700 hover:bg-neutral-100 hover:text-primary-600"
+                    }
+                  `}
+                  title={item.label}
+                >
+                  <IconComponent className="w-5 h-5 shrink-0" />
+                  {isOpen && (
+                    <span className="text-sm font-medium truncate">
+                      {item.label}
+                    </span>
+                  )}
+                </Link>
+              </li>
+            );
+          })}
 
           {/* Admin-only menu items */}
           {user?.role === "Admin" && (
@@ -112,47 +222,60 @@ export function Sidebar() {
                   </span>
                 )}
               </li>
-              {adminNavItems.map((item) => (
-                <li key={item.href}>
-                  <a
-                    href={item.href}
-                    className={`
-                      flex items-center gap-3 rounded-lg px-3 
-                      min-h-[44px] min-w-[44px]
-                      text-neutral-700 hover:bg-neutral-100 hover:text-primary-600
-                      transition-colors duration-100
-                      ${isOpen ? "" : "justify-center"}
-                    `}
-                    title={item.label}
-                  >
-                    <span className="text-xl shrink-0">{item.icon}</span>
-                    {isOpen && (
-                      <span className="text-sm font-medium truncate">
-                        {item.label}
-                      </span>
-                    )}
-                  </a>
-                </li>
-              ))}
+              {adminNavItems.map((item) => {
+                const IconComponent = item.icon;
+                const isActive = pathname.startsWith(item.href);
+
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      className={`
+                        flex items-center gap-3 rounded-lg px-3 
+                        min-h-[44px] min-w-[44px]
+                        transition-colors duration-100
+                        ${isOpen ? "" : "justify-center"}
+                        ${
+                          isActive
+                            ? "bg-primary-50 text-primary-600 font-medium"
+                            : "text-neutral-700 hover:bg-neutral-100 hover:text-primary-600"
+                        }
+                      `}
+                      title={item.label}
+                    >
+                      <IconComponent className="w-5 h-5 shrink-0" />
+                      {isOpen && (
+                        <span className="text-sm font-medium truncate">
+                          {item.label}
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
             </>
           )}
         </ul>
       </nav>
 
-      {/* Footer — info user (placeholder) */}
+      {/* Footer — info user */}
       <div className="border-t border-neutral-100 p-3">
         <div
           className={`flex items-center gap-3 ${isOpen ? "" : "justify-center"}`}
         >
           <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center shrink-0">
-            <span className="text-sm font-medium text-primary-600">U</span>
+            <span className="text-sm font-medium text-primary-600">
+              {user?.full_name?.charAt(0)?.toUpperCase() || "U"}
+            </span>
           </div>
           {isOpen && (
             <div className="truncate">
               <p className="text-sm font-medium text-neutral-700 truncate">
-                User
+                {user?.full_name || "User"}
               </p>
-              <p className="text-xs text-neutral-400 truncate">SA</p>
+              <p className="text-xs text-neutral-400 truncate">
+                {user?.role || "—"}
+              </p>
             </div>
           )}
         </div>
