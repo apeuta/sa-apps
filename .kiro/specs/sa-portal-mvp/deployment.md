@@ -558,9 +558,144 @@ docker system df
 - [ ] Repository berhasil di-clone
 - [ ] File `.env` sudah dikonfigurasi dengan credentials yang benar
 - [ ] `docker compose up -d --build` berhasil
+- [ ] Database migration dijalankan (`alembic upgrade head`)
+- [ ] Seed data dijalankan (`python -m scripts.seed_demo_data`)
 - [ ] Health check return `{"api":"healthy","database":"healthy"}`
 - [ ] Nginx terkonfigurasi dan running
 - [ ] Firewall/Security Group port 80/443 terbuka
 - [ ] Aplikasi bisa diakses dari browser luar VM
 - [ ] (Opsional) SSL/HTTPS via Let's Encrypt aktif
 - [ ] (Opsional) Google OAuth callback URL sudah pakai domain final
+
+---
+
+## Housekeeping VM
+
+### Deploy Fresh (Reset Total)
+
+Gunakan ini jika ingin mulai dari nol atau ada perubahan schema database:
+
+```bash
+ssh sa-portal@your-vm-ip
+cd ~/sa-portal
+
+# Hentikan semua container + hapus volume database
+docker compose down -v --remove-orphans
+
+# Hapus semua image/cache Docker yang tidak dipakai
+docker system prune -af --volumes
+
+# Pull kode terbaru
+git pull origin main
+
+# Pastikan .env ada di root
+ls .env || cp .env.example .env
+# Edit jika perlu: nano .env
+
+# Build dan deploy
+docker compose up -d --build
+
+# Tunggu DB ready (~15 detik), lalu setup schema + seed
+sleep 15
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m scripts.seed_demo_data
+
+# Verifikasi
+docker compose ps
+curl http://localhost:8000/health
+```
+
+### Update Code Tanpa Reset Database
+
+Gunakan ini untuk deploy perubahan kode biasa (tanpa perubahan schema):
+
+```bash
+ssh sa-portal@your-vm-ip
+cd ~/sa-portal
+
+git pull origin main
+docker compose down
+docker compose up -d --build
+
+# Monitor startup
+docker compose logs -f --tail=20
+```
+
+### Housekeeping Berkala (Hemat Disk)
+
+```bash
+# Cek penggunaan disk Docker
+docker system df
+
+# Hapus image lama yang tidak dipakai (aman, hanya unused)
+docker image prune -af
+
+# Hapus build cache
+docker builder prune -af
+
+# Truncate log container yang membengkak
+sudo truncate -s 0 /var/lib/docker/containers/*/*-json.log
+
+# Cek disk space VM secara keseluruhan
+df -h
+```
+
+### Reset Database Saja (Tanpa Rebuild Image)
+
+```bash
+cd ~/sa-portal
+
+# Stop backend saja
+docker compose stop backend
+
+# Hapus dan recreate database
+docker compose rm -sf database
+docker volume rm sa-portal-pgdata
+docker compose up -d database
+
+# Tunggu DB ready
+sleep 10
+
+# Start backend + jalankan migration dan seed
+docker compose up -d backend
+sleep 5
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m scripts.seed_demo_data
+
+# Start frontend
+docker compose up -d frontend
+```
+
+### Backup Database
+
+```bash
+# Export database ke file SQL
+docker compose exec database pg_dump -U sa_portal_user -d sa_portal > backup_$(date +%Y%m%d).sql
+
+# Restore dari backup
+cat backup_20260827.sql | docker compose exec -T database psql -U sa_portal_user -d sa_portal
+```
+
+### Monitor Resource VM
+
+```bash
+# CPU dan memory usage
+htop
+
+# Disk usage per folder
+du -sh ~/sa-portal/*
+
+# Docker resource usage per container
+docker stats --no-stream
+
+# Cek log size per container
+sudo du -sh /var/lib/docker/containers/*/
+```
+
+### Catatan Penting
+
+1. **File `.env` ada di root repo** (`~/sa-portal/.env`), bukan di subfolder
+2. **docker-compose.yml ada di root repo** — semua command Docker dijalankan dari `~/sa-portal/`
+3. **Seed data bersifat idempotent** — aman dijalankan berkali-kali (skip jika data sudah ada)
+4. **Jika ada perubahan schema** (model baru/kolom baru), perlu `alembic upgrade head` setelah pull
+5. **Volume `sa-portal-pgdata`** menyimpan data database — jangan hapus kecuali mau reset total
