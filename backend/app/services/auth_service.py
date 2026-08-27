@@ -133,11 +133,11 @@ class AuthService:
         Raises: DomainNotAllowedError jika domain tidak diizinkan.
         """
         # Jika whitelist kosong, izinkan semua (untuk development)
-        if not settings.ALLOWED_DOMAINS:
+        if not settings.allowed_domains_list:
             return True
 
         domain = email.split("@")[1].lower()
-        allowed = [d.lower() for d in settings.ALLOWED_DOMAINS]
+        allowed = [d.lower() for d in settings.allowed_domains_list]
 
         if domain not in allowed:
             raise DomainNotAllowedError(domain)

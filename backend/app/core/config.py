@@ -1,10 +1,14 @@
 """
 Konfigurasi aplikasi menggunakan Pydantic Settings.
 Semua konfigurasi sensitif dibaca dari environment variables.
+
+Format .env untuk list fields:
+- ALLOWED_DOMAINS=domain1.com,domain2.com  (comma-separated)
+- CORS_ORIGINS=http://localhost:3000,http://example.com  (comma-separated)
 """
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
-from typing import List
 
 
 class Settings(BaseSettings):
@@ -22,8 +26,8 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@db:5432/portal_sa"
 
-    # CORS - allow all origins untuk development
-    CORS_ORIGINS: List[str] = ["*"]
+    # CORS - comma-separated string, di-parse jadi list
+    CORS_ORIGINS: str = "*"
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 100
@@ -33,7 +37,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_HOURS: int = 24
     JWT_REFRESH_EXPIRE_HOURS: int = 168  # 7 hari untuk refresh token
-    ALLOWED_DOMAINS: List[str] = []
+    ALLOWED_DOMAINS: str = ""  # Comma-separated: "domain1.com,domain2.com"
     ROLE_MAPPING: str = "{}"  # JSON string: {"email@domain.com": "Admin", "*@domain.com": "SA"}
 
     # Google OAuth
@@ -61,6 +65,20 @@ class Settings(BaseSettings):
 
     # Gmail
     GMAIL_CREDENTIALS: str = ""
+
+    @property
+    def allowed_domains_list(self) -> list[str]:
+        """Parse ALLOWED_DOMAINS comma-separated string menjadi list."""
+        if not self.ALLOWED_DOMAINS:
+            return []
+        return [d.strip() for d in self.ALLOWED_DOMAINS.split(",") if d.strip()]
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse CORS_ORIGINS comma-separated string menjadi list."""
+        if not self.CORS_ORIGINS or self.CORS_ORIGINS.strip() == "*":
+            return ["*"]
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
     class Config:
         env_file = ".env"
