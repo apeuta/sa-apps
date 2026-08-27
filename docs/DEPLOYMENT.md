@@ -17,6 +17,31 @@ Dokumen ini berisi panduan lengkap untuk men-deploy Portal SA dari GitHub ke Ubu
 
 ---
 
+## Demo Mode (Tanpa Domain & Google Credentials)
+
+Portal SA mendukung **Demo Mode** yang memungkinkan Anda menjalankan dan mencoba seluruh UI tanpa perlu:
+- Domain
+- Google OAuth credentials
+- Google Drive / Calendar / Gmail credentials
+- LLM API key (Gemini/OpenAI)
+
+### Cara Kerja Demo Mode:
+
+1. Set `DEMO_MODE=true` di file `.env`
+2. Halaman login akan menampilkan **4 tombol demo login** (Sales, SA, Lead SA, Admin)
+3. Klik tombol → langsung masuk tanpa autentikasi Google
+4. Semua fitur UI bisa diakses dan di-demo
+5. Fitur yang membutuhkan external API (scoring, folder provisioning) akan graceful-fallback
+
+### Kapan Beralih ke Production Mode:
+
+Setelah Anda siap dengan credentials:
+1. Login sebagai **Admin** → buka menu **Settings** (⚙️) → isi credentials
+2. Atau edit `.env` langsung di VM: set `DEMO_MODE=false` + isi Google credentials
+3. Restart: `docker compose restart backend`
+
+---
+
 ## Step 1: Login dan Buat User Deployment
 
 ```bash
@@ -116,28 +141,44 @@ POSTGRES_PASSWORD=password_kuat_minimal_16_karakter
 
 # === Backend ===
 SECRET_KEY=random_string_32_karakter_untuk_jwt
-ENVIRONMENT=production
+ENVIRONMENT=development
 
-# === Google OAuth 2.0 ===
-# Dapatkan dari: https://console.cloud.google.com/apis/credentials
-GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=xxx
+# === Demo Mode (AKTIFKAN INI UNTUK DEMO TANPA GOOGLE CREDENTIALS) ===
+DEMO_MODE=true
+
+# === Frontend ===
+NEXT_PUBLIC_API_URL=http://YOUR-VM-IP:8000/api/v1
+FRONTEND_URL=http://YOUR-VM-IP:3000
+
+# === CORS ===
+CORS_ORIGINS=*
+```
+
+> **Catatan:** Dengan `DEMO_MODE=true`, Anda bisa langsung login tanpa Google OAuth.  
+> Google credentials, LLM API key, dll. bisa dikonfigurasi NANTI melalui Admin Settings di UI.
+
+### (Opsional) Credentials untuk Fitur Penuh:
+
+Kredensial berikut TIDAK WAJIB untuk demo. Bisa diisi nanti via halaman Admin Settings (`/admin/settings`) setelah login sebagai Admin:
+
+```env
+# Google OAuth (opsional — dibutuhkan untuk login via Google)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=http://YOUR-DOMAIN-OR-IP/api/v1/auth/callback
 ALLOWED_DOMAINS=yourdomain.com
 
-# === LLM (Gemini) ===
-# Dapatkan dari: https://aistudio.google.com/apikey
-GEMINI_API_KEY=your-gemini-api-key
+# LLM (opsional — dibutuhkan untuk AI scoring & note polishing)
+GEMINI_API_KEY=
 
-# === Frontend ===
-NEXT_PUBLIC_API_URL=http://YOUR-DOMAIN-OR-IP/api/v1
-FRONTEND_URL=http://YOUR-DOMAIN-OR-IP
+# Google Drive (opsional — dibutuhkan untuk auto folder provisioning)
+GDRIVE_SERVICE_ACCOUNT_KEY=
 
-# === CORS ===
-CORS_ORIGINS=["http://YOUR-DOMAIN-OR-IP"]
+# Gmail (opsional — dibutuhkan untuk email notification)
+GMAIL_CREDENTIALS=
 ```
 
-> **Catatan:** Ganti `YOUR-DOMAIN-OR-IP` dengan domain atau IP publik VM Anda.
+> **Tips:** Login sebagai **Admin** → buka menu **Settings** (⚙️) di sidebar → isi credentials kapanpun siap.
 
 ---
 
