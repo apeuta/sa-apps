@@ -167,31 +167,28 @@ export default function ProjectDetailPage() {
             )}
           </div>
 
-          {/* Section: Quick Actions — Link ke Dokumen dan Activity Log */}
-          <div className="flex flex-wrap gap-3">
+          {/* Section: Quick Actions — icon + text style sederhana */}
+          <div className="flex gap-4">
             <a
               href={`/projects/${projectId}/documents`}
-              className="flex-1 min-w-[180px] p-4 bg-white border border-neutral-200 rounded-lg hover:border-primary-300 hover:bg-primary-50/50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700 
+                         border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors min-h-[44px]"
             >
-              <p className="text-sm font-medium text-neutral-800">Dokumen</p>
-              <p className="text-xs text-neutral-500 mt-0.5">Kelola PropTek, BOQ, HLD</p>
+              <svg className="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Dokumen
             </a>
             <a
               href="/activity-logs"
-              className="flex-1 min-w-[180px] p-4 bg-white border border-neutral-200 rounded-lg hover:border-primary-300 hover:bg-primary-50/50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700 
+                         border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors min-h-[44px]"
             >
-              <p className="text-sm font-medium text-neutral-800">Activity Log</p>
-              <p className="text-xs text-neutral-500 mt-0.5">Catat aktivitas pada proyek ini</p>
+              <svg className="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Activity Log
             </a>
-            {!project.dq_number && (
-              <a
-                href={`/projects/${projectId}/documents`}
-                className="flex-1 min-w-[180px] p-4 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors"
-              >
-                <p className="text-sm font-medium text-amber-800">Input DQ Number</p>
-                <p className="text-xs text-amber-600 mt-0.5">Belum diinput — diperlukan untuk rilis dokumen</p>
-              </a>
-            )}
           </div>
 
           {/* Section: Detail BANT (data deskriptif dari isian Sales) */}
@@ -294,6 +291,8 @@ function InfoRow({ label, value, mono = false }: { label: string; value: string;
 /** Section: Activity Log ringkasan per proyek + tombol Summarize */
 function ProjectActivitySection({ projectId }: { projectId: string }) {
   const [showAll, setShowAll] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [isSummarizing, setIsSummarizing] = useState(false);
 
   const { data, isLoading } = useSWR<{
     items: {
@@ -308,6 +307,38 @@ function ProjectActivitySection({ projectId }: { projectId: string }) {
 
   // Hitung total jam
   const totalHours = data?.items.reduce((sum, log) => sum + log.duration_hours, 0) || 0;
+
+  // Generate summary dari activity logs (client-side untuk MVP)
+  const handleSummarize = () => {
+    if (!data || data.items.length === 0) return;
+    setIsSummarizing(true);
+
+    // Generate ringkasan dari data yang ada (tanpa LLM untuk MVP)
+    setTimeout(() => {
+      const categories: Record<string, number> = {};
+      let totalH = 0;
+      data.items.forEach((log) => {
+        categories[log.subtask_category] = (categories[log.subtask_category] || 0) + log.duration_hours;
+        totalH += log.duration_hours;
+      });
+
+      const catSummary = Object.entries(categories)
+        .sort((a, b) => b[1] - a[1])
+        .map(([cat, hours]) => `${cat}: ${hours} jam`)
+        .join(", ");
+
+      const latestDate = data.items.length > 0
+        ? new Date(data.items[0].created_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
+        : "";
+
+      setSummary(
+        `Total ${data.total} aktivitas dengan ${totalH} jam kerja. ` +
+        `Breakdown: ${catSummary}. ` +
+        `Aktivitas terakhir: ${latestDate}.`
+      );
+      setIsSummarizing(false);
+    }, 500);
+  };
 
   if (isLoading) {
     return (
@@ -332,16 +363,37 @@ function ProjectActivitySection({ projectId }: { projectId: string }) {
             </p>
           )}
         </div>
-        {data && data.total > 5 && (
-          <button
-            onClick={() => setShowAll(!showAll)}
-            className="px-3 py-1.5 text-xs font-medium text-primary-600 border border-primary-200
-                       rounded-lg hover:bg-primary-50 transition-colors min-h-[36px]"
-          >
-            {showAll ? "Ringkas" : "Lihat Semua"}
-          </button>
-        )}
+        <div className="flex gap-2">
+          {data && data.total > 0 && (
+            <button
+              onClick={handleSummarize}
+              disabled={isSummarizing}
+              className="px-3 py-1.5 text-xs font-medium text-primary-600 border border-primary-200
+                         rounded-lg hover:bg-primary-50 transition-colors min-h-[36px]
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSummarizing ? "Generating..." : "Summarize"}
+            </button>
+          )}
+          {data && data.total > 5 && (
+            <button
+              onClick={() => setShowAll(!showAll)}
+              className="px-3 py-1.5 text-xs font-medium text-neutral-600 border border-neutral-200
+                         rounded-lg hover:bg-neutral-50 transition-colors min-h-[36px]"
+            >
+              {showAll ? "Ringkas" : "Lihat Semua"}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Summary result */}
+      {summary && (
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="text-xs font-medium text-blue-700 mb-1">Ringkasan Proyek</p>
+          <p className="text-sm text-blue-800">{summary}</p>
+        </div>
+      )}
 
       {(!data || data.items.length === 0) ? (
         <p className="text-sm text-neutral-500 text-center py-4">

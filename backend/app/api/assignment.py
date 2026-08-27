@@ -228,85 +228,84 @@ async def get_sa_utilization(
 
     from datetime import date as date_type, datetime as dt_type
 
-    # Default tahun berjalan
-    target_year = year or date_type.today().year
+    try:
+        # Default tahun berjalan
+        target_year = year or date_type.today().year
 
-    # Query semua SA (atau filter per sa_id)
-    sa_query = select(User).where(User.role == "SA").order_by(User.name)
-    if sa_id:
-        try:
-            sa_uuid = uuid.UUID(sa_id)
-            sa_query = sa_query.where(User.id == sa_uuid)
-        except ValueError:
-            pass  # Abaikan filter jika format uuid tidak valid
+        # Query semua SA (atau filter per sa_id)
+        sa_query = select(User).where(User.role == "SA").order_by(User.name)
+        if sa_id:
+            try:
+                sa_uuid = uuid.UUID(sa_id)
+                sa_query = sa_query.where(User.id == sa_uuid)
+            except ValueError:
+                pass
 
-    sa_result = await db.execute(sa_query)
-    sa_users = sa_result.scalars().all()
+        sa_result = await db.execute(sa_query)
+        sa_users = sa_result.scalars().all()
 
-    # Fetch activity logs lalu group di Python (lebih robust daripada SQL GROUP BY extract)
-    year_start = dt_type(target_year, 1, 1, tzinfo=timezone.utc)
-    year_end = dt_type(target_year + 1, 1, 1, tzinfo=timezone.utc)
+        # Fetch activity logs lalu group di Python
+        year_start = dt_type(target_year, 1, 1, tzinfo=timezone.utc)
+        year_end = dt_type(target_year + 1, 1, 1, tzinfo=timezone.utc)
 
-    log_query = (
-        select(ActivityLog)
-        .where(ActivityLog.created_at >= year_start)
-        .where(ActivityLog.created_at < year_end)
-    )
-    if sa_id:
-        try:
-            sa_uuid = uuid.UUID(sa_id)
-            log_query = log_query.where(ActivityLog.sa_id == sa_uuid)
-        except ValueError:
-            pass
+        log_query = (
+            select(ActivityLog)
+            .where(ActivityLog.created_at >= year_start)
+            .where(ActivityLog.created_at < year_end)
+        )
+        if sa_id:
+            try:
+                sa_uuid = uuid.UUID(sa_id)
+                log_query = log_query.where(ActivityLog.sa_id == sa_uuid)
+            except ValueError:
+                pass
 
-    log_result = await db.execute(log_query)
-    logs = log_result.scalars().all()
+        log_result = await db.execute(log_query)
+        logs = log_result.scalars().all()
 
-    # Group by SA + bulan di Python
-    sa_monthly: dict[uuid.UUID, dict[int, float]] = {}
-    for log in logs:
-        sid = log.sa_id
-        month = log.created_at.month
-        hours = float(log.duration_hours)
-        if sid not in sa_monthly:
-            sa_monthly[sid] = {}
-        sa_monthly[sid][month] = sa_monthly[sid].get(month, 0.0) + hours
+        # Group by SA + bulan di Python
+        sa_monthly: dict[uuid.UUID, dict[int, float]] = {}
+        for log in logs:
+            sid = log.sa_id
+            month = log.created_at.month
+            hours = float(log.duration_hours)
+            if sid not in sa_monthly:
+                sa_monthly[sid] = {}
+            sa_monthly[sid][month] = sa_monthly[sid].get(month, 0.0) + hours
 
-    # Format response per SA
-    monthly_data = []
-    summary_months: dict[int, float] = {m: 0.0 for m in range(1, 13)}
+        # Format response per SA
+        monthly_data = []
+        summary_months: dict[int, float] = {m: 0.0 for m in range(1, 13)}
 
-    for sa in sa_users:
-        months_data = sa_monthly.get(sa.id, {})
-        sa_months = {str(m): months_data.get(m, 0.0) for m in range(1, 13)}
-        sa_total = sum(months_data.values())
+        for sa in sa_users:
+            months_data = sa_monthly.get(sa.id, {})
+            sa_months = {str(m): round(months_data.get(m, 0.0), 2) for m in range(1, 13)}
+            sa_total = sum(months_data.values())
 
-        monthly_data.append({
-            "sa_id": str(sa.id),
-            "sa_name": sa.name,
-            "months": sa_months,
-            "total_hours": round(sa_total, 2),
-        })
+            monthly_data.append({
+                "sa_id": str(sa.id),
+                "sa_name": sa.name,
+                "months": sa_months,
+                "total_hours": round(sa_total, 2),
+            })
 
-        # Akumulasi summary
-        for m in range(1, 13):
-            summary_months[m] += months_data.get(m, 0.0)
+            for m in range(1, 13):
+                summary_months[m] += months_data.get(m, 0.0)
 
-    # Summary all SA
-    summary = {
-        "months": {str(m): round(v, 2) for m, v in summary_months.items()},
-        "total_hours": round(sum(summary_months.values()), 2),
-        "sa_count": len(sa_users),
-    }
+        summary = {
+            "months": {str(m): round(v, 2) for m, v in summary_months.items()},
+            "total_hours": round(sum(summary_months.values()), 2),
+            "sa_count": len(sa_users),
+        }
 
-    return success_response(
-        data={
-            "year": target_year,
-            "monthly_data": monthly_data,
-            "summary": summary,
-        },
-        message=f"Data utilisasi SA untuk tahun {target_year}.",
-    )
+        return success_response(
+            data={"year": target_year, "monthly_data": monthly_data, "summary": summary},
+            message=f"Data utilisasi SA untuk tahun {target_year}.",
+        )
+
+    except Exception as e:
+        logger.error(f"Error di /sa/utilization: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
 @router.get(
