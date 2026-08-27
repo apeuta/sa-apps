@@ -1,13 +1,21 @@
 """
 API endpoints untuk autentikasi Google OAuth 2.0.
-Menangani login, callback, refresh token, logout, dan get current user.
+Menangani login, callback, refresh token, logout, get current user, dan demo login.
 """
+
+import uuid
+from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
+from app.models.user import User
 from app.schemas.auth import (
     LoginResponse,
     OAuthError,
@@ -24,6 +32,88 @@ from app.services.auth_service import (
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+# === Demo Mode ===
+# Konfigurasi demo users — setiap role punya email dan nama tetap
+DEMO_USERS = {
+    "Sales": {
+        "email": "demo-sales@portal-sa.local",
+        "name": "Demo Sales",
+        "google_id": "demo-google-id-sales",
+    },
+    "SA": {
+        "email": "demo-sa@portal-sa.local",
+        "name": "Demo SA",
+        "google_id": "demo-google-id-sa",
+    },
+    "Lead_SA": {
+        "email": "demo-lead@portal-sa.local",
+        "name": "Demo Lead SA",
+        "google_id": "demo-google-id-lead-sa",
+    },
+    "Admin": {
+        "email": "demo-admin@portal-sa.local",
+        "name": "Demo Admin",
+        "google_id": "demo-google-id-admin",
+    },
+}
+
+
+class DemoLoginRequest(BaseModel):
+    """Request body untuk demo login."""
+    role: Literal["Sales", "SA", "Lead_SA", "Admin"]
+
+
+@router.post("/demo-login", summary="Demo Login (bypass OAuth)")
+async def demo_login(
+    body: DemoLoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Login tanpa Google OAuth untuk development/demo.
+    Hanya aktif jika DEMO_MODE=true di environment.
+    Membuat demo user di database jika belum ada (INSERT IF NOT EXISTS).
+    Mengembalikan JWT token yang identik formatnya dengan OAuth flow.
+    """
+    # Cek apakah demo mode aktif
+    if not settings.DEMO_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="Demo mode tidak aktif. Gunakan Google OAuth untuk login.",
+        )
+
+    # Ambil konfigurasi demo user berdasarkan role
+    demo_config = DEMO_USERS[body.role]
+
+    # Cari user di database berdasarkan email (INSERT IF NOT EXISTS)
+    stmt = select(User).where(User.email == demo_config["email"])
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        # Buat demo user baru di database
+        user = User(
+            id=uuid.uuid4(),
+            email=demo_config["email"],
+            name=demo_config["name"],
+            role=body.role,
+            google_id=demo_config["google_id"],
+            avatar_url=None,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    # Generate JWT token pair — menggunakan method yang sama dengan OAuth flow
+    tokens = auth_service._create_token_pair(user)
+
+    return LoginResponse(
+        user=UserResponse.model_validate(user),
+        tokens=tokens,
+    )
 
 
 def _get_token_from_header(request: Request) -> str:

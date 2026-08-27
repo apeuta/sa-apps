@@ -1,6 +1,7 @@
 "use client";
 
 import { useSidebarStore } from "@/store/sidebar";
+import { useAuthStore } from "@/store/auth";
 
 /**
  * Sidebar Navigation — collapsible (Requirement 19.7)
@@ -12,10 +13,11 @@ import { useSidebarStore } from "@/store/sidebar";
  * Fitur:
  * - Toggle collapse/expand
  * - Navigation links sesuai role user
+ * - Menu "Settings" hanya tampil untuk Admin
  * - Touch target min 44x44px (Requirement 12.3)
  */
 
-// Item navigasi — akan diperluas sesuai role di task selanjutnya
+// Item navigasi utama
 const navItems = [
   { label: "Dashboard", href: "/", icon: "📊" },
   { label: "Proyek", href: "/projects", icon: "📁" },
@@ -24,8 +26,14 @@ const navItems = [
   { label: "Notifikasi", href: "/notifications", icon: "🔔" },
 ];
 
+// Item navigasi khusus Admin
+const adminNavItems = [
+  { label: "Settings", href: "/admin/settings", icon: "⚙️" },
+];
+
 export function Sidebar() {
   const { isOpen, toggle } = useSidebarStore();
+  const { user } = useAuthStore();
 
   return (
     <aside
@@ -93,6 +101,41 @@ export function Sidebar() {
               </a>
             </li>
           ))}
+
+          {/* Admin-only menu items */}
+          {user?.role === "Admin" && (
+            <>
+              <li className="pt-3 mt-3 border-t border-neutral-100">
+                {isOpen && (
+                  <span className="px-3 text-xs font-semibold text-neutral-400 uppercase">
+                    Admin
+                  </span>
+                )}
+              </li>
+              {adminNavItems.map((item) => (
+                <li key={item.href}>
+                  <a
+                    href={item.href}
+                    className={`
+                      flex items-center gap-3 rounded-lg px-3 
+                      min-h-[44px] min-w-[44px]
+                      text-neutral-700 hover:bg-neutral-100 hover:text-primary-600
+                      transition-colors duration-100
+                      ${isOpen ? "" : "justify-center"}
+                    `}
+                    title={item.label}
+                  >
+                    <span className="text-xl shrink-0">{item.icon}</span>
+                    {isOpen && (
+                      <span className="text-sm font-medium truncate">
+                        {item.label}
+                      </span>
+                    )}
+                  </a>
+                </li>
+              ))}
+            </>
+          )}
         </ul>
       </nav>
 

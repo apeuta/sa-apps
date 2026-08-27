@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 100
 
+    # Demo Mode — bypass OAuth, login tanpa Google credentials (set False di production)
+    DEMO_MODE: bool = True
+
     # Auth
     JWT_SECRET_KEY: str = "change-this-secret-key-in-production"
     JWT_ALGORITHM: str = "HS256"

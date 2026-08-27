@@ -29,3 +29,20 @@ Thumbs.db
 *.egg-info/
 dist/
 build/
+
+# === Folder SA Docs yang TIDAK masuk Git ===
+# Hanya folder portal-sa-mvp (backend/, frontend/, .kiro/specs/) yang di-track
+Astra International/
+Batch Data Analytics/
+Bedrock/
+Reverse Machine/
+S3 OCBC/
+Session Log/
+AWS_Redshift_Documentation_References.md
+Amazon_Redshift_PoC_HLD_v1.0.md
+Redshift_Architecture_Diagram.drawio
+Redshift_Beginner_Learning_Module.md
+Redshift_Beginner_Presentation_Guide.md
+Redshift_Beginner_Slide_Deck.md
+Redshift_Presentation_Outline.md
+.kiro/steering/
