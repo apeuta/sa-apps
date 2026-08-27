@@ -149,35 +149,49 @@ export default function ProjectDetailPage() {
             )}
           </div>
 
-          {/* Section: Detail BANT */}
-          {project.bant_score != null && (
+          {/* Section: Detail BANT (informasi deskriptif dari Sales) */}
+          {project.bant_detail && (
             <div className="bg-white border border-neutral-200 rounded-lg p-5">
-              <h2 className="text-sm font-semibold text-neutral-700 mb-3">BANT Scoring</h2>
-
-              {/* Total Score */}
-              <div className="flex items-center gap-4 mb-4">
-                <div className={`text-3xl font-bold ${project.bant_score >= 60 ? "text-green-600" : "text-orange-600"}`}>
-                  {project.bant_score}
-                  <span className="text-sm font-normal text-neutral-400">/100</span>
+              <h2 className="text-sm font-semibold text-neutral-700 mb-3">Detail BANT</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div className="p-3 bg-neutral-50 rounded-lg">
+                  <p className="text-xs font-medium text-neutral-500 mb-1">Budget (MRR)</p>
+                  <p className="text-neutral-800">
+                    {project.bant_detail.budget > 0
+                      ? `Informasi budget tersedia (skor: ${project.bant_detail.budget}/25)`
+                      : "Belum ada informasi budget"}
+                  </p>
                 </div>
-                <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                  project.bant_score >= 60 ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"
-                }`}>
-                  {project.bant_score >= 60 ? "Lolos Threshold" : "Perlu Klarifikasi"}
-                </span>
+                <div className="p-3 bg-neutral-50 rounded-lg">
+                  <p className="text-xs font-medium text-neutral-500 mb-1">Authority (PIC)</p>
+                  <p className="text-neutral-800">
+                    {project.bant_detail.authority > 0
+                      ? `Informasi PIC tersedia (skor: ${project.bant_detail.authority}/25)`
+                      : "Belum ada informasi PIC"}
+                  </p>
+                </div>
+                <div className="p-3 bg-neutral-50 rounded-lg">
+                  <p className="text-xs font-medium text-neutral-500 mb-1">Need (Kebutuhan Teknis)</p>
+                  <p className="text-neutral-800">
+                    {project.bant_detail.need > 0
+                      ? `Informasi kebutuhan tersedia (skor: ${project.bant_detail.need}/25)`
+                      : "Belum ada informasi kebutuhan"}
+                  </p>
+                </div>
+                <div className="p-3 bg-neutral-50 rounded-lg">
+                  <p className="text-xs font-medium text-neutral-500 mb-1">Timeline (Target Submit)</p>
+                  <p className="text-neutral-800">
+                    {project.bant_detail.timeline > 0
+                      ? `Timeline tersedia (skor: ${project.bant_detail.timeline}/25)`
+                      : "Belum ada informasi timeline"}
+                  </p>
+                </div>
               </div>
-
-              {/* Sub-skor breakdown */}
-              {project.bant_detail && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <BANTCriteriaCard label="Budget" score={project.bant_detail.budget} />
-                  <BANTCriteriaCard label="Authority" score={project.bant_detail.authority} />
-                  <BANTCriteriaCard label="Need" score={project.bant_detail.need} />
-                  <BANTCriteriaCard label="Timeline" score={project.bant_detail.timeline} />
-                </div>
-              )}
             </div>
           )}
+
+          {/* Section: Activity Log Proyek */}
+          <ProjectActivitySection projectId={projectId} />
 
           {/* Section: Konfigurasi Handover */}
           {shouldShowConfigForm && (
@@ -222,22 +236,68 @@ function InfoRow({ label, value, mono = false }: { label: string; value: string;
   );
 }
 
-function BANTCriteriaCard({ label, score }: { label: string; score: number }) {
-  const percentage = (score / 25) * 100;
-  return (
-    <div className="bg-neutral-50 rounded-lg p-3 border border-neutral-100">
-      <p className="text-xs text-neutral-500 mb-1">{label}</p>
-      <p className="text-lg font-semibold text-neutral-800">
-        {score}<span className="text-xs font-normal text-neutral-400">/25</span>
-      </p>
-      <div className="mt-2 h-1.5 bg-neutral-200 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full ${
-            percentage >= 80 ? "bg-green-400" : percentage >= 50 ? "bg-yellow-400" : "bg-red-400"
-          }`}
-          style={{ width: `${percentage}%` }}
-        />
+/** Section: Activity Log ringkasan per proyek */
+function ProjectActivitySection({ projectId }: { projectId: string }) {
+  const { data, isLoading } = useSWR<{
+    items: {
+      id: string;
+      subtask_category: string;
+      duration_hours: number;
+      raw_notes: string;
+      created_at: string;
+    }[];
+    total: number;
+  }>(`/projects/${projectId}/story?page=1&page_size=10`, fetcher);
+
+  if (isLoading) {
+    return (
+      <div className="bg-white border border-neutral-200 rounded-lg p-5">
+        <div className="h-5 bg-neutral-200 rounded w-1/4 mb-4 animate-pulse" />
+        <div className="space-y-3 animate-pulse">
+          <div className="h-12 bg-neutral-100 rounded" />
+          <div className="h-12 bg-neutral-100 rounded" />
+        </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="bg-white border border-neutral-200 rounded-lg p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-neutral-700">Activity Log</h2>
+        {data && data.total > 0 && (
+          <span className="text-xs text-neutral-400">{data.total} aktivitas</span>
+        )}
+      </div>
+
+      {(!data || data.items.length === 0) ? (
+        <p className="text-sm text-neutral-500 text-center py-4">
+          Belum ada activity log untuk proyek ini.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {data.items.map((log) => (
+            <div key={log.id} className="flex gap-3 p-3 bg-neutral-50 rounded-lg">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-medium">
+                    {log.subtask_category}
+                  </span>
+                  <span className="text-xs text-neutral-400">
+                    {log.duration_hours} jam
+                  </span>
+                </div>
+                <p className="text-sm text-neutral-700 line-clamp-2">{log.raw_notes}</p>
+                <p className="text-xs text-neutral-400 mt-1">
+                  {new Date(log.created_at).toLocaleDateString("id-ID", {
+                    day: "numeric", month: "short", year: "numeric"
+                  })}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
