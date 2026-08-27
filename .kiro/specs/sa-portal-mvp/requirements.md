@@ -405,3 +405,20 @@ Dokumen ini mendefinisikan scope **MVP (Minimum Viable Product)** yang difokuska
 2. THE Portal_SA SHALL TIDAK menampilkan menu "Dokumen" sebagai item terpisah di sidebar — akses dokumen tersedia langsung dari halaman detail masing-masing proyek
 3. THE Portal_SA SHALL TIDAK menggunakan emoji di seluruh elemen UI (teks, label, menu, badge)
 
+
+---
+
+### Requirement 22: Halaman Detail Proyek — Fitur Lengkap
+
+**User Story:** Sebagai pengguna Portal SA, saya ingin halaman detail proyek menampilkan semua informasi relevan dan menyediakan aksi yang bisa langsung dilakukan, agar saya tidak perlu berpindah halaman untuk tugas sehari-hari.
+
+#### Acceptance Criteria
+
+1. WHEN Lead_SA atau Admin mengakses halaman detail proyek yang berstatus "Pending Assignment", THE Portal_SA SHALL menampilkan tombol "Assign SA" yang membuka modal assignment dengan daftar SA tersedia beserta workload
+2. THE Portal_SA SHALL menampilkan tombol "Edit" pada halaman detail proyek yang mengarah ke halaman edit proyek (nama, customer, DQ Number, target submit, detail BANT)
+3. THE Portal_SA SHALL menampilkan link navigasi sederhana (icon + text) ke halaman Dokumen dan Activity Log yang terkait proyek tersebut
+4. THE Portal_SA SHALL menampilkan section "Project Story" yang berisi ringkasan activity log terbaru (5 entry) dengan tombol "Lihat Semua" untuk expand dan tombol "Summarize" untuk generate ringkasan
+5. WHEN pengguna klik tombol "Summarize", THE Portal_SA SHALL menghasilkan ringkasan aktivitas proyek berupa: total jumlah aktivitas, total jam kerja, breakdown jam per kategori, dan tanggal aktivitas terakhir
+6. THE Portal_SA SHALL menampilkan semua teks yang menyatakan data belum tersedia (seperti "Belum diinput", "Belum di-assign") dengan style bold dan warna merah untuk memperjelas bahwa data perlu dilengkapi
+7. THE Portal_SA SHALL menampilkan detail BANT secara deskriptif (nominal Budget MRR, nama/jabatan/email PIC Customer, deskripsi kebutuhan teknis, target timeline) tanpa menampilkan skor numerik kepada pengguna
+8. THE Portal_SA SHALL menyediakan endpoint `PATCH /projects/{id}` untuk update data proyek (nama, customer, DQ Number, target submit, bant_detail) yang bisa diakses oleh pengguna terauntentikasi

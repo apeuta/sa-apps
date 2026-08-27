@@ -295,14 +295,15 @@ Lihat `.env.example` untuk daftar lengkap. Yang **wajib** dikonfigurasi:
 Untuk mengisi data contoh (users, projects, documents, activity logs):
 
 ```bash
+docker compose exec backend alembic upgrade head
 docker compose exec backend python -m scripts.seed_demo_data
 ```
 
 Script ini idempotent — aman dijalankan berkali-kali. Data demo mencakup:
-- 4 users (Sales, SA, Lead_SA, Admin)
-- 5 proyek dengan berbagai status (termasuk DQ Number untuk proyek Ready dan Closed-Win)
-- 4 dokumen (PropTek, BOQ)
-- 5 activity logs
+- 7 users (2 Sales, 3 SA, 1 Lead_SA, 1 Admin)
+- 8 proyek dengan berbagai status dan detail BANT lengkap (MRR, PIC, kebutuhan teknis)
+- 8 dokumen (PropTek, BOQ, HLD)
+- 21 activity logs tersebar Juni-Agustus 2026 (untuk demo utilisasi)
 
 ---
 
@@ -323,9 +324,15 @@ MVP Ready — Semua fitur inti sudah terimplementasi dan siap deploy.
 
 ## Changelog Terbaru
 
-- **Utilisasi SA per Bulan** — Dashboard Lead SA sekarang menampilkan tabel jam kerja per SA per bulan dengan filter tahun dan per individu
-- **DQ Number di Seed Data** — Proyek demo "Ready" dan "Closed-Win" sudah punya DQ Number sejak awal
-- **Cleanup Emoji** — Semua emoji dekoratif di UI diganti dengan SVG icons/teks untuk konsistensi tampilan
+- **Assign SA dari Detail Proyek** — Lead SA bisa assign SA langsung dari halaman detail proyek (berstatus Pending Assignment)
+- **Edit Proyek** — Tombol Edit di halaman detail proyek untuk update nama, customer, DQ, BANT detail
+- **Summarize Button** — Tombol "Summarize" di Project Story untuk generate ringkasan aktivitas proyek
+- **Detail BANT Deskriptif** — Tampilkan nominal MRR, nama/jabatan/email PIC, kebutuhan teknis, timeline (bukan skor numerik)
+- **Search & Filter Proyek** — Search bar + dropdown filter status di halaman listing proyek
+- **Utilisasi SA per Bulan** — Tabel jam kerja per SA per bulan dengan filter tahun dan per individu
+- **Effort per Proyek** — Tabel total jam + personel SA per proyek di dashboard Lead SA
+- **Admin Settings** — Kategori Aktivitas (CRUD) + User & Role Management
+- **UI Cleanup** — Semua emoji dihapus, teks "Belum..." ditampilkan bold merah, menu Dokumen dihapus dari sidebar
 
 ---
 
