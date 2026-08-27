@@ -315,6 +315,119 @@ async def get_sa_utilization(
     )
 
 
+@router.get(
+    "/projects/utilization",
+    summary="Utilisasi per proyek",
+    description=(
+        "Menampilkan total jam kerja per proyek beserta personel SA. "
+        "Berguna untuk melihat effort distribution antar proyek. Hanya untuk Lead_SA."
+    ),
+)
+async def get_project_utilization(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ambil data utilisasi per proyek:
+    - Total jam kerja yang sudah di-log per proyek
+    - Siapa saja SA yang mengerjakan (dari activity logs)
+    - Status proyek saat ini
+
+    Response:
+    [
+      {
+        "id_project": "PRJ-001",
+        "project_name": "...",
+        "customer_name": "...",
+        "status": "Assigned",
+        "total_hours": 16.5,
+        "sa_personnel": [{"sa_id": "...", "sa_name": "...", "hours": 10.0}, ...]
+      }
+    ]
+    """
+    _require_lead_sa(current_user)
+
+    # Query: total jam per proyek
+    from sqlalchemy import text as sa_text
+
+    # Subquery: jam per SA per proyek
+    sa_hours_query = (
+        select(
+            ActivityLog.id_project,
+            ActivityLog.sa_id,
+            func.sum(ActivityLog.duration_hours).label("hours"),
+        )
+        .group_by(ActivityLog.id_project, ActivityLog.sa_id)
+    )
+    sa_hours_result = await db.execute(sa_hours_query)
+    sa_hours_rows = sa_hours_result.all()
+
+    # Build lookup: {project_id: [{sa_id, hours}, ...]}
+    project_sa_map: dict[str, list[dict]] = {}
+    for row in sa_hours_rows:
+        pid = row[0]
+        if pid not in project_sa_map:
+            project_sa_map[pid] = []
+        project_sa_map[pid].append({"sa_id": row[1], "hours": float(row[2])})
+
+    # Query semua proyek yang punya activity logs
+    project_ids = list(project_sa_map.keys())
+    if not project_ids:
+        return success_response(data=[], message="Belum ada data activity log.")
+
+    projects_result = await db.execute(
+        select(Project).where(Project.id_project.in_(project_ids))
+    )
+    projects = {p.id_project: p for p in projects_result.scalars().all()}
+
+    # Query semua SA users untuk nama
+    all_sa_ids = set()
+    for entries in project_sa_map.values():
+        for entry in entries:
+            all_sa_ids.add(entry["sa_id"])
+
+    sa_users_result = await db.execute(
+        select(User).where(User.id.in_(list(all_sa_ids)))
+    )
+    sa_name_map = {u.id: u.name for u in sa_users_result.scalars().all()}
+
+    # Build response
+    result_data = []
+    for pid, sa_entries in project_sa_map.items():
+        project = projects.get(pid)
+        if not project:
+            continue
+
+        total_hours = sum(e["hours"] for e in sa_entries)
+        personnel = [
+            {
+                "sa_id": str(e["sa_id"]),
+                "sa_name": sa_name_map.get(e["sa_id"], "Unknown"),
+                "hours": round(e["hours"], 2),
+            }
+            for e in sa_entries
+        ]
+        # Sort personnel by hours descending
+        personnel.sort(key=lambda x: x["hours"], reverse=True)
+
+        result_data.append({
+            "id_project": pid,
+            "project_name": project.project_name,
+            "customer_name": project.customer_name,
+            "status": project.status,
+            "total_hours": round(total_hours, 2),
+            "sa_personnel": personnel,
+        })
+
+    # Sort by total_hours descending
+    result_data.sort(key=lambda x: x["total_hours"], reverse=True)
+
+    return success_response(
+        data=result_data,
+        message=f"Data utilisasi untuk {len(result_data)} proyek.",
+    )
+
+
 @router.post(
     "/projects/{project_id}/assign",
     summary="Assign SA ke proyek",

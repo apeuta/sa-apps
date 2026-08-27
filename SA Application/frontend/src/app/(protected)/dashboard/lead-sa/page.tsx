@@ -359,6 +359,14 @@ export default function LeadSADashboard() {
         )}
       </section>
 
+      {/* Section 5: Utilisasi per Proyek */}
+      <section>
+        <h2 className="text-lg font-semibold text-neutral-800 mb-4">
+          Effort per Proyek
+        </h2>
+        <ProjectUtilizationSection />
+      </section>
+
       {/* Modal Assignment */}
       {assigningProject && (
         <AssignmentModal
@@ -696,6 +704,98 @@ function SAUtilizationSkeleton() {
             <div className="h-2 w-16 bg-neutral-100 rounded animate-pulse" />
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// === Section: Project Utilization ===
+
+/** Data utilisasi per proyek */
+interface ProjectUtilData {
+  id_project: string;
+  project_name: string;
+  customer_name: string;
+  status: string;
+  total_hours: number;
+  sa_personnel: { sa_id: string; sa_name: string; hours: number }[];
+}
+
+/** Komponen section utilisasi per proyek */
+function ProjectUtilizationSection() {
+  const { data, isLoading } = useSWR<ProjectUtilData[]>(
+    "/projects/utilization",
+    fetcher
+  );
+
+  if (isLoading) {
+    return (
+      <div className="rounded-lg border border-neutral-200 bg-white p-5">
+        <div className="space-y-3 animate-pulse">
+          <div className="h-6 bg-neutral-200 rounded w-2/3" />
+          <div className="h-5 bg-neutral-100 rounded w-full" />
+          <div className="h-5 bg-neutral-100 rounded w-full" />
+          <div className="h-5 bg-neutral-100 rounded w-3/4" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!data || data.length === 0) {
+    return (
+      <div className="rounded-lg border border-neutral-200 bg-white p-6 text-center">
+        <p className="text-sm text-neutral-500">
+          Belum ada data activity log per proyek.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-neutral-100 bg-neutral-50">
+              <th className="text-left px-4 py-3 font-semibold text-neutral-700">Proyek</th>
+              <th className="text-left px-4 py-3 font-semibold text-neutral-700">Customer</th>
+              <th className="text-center px-4 py-3 font-semibold text-neutral-700">Status</th>
+              <th className="text-center px-4 py-3 font-semibold text-neutral-700">Total Jam</th>
+              <th className="text-left px-4 py-3 font-semibold text-neutral-700">Personel SA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((proj) => (
+              <tr key={proj.id_project} className="border-b border-neutral-50 hover:bg-neutral-50/50">
+                <td className="px-4 py-3">
+                  <p className="font-medium text-neutral-800 text-sm">{proj.project_name}</p>
+                  <p className="text-xs text-neutral-400">{proj.id_project}</p>
+                </td>
+                <td className="px-4 py-3 text-neutral-600">{proj.customer_name}</td>
+                <td className="px-4 py-3 text-center">
+                  <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                    STATUS_BADGE_COLORS[proj.status] || "bg-neutral-100 text-neutral-600"
+                  }`}>
+                    {proj.status}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-center font-semibold text-neutral-900">
+                  {proj.total_hours}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="space-y-1">
+                    {proj.sa_personnel.map((sa) => (
+                      <div key={sa.sa_id} className="flex items-center gap-2">
+                        <span className="text-xs text-neutral-700">{sa.sa_name}</span>
+                        <span className="text-xs text-neutral-400">({sa.hours} jam)</span>
+                      </div>
+                    ))}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

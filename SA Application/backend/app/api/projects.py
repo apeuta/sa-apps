@@ -295,6 +295,10 @@ async def create_project(
         ...,
         description="Estimasi nilai proyek IDR (0.01 - 999,999,999,999.00)",
     ),
+    dq_number: Optional[str] = Form(
+        default=None,
+        description="DQ Number opsional (alfanumerik + hyphen, 5-20 karakter)",
+    ),
     files: list[UploadFile] = File(
         default=[],
         description="File attachment (PDF/DOCX, max 20MB/file, max 5 files)",
@@ -354,6 +358,19 @@ async def create_project(
             "reason": "Format estimasi nilai tidak valid. Gunakan angka desimal.",
         })
 
+    # Validasi DQ Number (opsional — jika diisi, harus valid)
+    import re
+    validated_dq: Optional[str] = None
+    if dq_number and dq_number.strip():
+        dq_clean = dq_number.strip()
+        if not re.match(r'^[A-Za-z0-9\-]{5,20}$', dq_clean):
+            validation_errors.append({
+                "field": "dq_number",
+                "reason": "Format DQ Number tidak valid (alfanumerik + hyphen, 5-20 karakter).",
+            })
+        else:
+            validated_dq = dq_clean
+
     # Validasi jumlah file
     if len(files) > MAX_FILES:
         validation_errors.append({
@@ -391,6 +408,7 @@ async def create_project(
         project_name=project_name,
         customer_name=customer_name,
         target_submit=target_submit,
+        dq_number=validated_dq,
         status="New",
         sales_pic=current_user.id,
         created_at=now,

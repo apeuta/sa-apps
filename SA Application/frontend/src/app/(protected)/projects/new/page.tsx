@@ -31,6 +31,7 @@ interface FormData {
   customerName: string;
   targetSubmit: string;
   estimatedValue: string;
+  dqNumber: string;
 }
 
 interface FormErrors {
@@ -38,6 +39,7 @@ interface FormErrors {
   customerName?: string;
   targetSubmit?: string;
   estimatedValue?: string;
+  dqNumber?: string;
 }
 
 // ==================== Helpers ====================
@@ -81,6 +83,7 @@ export default function NewProjectPage() {
     customerName: "",
     targetSubmit: "",
     estimatedValue: "",
+    dqNumber: "",
   });
   const [files, setFiles] = useState<FileItem[]>([]);
   const [errors, setErrors] = useState<FormErrors>({});
@@ -156,6 +159,14 @@ export default function NewProjectPage() {
       newErrors.estimatedValue = "Estimasi nilai maksimal Rp 999.999.999.999";
     }
 
+    // DQ Number: opsional, tapi kalau diisi harus valid (alfanumerik + hyphen, 5-20 karakter)
+    if (form.dqNumber.trim()) {
+      const dqRegex = /^[A-Za-z0-9\-]{5,20}$/;
+      if (!dqRegex.test(form.dqNumber.trim())) {
+        newErrors.dqNumber = "Format DQ Number tidak valid (alfanumerik + hyphen, 5-20 karakter)";
+      }
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   }, [form]);
@@ -191,6 +202,11 @@ export default function NewProjectPage() {
         formData.append("customer_name", form.customerName.trim());
         formData.append("target_submit", form.targetSubmit);
         formData.append("estimasi_nilai", parseIDR(form.estimatedValue).toString());
+
+        // DQ Number opsional
+        if (form.dqNumber.trim()) {
+          formData.append("dq_number", form.dqNumber.trim());
+        }
 
         // Tambahkan file valid
         validFiles.forEach((item) => {
@@ -444,6 +460,41 @@ export default function NewProjectPage() {
                 {errors.estimatedValue}
               </p>
             )}
+          </div>
+
+          {/* DQ Number (Opsional) */}
+          <div>
+            <label
+              htmlFor="dqNumber"
+              className="block text-sm font-medium text-neutral-700 mb-1"
+            >
+              DQ Number <span className="text-neutral-400 text-xs font-normal">(opsional)</span>
+            </label>
+            <input
+              id="dqNumber"
+              type="text"
+              maxLength={20}
+              value={form.dqNumber}
+              onChange={(e) => updateField("dqNumber", e.target.value)}
+              disabled={isSubmitting}
+              placeholder="Contoh: DQ-2025-00123"
+              className={`
+                w-full px-3 py-2.5 border rounded-lg text-sm font-mono
+                focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+                disabled:opacity-50 disabled:bg-neutral-100
+                ${errors.dqNumber ? "border-red-300 bg-red-50" : "border-neutral-300"}
+              `}
+              aria-invalid={!!errors.dqNumber}
+              aria-describedby={errors.dqNumber ? "dqNumber-error" : undefined}
+            />
+            {errors.dqNumber && (
+              <p id="dqNumber-error" className="text-xs text-red-600 mt-1" role="alert">
+                {errors.dqNumber}
+              </p>
+            )}
+            <p className="text-xs text-neutral-400 mt-1">
+              Alfanumerik + tanda hubung, 5-20 karakter. Bisa diisi nanti.
+            </p>
           </div>
         </div>
 
