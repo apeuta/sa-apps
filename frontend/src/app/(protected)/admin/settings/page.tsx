@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import useSWR from "swr";
+import { fetcher } from "@/lib/fetcher";
 import { useAuthStore } from "@/store/auth";
 import { useToastStore } from "@/store/toast";
 
@@ -415,6 +417,274 @@ export default function AdminSettingsPage() {
           </div>
         );
       })}
+
+      {/* Section: Kategori Aktivitas */}
+      <CategoryManager />
+
+      {/* Section: User & Role Management */}
+      <UserRoleManager />
+    </div>
+  );
+}
+
+// ==========================================
+// Komponen: Category Manager
+// ==========================================
+
+const CATEGORIES_KEY = "portal-sa-categories";
+const DEFAULT_CATEGORIES = [
+  "Meeting Pre-Sales",
+  "Create PropTek",
+  "Create BOQ",
+  "Peer Review",
+  "Internal Discussion",
+  "Customer Workshop",
+];
+
+function loadCategories(): string[] {
+  if (typeof window === "undefined") return DEFAULT_CATEGORIES;
+  try {
+    const raw = localStorage.getItem(CATEGORIES_KEY);
+    return raw ? JSON.parse(raw) : DEFAULT_CATEGORIES;
+  } catch {
+    return DEFAULT_CATEGORIES;
+  }
+}
+
+function CategoryManager() {
+  const { showToast } = useToastStore();
+  const [categories, setCategories] = useState<string[]>(() => loadCategories());
+  const [newCategory, setNewCategory] = useState("");
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editValue, setEditValue] = useState("");
+
+  const handleAdd = () => {
+    const val = newCategory.trim();
+    if (!val) return;
+    if (categories.includes(val)) {
+      showToast("error", "Kategori sudah ada.");
+      return;
+    }
+    const updated = [...categories, val];
+    setCategories(updated);
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(updated));
+    setNewCategory("");
+    showToast("success", `Kategori "${val}" ditambahkan.`);
+  };
+
+  const handleDelete = (idx: number) => {
+    const updated = categories.filter((_, i) => i !== idx);
+    setCategories(updated);
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(updated));
+    showToast("success", "Kategori dihapus.");
+  };
+
+  const handleEdit = (idx: number) => {
+    setEditingIdx(idx);
+    setEditValue(categories[idx]);
+  };
+
+  const handleSaveEdit = () => {
+    if (editingIdx === null) return;
+    const val = editValue.trim();
+    if (!val) return;
+    const updated = [...categories];
+    updated[editingIdx] = val;
+    setCategories(updated);
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(updated));
+    setEditingIdx(null);
+    setEditValue("");
+    showToast("success", "Kategori diubah.");
+  };
+
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-5">
+      <h2 className="text-sm font-semibold text-neutral-900 mb-1">Kategori Aktivitas</h2>
+      <p className="text-xs text-neutral-500 mb-4">Kelola kategori yang tersedia di form Activity Log.</p>
+
+      {/* Daftar kategori */}
+      <div className="space-y-2 mb-4">
+        {categories.map((cat, idx) => (
+          <div key={idx} className="flex items-center gap-2">
+            {editingIdx === idx ? (
+              <>
+                <input
+                  type="text"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  className="flex-1 px-3 py-1.5 border border-neutral-300 rounded-md text-sm
+                    focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  onKeyDown={(e) => e.key === "Enter" && handleSaveEdit()}
+                />
+                <button onClick={handleSaveEdit} className="px-2 py-1 text-xs text-green-700 hover:bg-green-50 rounded">Simpan</button>
+                <button onClick={() => setEditingIdx(null)} className="px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-50 rounded">Batal</button>
+              </>
+            ) : (
+              <>
+                <span className="flex-1 text-sm text-neutral-800">{cat}</span>
+                <button onClick={() => handleEdit(idx)} className="px-2 py-1 text-xs text-primary-600 hover:bg-primary-50 rounded">Edit</button>
+                <button onClick={() => handleDelete(idx)} className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded">Hapus</button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Tambah kategori baru */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={newCategory}
+          onChange={(e) => setNewCategory(e.target.value)}
+          placeholder="Nama kategori baru..."
+          className="flex-1 px-3 py-2 border border-neutral-300 rounded-lg text-sm
+            focus:outline-none focus:ring-2 focus:ring-primary-500"
+          onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+        />
+        <button
+          onClick={handleAdd}
+          disabled={!newCategory.trim()}
+          className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-lg
+            hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
+        >
+          Tambah
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// Komponen: User & Role Manager
+// ==========================================
+
+interface UserItem {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+}
+
+const ROLES = ["Sales", "SA", "Lead_SA", "Admin"];
+
+function UserRoleManager() {
+  const { showToast } = useToastStore();
+  const { data: users, isLoading, mutate } = useSWR<UserItem[]>("/admin/users", fetcher);
+  const [editingUser, setEditingUser] = useState<UserItem | null>(null);
+  const [newRole, setNewRole] = useState("");
+
+  const handleChangeRole = async () => {
+    if (!editingUser || !newRole) return;
+    try {
+      await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1"}/admin/users/${editingUser.id}/role`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+          },
+          body: JSON.stringify({ role: newRole }),
+        }
+      );
+      showToast("success", `Role ${editingUser.name} diubah ke ${newRole}.`);
+      setEditingUser(null);
+      setNewRole("");
+      mutate();
+    } catch {
+      showToast("error", "Gagal mengubah role.");
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-5">
+      <h2 className="text-sm font-semibold text-neutral-900 mb-1">User & Role Management</h2>
+      <p className="text-xs text-neutral-500 mb-4">Atur role setiap user: Sales, SA, Lead SA, atau Admin.</p>
+
+      {isLoading ? (
+        <div className="space-y-2 animate-pulse">
+          <div className="h-10 bg-neutral-100 rounded" />
+          <div className="h-10 bg-neutral-100 rounded" />
+          <div className="h-10 bg-neutral-100 rounded" />
+        </div>
+      ) : !users || users.length === 0 ? (
+        <p className="text-sm text-neutral-500 text-center py-4">Belum ada user terdaftar.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-neutral-100">
+                <th className="text-left px-3 py-2 font-medium text-neutral-600">Nama</th>
+                <th className="text-left px-3 py-2 font-medium text-neutral-600">Email</th>
+                <th className="text-left px-3 py-2 font-medium text-neutral-600">Role</th>
+                <th className="text-center px-3 py-2 font-medium text-neutral-600">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id} className="border-b border-neutral-50 hover:bg-neutral-50/50">
+                  <td className="px-3 py-2.5 font-medium text-neutral-800">{u.name}</td>
+                  <td className="px-3 py-2.5 text-neutral-600">{u.email}</td>
+                  <td className="px-3 py-2.5">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      u.role === "Admin" ? "bg-purple-100 text-purple-700"
+                      : u.role === "Lead_SA" ? "bg-blue-100 text-blue-700"
+                      : u.role === "SA" ? "bg-green-100 text-green-700"
+                      : "bg-neutral-100 text-neutral-700"
+                    }`}>
+                      {u.role}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    <button
+                      onClick={() => { setEditingUser(u); setNewRole(u.role); }}
+                      className="px-2 py-1 text-xs text-primary-600 hover:bg-primary-50 rounded"
+                    >
+                      Ubah Role
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Modal ubah role */}
+      {editingUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+            <h3 className="text-base font-semibold text-neutral-800 mb-2">Ubah Role</h3>
+            <p className="text-sm text-neutral-600 mb-4">{editingUser.name} ({editingUser.email})</p>
+            <select
+              value={newRole}
+              onChange={(e) => setNewRole(e.target.value)}
+              className="w-full px-3 py-2.5 border border-neutral-300 rounded-lg text-sm mb-4
+                focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              {ROLES.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setEditingUser(null)}
+                className="flex-1 py-2.5 px-4 rounded-lg text-sm font-medium text-neutral-700
+                  border border-neutral-300 hover:bg-neutral-50 min-h-[44px]"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleChangeRole}
+                className="flex-1 py-2.5 px-4 rounded-lg text-sm font-medium text-white
+                  bg-primary-600 hover:bg-primary-700 min-h-[44px]"
+              >
+                Simpan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -22,6 +22,7 @@ from app.api.calendar import router as calendar_router
 from app.api.sla import router as sla_router
 from app.api.notifications import router as notifications_router
 from app.api.handover import router as handover_router
+from app.api.admin import router as admin_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -59,6 +60,7 @@ app.include_router(calendar_router, prefix="/api/v1")
 app.include_router(sla_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(handover_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
 
 
 @app.get("/health")
