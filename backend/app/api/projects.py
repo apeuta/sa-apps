@@ -340,6 +340,54 @@ async def get_project_detail(
     )
 
 
+@router.patch(
+    "/{project_id}",
+    summary="Update proyek",
+    description="Update informasi proyek (nama, customer, DQ, BANT detail, target submit).",
+)
+async def update_project(
+    project_id: str,
+    body: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update field-field proyek yang diizinkan."""
+    result = await db.execute(
+        select(Project).where(Project.id_project == project_id)
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyek tidak ditemukan.")
+
+    # Update fields yang dikirim
+    if "project_name" in body and body["project_name"]:
+        project.project_name = body["project_name"]
+    if "customer_name" in body and body["customer_name"]:
+        project.customer_name = body["customer_name"]
+    if "dq_number" in body:
+        project.dq_number = body["dq_number"] if body["dq_number"] else None
+    if "target_submit" in body and body["target_submit"]:
+        from datetime import date as date_cls
+        try:
+            project.target_submit = date_cls.fromisoformat(body["target_submit"])
+        except (ValueError, TypeError):
+            pass
+    if "bant_detail" in body and body["bant_detail"]:
+        # Merge dengan existing bant_detail
+        existing = project.bant_detail or {}
+        existing.update(body["bant_detail"])
+        project.bant_detail = existing
+
+    project.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return success_response(
+        data={"id_project": project.id_project, "status": project.status},
+        message="Proyek berhasil diupdate.",
+    )
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,

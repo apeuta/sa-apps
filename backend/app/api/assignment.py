@@ -39,11 +39,11 @@ def _generate_notification_id() -> str:
 
 
 def _require_lead_sa(current_user: User) -> None:
-    """Validasi bahwa user saat ini memiliki role Lead_SA."""
-    if current_user.role != "Lead_SA":
+    """Validasi bahwa user saat ini memiliki role Lead_SA atau Admin."""
+    if current_user.role not in ("Lead_SA", "Admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Hanya Lead_SA yang dapat melakukan operasi ini.",
+            detail="Hanya Lead_SA atau Admin yang dapat melakukan operasi ini.",
         )
 
 
