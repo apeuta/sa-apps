@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { FileUpload, FileItem } from "@/components/FileUpload";
-import { BANTManualForm, BANTScores } from "./bant-manual";
+import { BANTManualForm, BANTScores, BANTMetadata } from "./bant-manual";
 import {
   createProject,
   submitManualBANT,
@@ -225,13 +225,13 @@ export default function NewProjectPage() {
 
   // Handle submit BANT manual
   const handleBANTSubmit = useCallback(
-    async (scores: BANTScores) => {
+    async (scores: BANTScores, metadata?: BANTMetadata) => {
       if (!createdProject) return;
 
       setIsSubmittingBANT(true);
 
       try {
-        const result = await submitManualBANT(createdProject.id_project, scores);
+        const result = await submitManualBANT(createdProject.id_project, scores, metadata);
         setBantResult(result);
 
         if (result.bant_score >= 60) {

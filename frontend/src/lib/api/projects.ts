@@ -43,6 +43,14 @@ export interface ManualBANTInput {
   timeline: number;
 }
 
+/** Metadata detail BANT (dikirim bersama skor) */
+export interface BANTMetadataInput {
+  budget_detail?: { mrr: number | null };
+  authority_detail?: { name: string; position: string; email: string };
+  need_detail?: string;
+  timeline_detail?: string;
+}
+
 /**
  * Helper untuk mendapatkan auth token
  */
@@ -98,7 +106,8 @@ export async function createProject(
  */
 export async function submitManualBANT(
   projectId: string,
-  scores: ManualBANTInput
+  scores: ManualBANTInput,
+  metadata?: BANTMetadataInput
 ): Promise<BANTResult> {
   const token = getAuthToken();
 
@@ -109,12 +118,15 @@ export async function submitManualBANT(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
+  // Kirim skor + metadata (metadata opsional, backend tetap terima budget/authority/need/timeline)
+  const body = metadata ? { ...scores, ...metadata } : scores;
+
   const response = await fetch(
     `${API_BASE_URL}/projects/${projectId}/score-manual`,
     {
       method: "POST",
       headers,
-      body: JSON.stringify(scores),
+      body: JSON.stringify(body),
     }
   );
 

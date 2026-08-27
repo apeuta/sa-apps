@@ -1,20 +1,22 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 
 /**
- * Komponen BANTManualForm — Form input BANT manual sebagai fallback
+ * Komponen BANTManualForm — Form input BANT deskriptif
  *
  * Fitur:
- * - 4 slider/input untuk Budget, Authority, Need, Timeline (0-25)
- * - Real-time total score display
+ * - Budget: input MRR (number)
+ * - Authority: input PIC (nama, jabatan, email)
+ * - Need: textarea kebutuhan server
+ * - Timeline: date picker target submit
+ * - Real-time total score display (auto-calculated)
  * - Visual indicator: hijau (>=60), merah (<60)
- * - Submit button
  *
  * Requirements: 3.6, 3.7
  */
 
-/** Skor BANT per kriteria */
+/** Skor BANT per kriteria (0-25 per item, total 0-100) */
 export interface BANTScores {
   budget: number;
   authority: number;
@@ -22,38 +24,22 @@ export interface BANTScores {
   timeline: number;
 }
 
+/** Detail metadata yang dikirim bersama skor */
+export interface BANTMetadata {
+  budget_detail: { mrr: number | null };
+  authority_detail: { name: string; position: string; email: string };
+  need_detail: string;
+  timeline_detail: string;
+}
+
 interface BANTManualFormProps {
-  /** Callback saat form disubmit */
-  onSubmit: (scores: BANTScores) => void;
+  /** Callback saat form disubmit — kirim skor + metadata */
+  onSubmit: (scores: BANTScores, metadata?: BANTMetadata) => void;
   /** Loading state saat submit */
   isSubmitting?: boolean;
   /** Disabled state */
   disabled?: boolean;
 }
-
-/** Label dan deskripsi untuk setiap kriteria BANT */
-const BANT_CRITERIA = [
-  {
-    key: "budget" as const,
-    label: "Budget",
-    description: "Apakah customer memiliki anggaran yang jelas?",
-  },
-  {
-    key: "authority" as const,
-    label: "Authority",
-    description: "Apakah PIC memiliki wewenang pengambilan keputusan?",
-  },
-  {
-    key: "need" as const,
-    label: "Need",
-    description: "Apakah kebutuhan teknis sudah terdefinisi?",
-  },
-  {
-    key: "timeline" as const,
-    label: "Timeline",
-    description: "Apakah ada timeline implementasi yang jelas?",
-  },
-];
 
 /**
  * Menentukan warna berdasarkan skor
@@ -80,34 +66,86 @@ export function BANTManualForm({
   isSubmitting = false,
   disabled = false,
 }: BANTManualFormProps) {
-  const [scores, setScores] = useState<BANTScores>({
-    budget: 0,
-    authority: 0,
-    need: 0,
-    timeline: 0,
-  });
+  // State form deskriptif
+  const [mrr, setMrr] = useState<string>("");
+  const [picName, setPicName] = useState("");
+  const [picPosition, setPicPosition] = useState("");
+  const [picEmail, setPicEmail] = useState("");
+  const [needDescription, setNeedDescription] = useState("");
+  const [targetDate, setTargetDate] = useState("");
 
-  // Hitung total score
-  const totalScore = scores.budget + scores.authority + scores.need + scores.timeline;
+  // Hitung skor otomatis per kriteria
+  const budgetScore = useMemo(() => {
+    const value = parseFloat(mrr);
+    return !isNaN(value) && value > 0 ? 25 : 0;
+  }, [mrr]);
 
-  // Update skor per kriteria
-  const updateScore = useCallback(
-    (key: keyof BANTScores, value: number) => {
-      // Clamp value antara 0-25
-      const clamped = Math.max(0, Math.min(25, value));
-      setScores((prev) => ({ ...prev, [key]: clamped }));
-    },
-    []
-  );
+  const authorityScore = useMemo(() => {
+    const filled = [picName, picPosition, picEmail].filter(
+      (v) => v.trim().length > 0
+    ).length;
+    if (filled === 3) return 25;
+    if (filled === 2) return 17;
+    if (filled === 1) return 8;
+    return 0;
+  }, [picName, picPosition, picEmail]);
+
+  const needScore = useMemo(() => {
+    const len = needDescription.trim().length;
+    if (len > 100) return 25;
+    if (len > 50) return 17;
+    if (len > 10) return 8;
+    return 0;
+  }, [needDescription]);
+
+  const timelineScore = useMemo(() => {
+    return targetDate.trim().length > 0 ? 25 : 0;
+  }, [targetDate]);
+
+  // Total score
+  const totalScore = budgetScore + authorityScore + needScore + timelineScore;
 
   // Handle submit
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
-      onSubmit(scores);
+
+      const scores: BANTScores = {
+        budget: budgetScore,
+        authority: authorityScore,
+        need: needScore,
+        timeline: timelineScore,
+      };
+
+      const metadata: BANTMetadata = {
+        budget_detail: { mrr: mrr ? parseFloat(mrr) : null },
+        authority_detail: {
+          name: picName,
+          position: picPosition,
+          email: picEmail,
+        },
+        need_detail: needDescription,
+        timeline_detail: targetDate,
+      };
+
+      onSubmit(scores, metadata);
     },
-    [scores, onSubmit]
+    [
+      budgetScore,
+      authorityScore,
+      needScore,
+      timelineScore,
+      mrr,
+      picName,
+      picPosition,
+      picEmail,
+      needDescription,
+      targetDate,
+      onSubmit,
+    ]
   );
+
+  const inputDisabled = disabled || isSubmitting;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -118,7 +156,7 @@ export function BANTManualForm({
             Input BANT Manual
           </h3>
           <p className="text-sm text-neutral-500 mt-0.5">
-            Isi skor untuk setiap kriteria BANT (skala 0-25)
+            Isi informasi proyek — skor dihitung otomatis
           </p>
         </div>
       </div>
@@ -132,10 +170,14 @@ export function BANTManualForm({
       >
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-neutral-600">Total BANT Score</p>
+            <p className="text-sm font-medium text-neutral-600">
+              Total BANT Score
+            </p>
             <p className={`text-3xl font-bold ${getScoreColor(totalScore)}`}>
               {totalScore}
-              <span className="text-base font-normal text-neutral-400">/100</span>
+              <span className="text-base font-normal text-neutral-400">
+                /100
+              </span>
             </p>
           </div>
           <div className="text-right">
@@ -148,9 +190,7 @@ export function BANTManualForm({
             >
               {getScoreLabel(totalScore)}
             </span>
-            <p className="text-xs text-neutral-500 mt-1">
-              Threshold: ≥ 60
-            </p>
+            <p className="text-xs text-neutral-500 mt-1">Threshold: ≥ 60</p>
           </div>
         </div>
 
@@ -163,62 +203,200 @@ export function BANTManualForm({
             style={{ width: `${totalScore}%` }}
           />
         </div>
-      </div>
 
-      {/* Kriteria BANT */}
-      <div className="space-y-5">
-        {BANT_CRITERIA.map((criteria) => (
-          <div key={criteria.key} className="space-y-2">
-            <div className="flex items-center justify-between">
-              <div>
-                <label
-                  htmlFor={`bant-${criteria.key}`}
-                  className="text-sm font-medium text-neutral-700"
-                >
-                  {criteria.label}
-                </label>
-                <p className="text-xs text-neutral-500">{criteria.description}</p>
-              </div>
-              {/* Tampilkan nilai numerik */}
-              <span className="text-sm font-semibold text-neutral-800 min-w-[40px] text-right">
-                {scores[criteria.key]}/25
-              </span>
-            </div>
-
-            {/* Slider + Input number */}
-            <div className="flex items-center gap-3">
-              <input
-                id={`bant-${criteria.key}`}
-                type="range"
-                min={0}
-                max={25}
-                step={1}
-                value={scores[criteria.key]}
-                onChange={(e) => updateScore(criteria.key, parseInt(e.target.value))}
-                disabled={disabled || isSubmitting}
-                className="flex-1 h-2 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-primary-500 disabled:opacity-50"
-                aria-valuemin={0}
-                aria-valuemax={25}
-                aria-valuenow={scores[criteria.key]}
-                aria-label={`Skor ${criteria.label}: ${scores[criteria.key]} dari 25`}
-              />
-              <input
-                type="number"
-                min={0}
-                max={25}
-                step={1}
-                value={scores[criteria.key]}
-                onChange={(e) => updateScore(criteria.key, parseInt(e.target.value) || 0)}
-                disabled={disabled || isSubmitting}
-                className="w-16 px-2 py-1 border border-neutral-300 rounded-md text-center text-sm
-                  focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
-                  disabled:opacity-50 disabled:bg-neutral-100"
-                aria-label={`Input numerik skor ${criteria.label}`}
-              />
-            </div>
+        {/* Sub-score breakdown */}
+        <div className="mt-3 grid grid-cols-4 gap-2 text-xs text-neutral-600">
+          <div className="text-center">
+            <p className="font-medium">Budget</p>
+            <p className="font-bold">{budgetScore}/25</p>
           </div>
-        ))}
+          <div className="text-center">
+            <p className="font-medium">Authority</p>
+            <p className="font-bold">{authorityScore}/25</p>
+          </div>
+          <div className="text-center">
+            <p className="font-medium">Need</p>
+            <p className="font-bold">{needScore}/25</p>
+          </div>
+          <div className="text-center">
+            <p className="font-medium">Timeline</p>
+            <p className="font-bold">{timelineScore}/25</p>
+          </div>
+        </div>
       </div>
+
+      {/* ===== 1. BUDGET ===== */}
+      <fieldset className="space-y-2 border border-neutral-200 rounded-lg p-4">
+        <legend className="text-sm font-semibold text-neutral-700 px-2">
+          💰 Ekspektasi MRR (Monthly Recurring Revenue)
+        </legend>
+        <p className="text-xs text-neutral-500">
+          Masukkan estimasi pendapatan bulanan dari proyek ini.
+          {budgetScore > 0 && (
+            <span className="ml-2 text-green-600 font-medium">
+              ✓ Skor: {budgetScore}/25
+            </span>
+          )}
+        </p>
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-neutral-500">
+            IDR
+          </span>
+          <input
+            type="number"
+            value={mrr}
+            onChange={(e) => setMrr(e.target.value)}
+            placeholder="Contoh: 50000000"
+            disabled={inputDisabled}
+            min={0}
+            className="w-full pl-12 pr-4 py-2.5 border border-neutral-300 rounded-md text-sm
+              focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+              disabled:opacity-50 disabled:bg-neutral-100
+              placeholder:text-neutral-400"
+            aria-label="Ekspektasi MRR dalam Rupiah"
+          />
+        </div>
+      </fieldset>
+
+      {/* ===== 2. AUTHORITY ===== */}
+      <fieldset className="space-y-3 border border-neutral-200 rounded-lg p-4">
+        <legend className="text-sm font-semibold text-neutral-700 px-2">
+          👤 Informasi PIC (Person in Charge)
+        </legend>
+        <p className="text-xs text-neutral-500">
+          Data kontak pengambil keputusan di sisi customer.
+          {authorityScore > 0 && (
+            <span className="ml-2 text-green-600 font-medium">
+              ✓ Skor: {authorityScore}/25
+            </span>
+          )}
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label
+              htmlFor="pic-name"
+              className="block text-xs font-medium text-neutral-600 mb-1"
+            >
+              Nama PIC
+            </label>
+            <input
+              id="pic-name"
+              type="text"
+              value={picName}
+              onChange={(e) => setPicName(e.target.value)}
+              placeholder="Nama lengkap"
+              disabled={inputDisabled}
+              className="w-full px-3 py-2 border border-neutral-300 rounded-md text-sm
+                focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+                disabled:opacity-50 disabled:bg-neutral-100
+                placeholder:text-neutral-400"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="pic-position"
+              className="block text-xs font-medium text-neutral-600 mb-1"
+            >
+              Jabatan
+            </label>
+            <input
+              id="pic-position"
+              type="text"
+              value={picPosition}
+              onChange={(e) => setPicPosition(e.target.value)}
+              placeholder="Contoh: VP Engineering"
+              disabled={inputDisabled}
+              className="w-full px-3 py-2 border border-neutral-300 rounded-md text-sm
+                focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+                disabled:opacity-50 disabled:bg-neutral-100
+                placeholder:text-neutral-400"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="pic-email"
+              className="block text-xs font-medium text-neutral-600 mb-1"
+            >
+              Email
+            </label>
+            <input
+              id="pic-email"
+              type="email"
+              value={picEmail}
+              onChange={(e) => setPicEmail(e.target.value)}
+              placeholder="email@perusahaan.co.id"
+              disabled={inputDisabled}
+              className="w-full px-3 py-2 border border-neutral-300 rounded-md text-sm
+                focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+                disabled:opacity-50 disabled:bg-neutral-100
+                placeholder:text-neutral-400"
+            />
+          </div>
+        </div>
+      </fieldset>
+
+      {/* ===== 3. NEED ===== */}
+      <fieldset className="space-y-2 border border-neutral-200 rounded-lg p-4">
+        <legend className="text-sm font-semibold text-neutral-700 px-2">
+          🖥️ Kebutuhan Server & Spesifikasi
+        </legend>
+        <p className="text-xs text-neutral-500">
+          Jelaskan kebutuhan teknis customer.
+          {needScore > 0 && (
+            <span className="ml-2 text-green-600 font-medium">
+              ✓ Skor: {needScore}/25
+            </span>
+          )}
+        </p>
+        <textarea
+          value={needDescription}
+          onChange={(e) => setNeedDescription(e.target.value)}
+          placeholder="Jelaskan kebutuhan server, spesifikasi teknis, dan kapasitas yang dibutuhkan"
+          disabled={inputDisabled}
+          rows={4}
+          className="w-full px-3 py-2.5 border border-neutral-300 rounded-md text-sm resize-y
+            focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+            disabled:opacity-50 disabled:bg-neutral-100
+            placeholder:text-neutral-400"
+          aria-label="Deskripsi kebutuhan server dan spesifikasi"
+        />
+        <p className="text-xs text-neutral-400">
+          {needDescription.trim().length} karakter
+          {needDescription.trim().length <= 10 && " — minimal 10 karakter untuk skor"}
+          {needDescription.trim().length > 10 &&
+            needDescription.trim().length <= 50 &&
+            " — >50 untuk skor lebih tinggi"}
+          {needDescription.trim().length > 50 &&
+            needDescription.trim().length <= 100 &&
+            " — >100 untuk skor maksimal"}
+          {needDescription.trim().length > 100 && " — skor maksimal ✓"}
+        </p>
+      </fieldset>
+
+      {/* ===== 4. TIMELINE ===== */}
+      <fieldset className="space-y-2 border border-neutral-200 rounded-lg p-4">
+        <legend className="text-sm font-semibold text-neutral-700 px-2">
+          📅 Target Submit Dokumen
+        </legend>
+        <p className="text-xs text-neutral-500">
+          Kapan dokumen proposal harus diserahkan ke customer?
+          {timelineScore > 0 && (
+            <span className="ml-2 text-green-600 font-medium">
+              ✓ Skor: {timelineScore}/25
+            </span>
+          )}
+        </p>
+        <input
+          type="date"
+          value={targetDate}
+          onChange={(e) => setTargetDate(e.target.value)}
+          disabled={inputDisabled}
+          className="w-full px-3 py-2.5 border border-neutral-300 rounded-md text-sm
+            focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+            disabled:opacity-50 disabled:bg-neutral-100"
+          aria-label="Target tanggal submit dokumen"
+        />
+      </fieldset>
 
       {/* Submit button */}
       <button
@@ -226,9 +404,10 @@ export function BANTManualForm({
         disabled={disabled || isSubmitting}
         className={`
           w-full py-3 px-4 rounded-lg font-medium text-white transition-all duration-200
-          ${isSubmitting
-            ? "bg-neutral-400 cursor-not-allowed"
-            : "bg-primary-600 hover:bg-primary-700 active:bg-primary-800"
+          ${
+            isSubmitting
+              ? "bg-neutral-400 cursor-not-allowed"
+              : "bg-primary-600 hover:bg-primary-700 active:bg-primary-800"
           }
           disabled:opacity-50 disabled:cursor-not-allowed
           min-h-touch
