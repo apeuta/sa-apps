@@ -18,6 +18,7 @@ import asyncio
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+import hashlib
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,11 @@ from app.models.user import User
 from app.models.project import Project
 from app.models.document import Document
 from app.models.activity_log import ActivityLog
+
+
+def deterministic_uuid(seed_string: str) -> uuid.UUID:
+    """Generate UUID deterministic berdasarkan string (selalu sama untuk input sama)."""
+    return uuid.UUID(hashlib.md5(seed_string.encode()).hexdigest())
 
 
 # ============================================================
@@ -80,18 +86,24 @@ DEMO_USERS = [
 
 
 async def get_or_create_user(db: AsyncSession, user_data: dict) -> User:
-    """Cek user berdasarkan email, buat jika belum ada."""
+    """Cek user berdasarkan email, buat jika belum ada. Jika sudah ada, pastikan data konsisten."""
     result = await db.execute(
         select(User).where(User.email == user_data["email"])
     )
     existing = result.scalar_one_or_none()
 
     if existing:
-        print(f"  [ok] User sudah ada: {user_data['email']}")
+        # Update role jika berubah (untuk konsistensi seed)
+        if existing.role != user_data["role"]:
+            existing.role = user_data["role"]
+            await db.flush()
+        print(f"  [ok] User sudah ada: {user_data['email']} (id: {existing.id})")
         return existing
 
+    # Buat user baru dengan deterministic UUID (berdasarkan email)
+    user_id = deterministic_uuid(user_data["email"])
     user = User(
-        id=uuid.uuid4(),
+        id=user_id,
         email=user_data["email"],
         name=user_data["name"],
         role=user_data["role"],
@@ -101,7 +113,7 @@ async def get_or_create_user(db: AsyncSession, user_data: dict) -> User:
     )
     db.add(user)
     await db.flush()
-    print(f"  [+] User dibuat: {user_data['email']} ({user_data['role']})")
+    print(f"  [+] User dibuat: {user_data['email']} ({user_data['role']}) id: {user_id}")
     return user
 
 

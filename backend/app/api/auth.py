@@ -92,9 +92,11 @@ async def demo_login(
     user = result.scalar_one_or_none()
 
     if not user:
-        # Buat demo user baru di database
+        # Buat demo user baru di database — gunakan deterministic UUID berdasarkan email
+        import hashlib
+        user_id = uuid.UUID(hashlib.md5(demo_config["email"].encode()).hexdigest())
         user = User(
-            id=uuid.uuid4(),
+            id=user_id,
             email=demo_config["email"],
             name=demo_config["name"],
             role=body.role,
