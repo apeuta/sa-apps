@@ -29,7 +29,15 @@ interface ProjectDetail {
   status: string;
   dq_number: string | null;
   bant_score: number | null;
-  bant_detail: { budget: number; authority: number; need: number; timeline: number } | null;
+  bant_detail: {
+    budget_mrr?: number | null;
+    pic_name?: string | null;
+    pic_position?: string | null;
+    pic_email?: string | null;
+    need_description?: string | null;
+    timeline_target?: string | null;
+    [key: string]: unknown;
+  } | null;
   use_case_tags: string[];
   target_submit: string | null;
   sales_pic: { id: string | null; name: string | null; email: string | null };
@@ -97,18 +105,28 @@ export default function ProjectDetailPage() {
               <p className="text-sm text-neutral-500 mt-1">{project.customer_name}</p>
               <p className="text-xs text-neutral-400 mt-0.5 font-mono">{project.id_project}</p>
             </div>
-            <span
-              className={`inline-block px-3 py-1 rounded-full text-xs font-medium shrink-0 ${
-                project.status === "Closed-Win" ? "bg-green-100 text-green-700"
-                : project.status === "Lost" ? "bg-red-100 text-red-700"
-                : project.status === "Ready" ? "bg-emerald-100 text-emerald-700"
-                : project.status === "Assigned" ? "bg-blue-100 text-blue-700"
-                : project.status === "Pending Assignment" ? "bg-yellow-100 text-yellow-700"
-                : "bg-neutral-100 text-neutral-700"
-              }`}
-            >
-              {project.status}
-            </span>
+            <div className="flex items-center gap-2">
+              {/* Tombol Edit */}
+              <button
+                onClick={() => router.push(`/projects/${projectId}/edit`)}
+                className="px-3 py-1.5 text-sm font-medium text-neutral-700 border border-neutral-300
+                           rounded-lg hover:bg-neutral-50 transition-colors min-h-[36px]"
+              >
+                Edit
+              </button>
+              <span
+                className={`inline-block px-3 py-1 rounded-full text-xs font-medium shrink-0 ${
+                  project.status === "Closed-Win" ? "bg-green-100 text-green-700"
+                  : project.status === "Lost" ? "bg-red-100 text-red-700"
+                  : project.status === "Ready" ? "bg-emerald-100 text-emerald-700"
+                  : project.status === "Assigned" ? "bg-blue-100 text-blue-700"
+                  : project.status === "Pending Assignment" ? "bg-yellow-100 text-yellow-700"
+                  : "bg-neutral-100 text-neutral-700"
+                }`}
+              >
+                {project.status}
+              </span>
+            </div>
           </div>
 
           {/* Section: PIC & Info Utama */}
@@ -149,41 +167,51 @@ export default function ProjectDetailPage() {
             )}
           </div>
 
-          {/* Section: Detail BANT (informasi deskriptif dari Sales) */}
+          {/* Section: Detail BANT (data deskriptif dari isian Sales) */}
           {project.bant_detail && (
             <div className="bg-white border border-neutral-200 rounded-lg p-5">
               <h2 className="text-sm font-semibold text-neutral-700 mb-3">Detail BANT</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                {/* Budget */}
                 <div className="p-3 bg-neutral-50 rounded-lg">
                   <p className="text-xs font-medium text-neutral-500 mb-1">Budget (MRR)</p>
-                  <p className="text-neutral-800">
-                    {project.bant_detail.budget > 0
-                      ? `Informasi budget tersedia (skor: ${project.bant_detail.budget}/25)`
-                      : "Belum ada informasi budget"}
+                  <p className="text-neutral-800 font-medium">
+                    {project.bant_detail.budget_mrr
+                      ? `Rp ${Number(project.bant_detail.budget_mrr).toLocaleString("id-ID")}`
+                      : "Belum diinput"}
                   </p>
                 </div>
+                {/* PIC / Authority */}
                 <div className="p-3 bg-neutral-50 rounded-lg">
-                  <p className="text-xs font-medium text-neutral-500 mb-1">Authority (PIC)</p>
+                  <p className="text-xs font-medium text-neutral-500 mb-1">PIC Customer</p>
+                  {project.bant_detail.pic_name ? (
+                    <div>
+                      <p className="text-neutral-800 font-medium">{project.bant_detail.pic_name}</p>
+                      <p className="text-xs text-neutral-500">
+                        {project.bant_detail.pic_position}
+                        {project.bant_detail.pic_email && ` — ${project.bant_detail.pic_email}`}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-neutral-500">Belum diinput</p>
+                  )}
+                </div>
+                {/* Need */}
+                <div className="p-3 bg-neutral-50 rounded-lg md:col-span-2">
+                  <p className="text-xs font-medium text-neutral-500 mb-1">Kebutuhan Teknis</p>
                   <p className="text-neutral-800">
-                    {project.bant_detail.authority > 0
-                      ? `Informasi PIC tersedia (skor: ${project.bant_detail.authority}/25)`
-                      : "Belum ada informasi PIC"}
+                    {project.bant_detail.need_description || "Belum diinput"}
                   </p>
                 </div>
+                {/* Timeline */}
                 <div className="p-3 bg-neutral-50 rounded-lg">
-                  <p className="text-xs font-medium text-neutral-500 mb-1">Need (Kebutuhan Teknis)</p>
+                  <p className="text-xs font-medium text-neutral-500 mb-1">Target Timeline</p>
                   <p className="text-neutral-800">
-                    {project.bant_detail.need > 0
-                      ? `Informasi kebutuhan tersedia (skor: ${project.bant_detail.need}/25)`
-                      : "Belum ada informasi kebutuhan"}
-                  </p>
-                </div>
-                <div className="p-3 bg-neutral-50 rounded-lg">
-                  <p className="text-xs font-medium text-neutral-500 mb-1">Timeline (Target Submit)</p>
-                  <p className="text-neutral-800">
-                    {project.bant_detail.timeline > 0
-                      ? `Timeline tersedia (skor: ${project.bant_detail.timeline}/25)`
-                      : "Belum ada informasi timeline"}
+                    {project.bant_detail.timeline_target
+                      ? new Date(project.bant_detail.timeline_target).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
+                      : project.target_submit
+                        ? new Date(project.target_submit).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
+                        : "Belum diinput"}
                   </p>
                 </div>
               </div>
