@@ -118,7 +118,13 @@ async def get_or_create_project(
     existing = result.scalar_one_or_none()
 
     if existing:
-        print(f"  [ok] Proyek sudah ada: {project_data['project_name']}")
+        # Update bant_detail jika berubah
+        if project_data.get("bant_detail") and existing.bant_detail != project_data["bant_detail"]:
+            existing.bant_detail = project_data["bant_detail"]
+            await db.flush()
+            print(f"  [~] Proyek diupdate: {project_data['project_name']}")
+        else:
+            print(f"  [ok] Proyek sudah ada: {project_data['project_name']}")
         return existing
 
     now = datetime.now(timezone.utc)
