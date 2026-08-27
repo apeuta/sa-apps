@@ -243,44 +243,34 @@ async def get_sa_utilization(
     sa_result = await db.execute(sa_query)
     sa_users = sa_result.scalars().all()
 
-    # Query activity logs untuk tahun target, grouped by SA + bulan
+    # Fetch activity logs lalu group di Python (lebih robust daripada SQL GROUP BY extract)
     year_start = dt_type(target_year, 1, 1, tzinfo=timezone.utc)
-    year_end = dt_type(target_year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+    year_end = dt_type(target_year + 1, 1, 1, tzinfo=timezone.utc)
 
-    utilization_query = (
-        select(
-            ActivityLog.sa_id,
-            func.extract("month", ActivityLog.created_at).label("month"),
-            func.sum(ActivityLog.duration_hours).label("total_hours"),
-        )
+    log_query = (
+        select(ActivityLog)
         .where(ActivityLog.created_at >= year_start)
-        .where(ActivityLog.created_at <= year_end)
+        .where(ActivityLog.created_at < year_end)
     )
-
     if sa_id:
         try:
             sa_uuid = uuid.UUID(sa_id)
-            utilization_query = utilization_query.where(ActivityLog.sa_id == sa_uuid)
+            log_query = log_query.where(ActivityLog.sa_id == sa_uuid)
         except ValueError:
             pass
 
-    utilization_query = utilization_query.group_by(
-        ActivityLog.sa_id,
-        func.extract("month", ActivityLog.created_at),
-    )
+    log_result = await db.execute(log_query)
+    logs = log_result.scalars().all()
 
-    util_result = await db.execute(utilization_query)
-    util_rows = util_result.all()
-
-    # Build lookup: {sa_id: {month: total_hours}}
+    # Group by SA + bulan di Python
     sa_monthly: dict[uuid.UUID, dict[int, float]] = {}
-    for row in util_rows:
-        sid = row[0]
-        month = int(row[1])
-        hours = float(row[2])
+    for log in logs:
+        sid = log.sa_id
+        month = log.created_at.month
+        hours = float(log.duration_hours)
         if sid not in sa_monthly:
             sa_monthly[sid] = {}
-        sa_monthly[sid][month] = hours
+        sa_monthly[sid][month] = sa_monthly[sid].get(month, 0.0) + hours
 
     # Format response per SA
     monthly_data = []
