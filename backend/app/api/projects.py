@@ -263,6 +263,52 @@ async def get_status_summary(
     )
 
 
+@router.get(
+    "/{project_id}",
+    summary="Detail proyek",
+    description="Mengambil detail satu proyek berdasarkan ID.",
+)
+async def get_project_detail(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ambil detail proyek berdasarkan project_id."""
+    from sqlalchemy import select as sa_select
+
+    result = await db.execute(
+        select(Project).where(Project.id_project == project_id)
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
+        )
+
+    data = {
+        "id_project": project.id_project,
+        "project_name": project.project_name,
+        "customer_name": project.customer_name,
+        "status": project.status,
+        "dq_number": project.dq_number,
+        "bant_score": project.bant_score,
+        "bant_detail": project.bant_detail,
+        "use_case_tags": project.use_case_tags or [],
+        "target_submit": project.target_submit.isoformat() if project.target_submit else None,
+        "assigned_sa": str(project.assigned_sa) if project.assigned_sa else None,
+        "gdrive_folder_id": project.gdrive_folder_id,
+        "created_at": project.created_at.isoformat() if project.created_at else None,
+        "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+    }
+
+    return success_response(
+        data=data,
+        message="Detail proyek berhasil diambil.",
+    )
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
