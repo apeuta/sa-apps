@@ -1,53 +1,307 @@
-# SA Apps
+# Portal SA — Solutions Architect Management Platform
 
-Repository dokumentasi dan aplikasi internal untuk tim Solutions Architect (SA).
+Portal SA adalah Progressive Web App (PWA) untuk manajemen proyek pre-sales dan pencatatan aktivitas harian Solutions Architect. Aplikasi ini menggantikan Redmine dengan fitur AI-powered scoring, integrasi Google Workspace, dan deployment Docker yang portabel.
 
 ---
 
-## Struktur Repository
+## Fitur Utama
+
+| Modul | Deskripsi |
+|-------|-----------|
+| **Pre-Sales Request** | Sales submit request proyek + file attachment (MoM/RFP) |
+| **AI BANT Scoring** | Gemini AI menganalisis dokumen dan menghitung skor BANT (Budget, Authority, Need, Timeline) |
+| **Project Assignment** | Lead SA menugaskan SA ke proyek berdasarkan scoring dan workload |
+| **GDrive Auto-Provisioning** | Folder proyek otomatis dibuat di Google Drive dengan permission yang tepat |
+| **Document Tracking** | Tracking status deliverables (PropTek, BOQ, Mandays, HLD) dengan state machine |
+| **DQ Number Gating** | Akses dokumen dikontrol berdasarkan input DQ Number oleh Sales |
+| **SLA Timer** | Countdown 5 hari untuk DQ Number dengan auto-lock folder dan eskalasi |
+| **Activity Logger** | Pencatatan aktivitas harian + AI note polishing (discussion points & action items) |
+| **Calendar Sync** | Sinkronisasi Google Calendar untuk mapping aktivitas ke proyek |
+| **Notification** | In-app notification + email (Gmail API) untuk semua event penting |
+| **RAG Recommendation** | Rekomendasi template dari proyek Closed-Win serupa |
+| **PMO Handover** | Automasi handover folder + notifikasi ke PMO/Delivery setelah Closed-Win |
+| **Dashboard per Role** | Tampilan berbeda untuk Sales, SA, dan Lead SA |
+| **PWA + Offline** | Installable, offline-capable, auto-sync saat kembali online |
+
+---
+
+## Tech Stack
+
+| Layer | Teknologi |
+|-------|-----------|
+| Frontend | Next.js 14+ (App Router), TypeScript, Tailwind CSS, Zustand, SWR |
+| Backend | FastAPI (Python 3.11+), SQLAlchemy async, Pydantic |
+| Database | PostgreSQL 15+ |
+| AI | Google Gemini API (via LLM Provider abstraction — multi-provider ready) |
+| Auth | Google OAuth 2.0 + JWT |
+| Integration | Google Drive API, Google Calendar API, Gmail API |
+| Deployment | Docker + Docker Compose |
+
+---
+
+## Struktur Project
 
 ```
 sa-apps/
-├── .kiro/specs/sa-portal-mvp/   # Spec MVP Portal SA (requirements & design)
-├── SA Application/              # User Story & Spesifikasi Portal SA
-│   ├── Spesifikasi_Teknis_Portal_SA.md
-│   └── Portal Activity Mapping & Report.pdf
+├── backend/                    # FastAPI backend
+│   ├── app/
+│   │   ├── api/               # API routers (endpoints)
+│   │   ├── core/              # Config, database, middleware
+│   │   ├── models/            # SQLAlchemy models
+│   │   ├── schemas/           # Pydantic schemas
+│   │   ├── services/          # Business logic services
+│   │   └── main.py            # FastAPI app entry point
+│   ├── alembic/               # Database migrations
+│   ├── tests/                 # Unit tests
+│   ├── Dockerfile             # Multi-stage build
+│   └── requirements.txt
+├── frontend/                   # Next.js PWA frontend
+│   ├── src/
+│   │   ├── app/               # Pages (App Router)
+│   │   ├── components/        # Reusable UI components
+│   │   ├── lib/               # API clients, utilities
+│   │   └── store/             # Zustand stores
+│   ├── public/                # PWA manifest, service worker, icons
+│   ├── Dockerfile             # Multi-stage build
+│   └── package.json
+├── SA Application/             # User Story & Spesifikasi Teknis
+├── .kiro/specs/sa-portal-mvp/ # Spec documents (requirements, design, tasks)
+├── docker-compose.yml          # Orchestration (3 services)
+├── deploy.sh                   # Script deployment otomatis
+├── .env.example                # Template environment variables
 └── README.md
 ```
 
 ---
 
-## SA Application (Portal SA)
+## Quick Start (Lokal dengan Docker)
 
-Folder ini berisi dokumentasi user story dan spesifikasi teknis untuk **Portal Solutions Architect** — aplikasi pengganti Redmine yang mengelola:
+```bash
+# 1. Clone repo
+git clone git@github.com:apeuta/sa-apps.git
+cd sa-apps
 
-- **Pre-Sales Request & AI Scoring** — Input opportunity dari Sales, scoring otomatis via Gemini AI (BANT), dan assignment ke SA.
-- **Dokumen Management & DQ Gating** — Tracking deliverables (PropTek, BOQ, Mandays, HLD) dengan mekanisme lock/unlock berbasis DQ Number dan SLA 5 hari.
-- **Activity Mapping & Project Story** — Sinkronisasi Google Calendar, mapping aktivitas ke subtask, dan AI-powered notes polishing.
-- **Post-Sales & PMO Handover** — Automated handover dokumen final ke tim PMO & Delivery setelah Closed-Win.
+# 2. Konfigurasi environment
+cp .env.example .env
+# Edit .env — isi minimal: POSTGRES_PASSWORD, SECRET_KEY, GOOGLE_CLIENT_ID/SECRET, GEMINI_API_KEY
 
-### Tech Stack (Planned)
+# 3. Build dan jalankan
+docker compose up -d --build
 
-| Layer | Teknologi |
-|-------|-----------|
-| Frontend | PWA (Progressive Web App) |
-| Backend | Serverless (AWS Lambda / Cloud Functions) |
-| Database | PostgreSQL (Aurora Serverless) |
-| AI | Google Gemini AI (Vertex AI) |
-| Integration | Google Workspace (Drive, Calendar, Gmail) |
+# 4. Verifikasi
+curl http://localhost:8000/health
+# Output: {"status":"success","data":{"api":"healthy","database":"healthy"}}
+```
 
-### Dokumen yang Tersedia
+Akses:
+- **Frontend**: http://localhost:3000
+- **Backend API**: http://localhost:8000
+- **Swagger Docs**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
 
-| File | Deskripsi |
-|------|-----------|
-| `Spesifikasi_Teknis_Portal_SA.md` | Detail teknis lengkap: workflow, struktur database, dan integrasi layanan |
-| `Portal Activity Mapping & Report.pdf` | Dokumen visual alur aktivitas dan laporan |
+---
+
+## Deployment di Ubuntu VM
+
+### Prasyarat
+- Ubuntu 22.04+, minimal 2 vCPU / 4GB RAM / 30GB disk
+- Domain atau IP publik (untuk akses dari luar)
+- Port 80 dan 443 terbuka di firewall/security group
+
+### Step-by-step
+
+```bash
+# 1. Install Docker
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin git
+
+# 2. Buat user deployment
+sudo adduser sa-portal --gecos ""
+sudo usermod -aG docker sa-portal
+sudo su - sa-portal
+
+# 3. Clone dan konfigurasi
+git clone git@github.com:apeuta/sa-apps.git ~/sa-portal
+cd ~/sa-portal
+cp .env.example .env
+nano .env  # Isi semua credentials
+
+# 4. Jalankan aplikasi
+docker compose up -d --build
+
+# 5. Setup Nginx reverse proxy (agar bisa diakses via port 80/443)
+# Lihat section "Setup Nginx" di bawah
+```
+
+### Setup Nginx (Akses dari Luar VM)
+
+```bash
+# Install Nginx
+sudo apt-get install -y nginx
+
+# Buat konfigurasi
+sudo nano /etc/nginx/sites-available/sa-portal
+```
+
+Isi file konfigurasi:
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;  # Ganti dengan domain atau IP publik VM
+
+    # Frontend (Next.js)
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    # Backend API
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 100M;  # Untuk file upload max 20MB x 5 files
+    }
+
+    # Swagger / ReDoc
+    location /docs {
+        proxy_pass http://127.0.0.1:8000/docs;
+        proxy_set_header Host $host;
+    }
+    location /redoc {
+        proxy_pass http://127.0.0.1:8000/redoc;
+        proxy_set_header Host $host;
+    }
+    location /openapi.json {
+        proxy_pass http://127.0.0.1:8000/openapi.json;
+        proxy_set_header Host $host;
+    }
+
+    # Health check
+    location /health {
+        proxy_pass http://127.0.0.1:8000/health;
+    }
+}
+```
+
+Aktifkan konfigurasi:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/sa-portal /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl restart nginx
+sudo systemctl enable nginx
+```
+
+### Setup SSL dengan Let's Encrypt (HTTPS)
+
+```bash
+# Install Certbot
+sudo apt-get install -y certbot python3-certbot-nginx
+
+# Generate SSL certificate (ganti dengan domain Anda)
+sudo certbot --nginx -d your-domain.com
+
+# Auto-renewal sudah diatur otomatis oleh certbot
+sudo certbot renew --dry-run  # Test renewal
+```
+
+### Buka Firewall
+
+```bash
+# UFW (Ubuntu default firewall)
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 22/tcp  # SSH
+sudo ufw enable
+sudo ufw status
+
+# Jika pakai AWS Security Group:
+# - Buka Inbound Rule port 80 (HTTP) dan 443 (HTTPS) dari 0.0.0.0/0
+# - Port 22 (SSH) dari IP Anda saja
+```
+
+### Update .env untuk Produksi
+
+Setelah Nginx dan SSL aktif, update `.env`:
+
+```env
+# Ganti localhost dengan domain/IP publik
+GOOGLE_REDIRECT_URI=https://your-domain.com/api/v1/auth/callback
+NEXT_PUBLIC_API_URL=https://your-domain.com/api/v1
+FRONTEND_URL=https://your-domain.com
+```
+
+Restart aplikasi:
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+---
+
+## Update Deployment
+
+```bash
+ssh sa-portal@your-vm-ip
+cd ~/sa-portal
+git pull origin main
+docker compose down
+docker compose up -d --build
+docker compose logs -f --tail=50  # Monitor startup
+```
+
+Atau gunakan script otomatis:
+```bash
+./deploy.sh
+```
+
+---
+
+## Environment Variables
+
+Lihat `.env.example` untuk daftar lengkap. Yang **wajib** dikonfigurasi:
+
+| Variable | Deskripsi |
+|----------|-----------|
+| `POSTGRES_PASSWORD` | Password database PostgreSQL |
+| `SECRET_KEY` | JWT signing key (random string 32+ karakter) |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `GOOGLE_REDIRECT_URI` | OAuth callback URL |
+| `ALLOWED_DOMAINS` | Domain email yang diizinkan login |
+| `GEMINI_API_KEY` | Google Gemini API key |
+| `NEXT_PUBLIC_API_URL` | URL backend API (dari sisi browser) |
+
+---
+
+## API Documentation
+
+Setelah aplikasi berjalan:
+- **Swagger UI**: `/docs` — Interactive API explorer
+- **ReDoc**: `/redoc` — Readable API documentation
+- **OpenAPI Spec**: `/openapi.json` — Machine-readable spec
 
 ---
 
 ## Status
 
-🚧 **Dalam pengembangan** — Saat ini masih tahap spesifikasi dan desain MVP.
+🚀 **MVP Ready** — Semua fitur inti sudah terimplementasi dan siap deploy.
 
 ---
 
