@@ -195,14 +195,7 @@ export default function DocumentsPage() {
         )}
       </div>
 
-      {/* DQ Number Section */}
-      <div className="bg-white border border-neutral-200 rounded-lg p-5">
-        <DQNumberInput
-          currentValue={project?.dq_number ?? null}
-          onSubmit={handleDQSubmit}
-          isSubmitting={isDQSubmitting}
-        />
-      </div>
+      {/* DQ Number Section — dipindahkan ke halaman detail proyek */}
 
       {/* Daftar Dokumen */}
       <div className="bg-white border border-neutral-200 rounded-lg">

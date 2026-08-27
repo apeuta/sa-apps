@@ -167,6 +167,33 @@ export default function ProjectDetailPage() {
             )}
           </div>
 
+          {/* Section: Quick Actions — Link ke Dokumen dan Activity Log */}
+          <div className="flex flex-wrap gap-3">
+            <a
+              href={`/projects/${projectId}/documents`}
+              className="flex-1 min-w-[180px] p-4 bg-white border border-neutral-200 rounded-lg hover:border-primary-300 hover:bg-primary-50/50 transition-colors"
+            >
+              <p className="text-sm font-medium text-neutral-800">Dokumen</p>
+              <p className="text-xs text-neutral-500 mt-0.5">Kelola PropTek, BOQ, HLD</p>
+            </a>
+            <a
+              href="/activity-logs"
+              className="flex-1 min-w-[180px] p-4 bg-white border border-neutral-200 rounded-lg hover:border-primary-300 hover:bg-primary-50/50 transition-colors"
+            >
+              <p className="text-sm font-medium text-neutral-800">Activity Log</p>
+              <p className="text-xs text-neutral-500 mt-0.5">Catat aktivitas pada proyek ini</p>
+            </a>
+            {!project.dq_number && (
+              <a
+                href={`/projects/${projectId}/documents`}
+                className="flex-1 min-w-[180px] p-4 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors"
+              >
+                <p className="text-sm font-medium text-amber-800">Input DQ Number</p>
+                <p className="text-xs text-amber-600 mt-0.5">Belum diinput — diperlukan untuk rilis dokumen</p>
+              </a>
+            )}
+          </div>
+
           {/* Section: Detail BANT (data deskriptif dari isian Sales) */}
           {project.bant_detail && (
             <div className="bg-white border border-neutral-200 rounded-lg p-5">
