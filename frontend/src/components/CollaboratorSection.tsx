@@ -248,12 +248,12 @@ export function CollaboratorSection({
               <button
                 type="button"
                 onClick={() => setSelectedRole("contributor")}
-                disabled={selectedUser && selectedUser.role === "Sales"}
+                disabled={selectedUser?.role === "Sales"}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
                   selectedRole === "contributor"
                     ? "bg-emerald-50 text-emerald-700 border-emerald-300"
                     : "bg-white text-neutral-600 border-neutral-300 hover:bg-neutral-50"
-                } ${selectedUser && selectedUser.role === "Sales" ? "opacity-50 cursor-not-allowed" : ""}`}
+                } ${selectedUser?.role === "Sales" ? "opacity-50 cursor-not-allowed" : ""}`}
                 title={selectedUser?.role === "Sales" ? "Hanya SA yang bisa menjadi contributor" : ""}
               >
                 ✏️ Contributor — Bisa tambah Activity Log
