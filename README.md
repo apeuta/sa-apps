@@ -21,6 +21,8 @@ Portal SA adalah Progressive Web App (PWA) untuk manajemen proyek pre-sales dan 
 | **RAG Recommendation** | Rekomendasi template dari proyek Closed-Win serupa |
 | **PMO Handover** | Automasi handover folder + notifikasi ke PMO/Delivery setelah Closed-Win |
 | **Dashboard per Role** | Tampilan berbeda untuk Sales, SA, dan Lead SA (termasuk utilisasi SA per bulan) |
+| **Project Collaboration** | Tag kolaborator (viewer/contributor) ke proyek — SA, Sales, Lead SA bisa manage |
+| **SA Reassign** | Lead SA bisa reassign SA yang ditugaskan ke proyek lain dari detail proyek |
 | **PWA + Offline** | Installable, offline-capable, auto-sync saat kembali online |
 
 ---
@@ -284,6 +286,7 @@ Lihat `.env.example` untuk daftar lengkap. Yang **wajib** dikonfigurasi:
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `GOOGLE_REDIRECT_URI` | OAuth callback URL |
+| `FRONTEND_URL` | URL frontend untuk redirect setelah OAuth Calendar |
 | `ALLOWED_DOMAINS` | Domain email yang diizinkan login |
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `NEXT_PUBLIC_API_URL` | URL backend API (dari sisi browser) |
@@ -318,15 +321,38 @@ Setelah aplikasi berjalan:
 
 ## Status
 
-MVP Ready — Semua fitur inti sudah terimplementasi dan siap deploy.
+**v4.2** — MVP Ready dengan fitur kolaborasi, LLM integration, dan calendar OAuth. Siap deploy.
 
 ---
 
 ## Changelog Terbaru
 
+### v4.2 — Kolaborasi, LLM Integration, Calendar OAuth
+
+**Fitur Baru:**
+- **Fitur Kolaborasi** — SA/Sales bisa menambahkan kolaborator (viewer atau contributor) ke proyek. Contributor bisa menambah Activity Log. Model `ProjectCollaborator` dengan endpoint CRUD lengkap.
+- **SA Reassign** — Lead SA bisa reassign SA yang sedang bertugas ke SA lain langsung dari detail proyek.
+- **AI Note Polishing (Action Items)** — Activity log kini menampilkan action items hasil polishing AI (discussion points + action items dengan PIC).
+- **LLM-Powered Summarize** — Tombol "Summarize" di Project Story menggunakan Gemini AI untuk generate ringkasan aktivitas proyek.
+- **LLM BANT Scoring** — Scoring engine di backend menggunakan Gemini untuk analisis kelengkapan data BANT dari dokumen.
+- **Calendar OAuth Flow** — Sinkronisasi Google Calendar menggunakan OAuth terpisah dengan token di URL hash (tidak dikirim ke server).
+- **BANT Pass/Fail Display** — Frontend hanya menampilkan "BANT Passed" atau "BANT not passed" (skor numerik disembunyikan, dihitung di backend).
+- **Detail BANT Tetap Ditampilkan** — Informasi dasar proyek (Budget MRR, PIC Customer, Kebutuhan Teknis, Target Timeline) tetap ditampilkan sebagai info proyek.
+- **Release Script** — Script `scripts/release.sh` untuk build & push image Docker hanya dengan specify versi (`./scripts/release.sh v4.2`).
+
+**Bug Fixes:**
+- **Calendar Sync 502** — Implementasi frontend Google OAuth token exchange untuk calendar sync (sebelumnya error 502).
+- **Missing `FRONTEND_URL`** — Menambahkan field `FRONTEND_URL` ke Settings class yang dibutuhkan endpoint `/calendar/auth-url`.
+- **TypeScript Type Errors** — Fix type mismatch `role: string` ke `"viewer" | "contributor"` di interface ProjectDetail.
+- **TypeScript Null Handling** — Fix `boolean | null` tidak assignable ke `boolean | undefined` di atribut `disabled` (optional chaining).
+- **Missing `uuid` Import** — Fix import `uuid` yang hilang di `assignment.py`.
+- **OAuth Callback Redirect** — Fix redirect URL setelah Google OAuth callback agar kembali ke frontend dashboard.
+- **Auto-Create DB Tables** — Tabel database otomatis dibuat saat startup jika belum ada (memudahkan deployment baru).
+
+### v4.1 — Dashboard & UI Enhancements
+
 - **Assign SA dari Detail Proyek** — Lead SA bisa assign SA langsung dari halaman detail proyek (berstatus Pending Assignment)
 - **Edit Proyek** — Tombol Edit di halaman detail proyek untuk update nama, customer, DQ, BANT detail
-- **Summarize Button** — Tombol "Summarize" di Project Story untuk generate ringkasan aktivitas proyek
 - **Detail BANT Deskriptif** — Tampilkan nominal MRR, nama/jabatan/email PIC, kebutuhan teknis, timeline (bukan skor numerik)
 - **Search & Filter Proyek** — Search bar + dropdown filter status di halaman listing proyek
 - **Utilisasi SA per Bulan** — Tabel jam kerja per SA per bulan dengan filter tahun dan per individu
