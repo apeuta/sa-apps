@@ -96,6 +96,39 @@ async function proxyRequest(
     // Read response body
     const body = await response.text();
 
+    // Special handling: auth/callback → redirect ke frontend callback page
+    // Google OAuth redirect ke /api/v1/auth/callback (API route), bukan
+    // frontend page. Jadi kita perlu redirect ke /auth/callback dengan data.
+    if (path === "auth/callback") {
+      if (response.status === 200) {
+        try {
+          const data = JSON.parse(body);
+          if (data.tokens && data.user) {
+            const frontendCallbackUrl = new URL("/auth/callback", request.url);
+            frontendCallbackUrl.searchParams.set("access_token", data.tokens.access_token);
+            frontendCallbackUrl.searchParams.set("refresh_token", data.tokens.refresh_token);
+            frontendCallbackUrl.searchParams.set("user", encodeURIComponent(JSON.stringify(data.user)));
+            console.log(`[API Proxy] ← auth/callback sukses, redirect ke /auth/callback`);
+            return NextResponse.redirect(frontendCallbackUrl);
+          }
+        } catch (e) {
+          console.error(`[API Proxy] ERROR parsing auth/callback response:`, e);
+        }
+      } else {
+        // Error dari backend (403 domain_not_allowed, dll) → redirect ke login
+        let errorCode = "auth_failed";
+        try {
+          const errData = JSON.parse(body);
+          if (response.status === 403) errorCode = "domain_not_allowed";
+          else if (errData?.detail) errorCode = errData.detail;
+        } catch (e) { /* ignore */ }
+        console.log(`[API Proxy] ← auth/callback error ${response.status}, redirect ke /login`);
+        return NextResponse.redirect(
+          new URL(`/login?error=${errorCode}`, request.url)
+        );
+      }
+    }
+
     return new NextResponse(body, {
       status: response.status,
       statusText: response.statusText,

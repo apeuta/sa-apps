@@ -31,6 +31,9 @@ function CallbackContent() {
     const processCallback = async () => {
       setLoading(true);
 
+      const accessToken = searchParams.get("access_token");
+      const refreshToken = searchParams.get("refresh_token");
+      const userParam = searchParams.get("user");
       const code = searchParams.get("code");
       const error = searchParams.get("error");
 
@@ -40,6 +43,36 @@ function CallbackContent() {
         return;
       }
 
+      // Handle redirect dari API proxy (tokens sudah ada di URL)
+      if (accessToken && userParam) {
+        try {
+          const userData = JSON.parse(decodeURIComponent(userParam));
+
+          // Simpan tokens ke localStorage
+          localStorage.setItem("access_token", accessToken);
+          if (refreshToken) {
+            localStorage.setItem("refresh_token", refreshToken);
+          }
+
+          // Update auth store dengan data user
+          setUser({
+            id: userData.id,
+            email: userData.email,
+            full_name: userData.name || userData.full_name,
+            role: userData.role,
+            avatar_url: userData.avatar_url,
+          });
+
+          // Redirect ke dashboard
+          router.replace("/");
+        } catch (err) {
+          console.error("Error processing token from URL:", err);
+          router.replace("/login?error=auth_failed");
+        }
+        return;
+      }
+
+      // Handle jika tidak ada code maupun token
       if (!code) {
         router.replace("/login?error=auth_failed");
         return;
