@@ -58,7 +58,7 @@ services:
       NEXT_PUBLIC_GOOGLE_CLIENT_ID: "356073523772-fnom4m5rf92rmc31kp57jeeig5qqp6bn.apps.googleusercontent.com"
       BACKEND_URL: "http://backend:8000"
     ports:
-      - "8080:3000"
+      - "3535:3000"
     networks:
       - sa-network
 
