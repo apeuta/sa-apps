@@ -18,7 +18,7 @@ from app.services.llm_provider import llm_factory
 
 # Import semua model agar terdaftar di Base.metadata
 from app.models import (  # noqa: F401
-    User, Project, Document, ActivityLog,
+    User, Project, ProjectCollaborator, Document, ActivityLog,
     NotificationLog, AuditLog, SLATracking,
 )
 from app.api.auth import router as auth_router
@@ -34,6 +34,7 @@ from app.api.sla import router as sla_router
 from app.api.notifications import router as notifications_router
 from app.api.handover import router as handover_router
 from app.api.admin import router as admin_router
+from app.api.collaborators import router as collaborators_router
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ app.include_router(sla_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(handover_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
+app.include_router(collaborators_router, prefix="/api/v1")
 
 
 @app.on_event("startup")

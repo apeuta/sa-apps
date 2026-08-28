@@ -250,18 +250,16 @@ async def get_project_story(
 
 # Prompt untuk summarize activity logs
 SUMMARIZE_PROMPT = """Anda adalah asisten yang merangkum aktivitas proyek pre-sales.
-Berikut adalah daftar aktivitas log dari sebuah proyek. Buatlah ringkasan yang informatif dan ringkas dalam bahasa Indonesia.
+Berikut adalah daftar aktivitas log dari sebuah proyek. Buatlah ringkasan dalam bahasa Indonesia.
 
 Ringkasan harus mencakup:
-1. Total durasi kerja dan jumlah aktivitas
-2. Breakdown aktivitas per kategori (subtask category)
-3. Progress utama yang telah dicapai
-4. Area yang memerlukan perhatian lebih (jika ada)
+1. Progress utama yang telah dicapai pada proyek
+2. Area atau tugas yang memerlukan perhatian lebih / tindak lanjut
 
 Data aktivitas:
 {activity_data}
 
-Berikan ringkasan dalam 2-3 paragraf yang mudah dibaca."""
+Berikan ringkasan dalam 1 paragraf yang padat dan mudah dibaca."""
 
 
 @router.post(

@@ -87,3 +87,21 @@ export async function assignProject(
     body: { sa_id: saId },
   });
 }
+
+/**
+ * Reassign (ubah) SA yang ditugaskan pada proyek
+ * Hanya bisa dilakukan oleh Lead_SA / Admin
+ *
+ * @param projectId - ID proyek yang akan di-reassign
+ * @param saId - ID SA baru
+ * @returns Data reassignment yang berhasil
+ */
+export async function reassignProject(
+  projectId: string,
+  saId: string
+): Promise<{ id_project: string; assigned_sa: string; assigned_sa_name: string; status: string }> {
+  return apiRequest(`/projects/${projectId}/reassign`, {
+    method: "POST",
+    body: { sa_id: saId },
+  });
+}

@@ -32,6 +32,16 @@ interface Project {
   project_name: string;
 }
 
+interface ActionItem {
+  description: string;
+  pic?: string | null;
+}
+
+interface AiPolishedNotes {
+  discussion_points: string[];
+  action_items: ActionItem[];
+}
+
 interface ActivityLogFormProps {
   /** Daftar proyek yang tersedia untuk dipilih */
   projects: Project[];
@@ -56,6 +66,7 @@ export function ActivityLogForm({ projects, onSuccess }: ActivityLogFormProps) {
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [polishedNotes, setPolishedNotes] = useState<AiPolishedNotes | null>(null);
 
   // Auto-dismiss toast setelah 3 detik
   const showToast = useCallback((type: "success" | "error", message: string) => {
@@ -101,7 +112,7 @@ export function ActivityLogForm({ projects, onSuccess }: ActivityLogFormProps) {
 
       setIsSubmitting(true);
       try {
-        await apiRequest("/activity-logs", {
+        const result = await apiRequest<{ ai_polished_notes?: AiPolishedNotes }>("/activity-logs", {
           method: "POST",
           body: {
             id_project: idProject,
@@ -110,6 +121,13 @@ export function ActivityLogForm({ projects, onSuccess }: ActivityLogFormProps) {
             raw_notes: rawNotes.trim(),
           },
         });
+
+        // Tampilkan action items dari AI polishing jika ada
+        if (result.ai_polished_notes?.action_items?.length) {
+          setPolishedNotes(result.ai_polished_notes);
+        } else {
+          setPolishedNotes(null);
+        }
 
         showToast("success", "Activity log berhasil disimpan");
         // Reset form
@@ -294,6 +312,32 @@ export function ActivityLogForm({ projects, onSuccess }: ActivityLogFormProps) {
           )}
         </button>
       </form>
+
+      {/* Action Items dari AI polishing */}
+      {polishedNotes && polishedNotes.action_items.length > 0 && (
+        <div className="mt-5 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+          <h3 className="text-sm font-semibold text-amber-800 mb-2">Action Items</h3>
+          <ul className="space-y-1.5">
+            {polishedNotes.action_items.map((item, idx) => (
+              <li key={idx} className="flex items-start gap-2 text-sm text-amber-900">
+                <span className="text-amber-500 mt-0.5">•</span>
+                <span>
+                  {item.description}
+                  {item.pic && (
+                    <span className="text-amber-600 ml-1">(PIC: {item.pic})</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <button
+            onClick={() => setPolishedNotes(null)}
+            className="mt-3 text-xs text-amber-600 hover:text-amber-800 underline"
+          >
+            Tutup
+          </button>
+        </div>
+      )}
     </div>
   );
 }

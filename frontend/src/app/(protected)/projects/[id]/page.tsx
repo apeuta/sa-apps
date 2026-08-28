@@ -8,6 +8,8 @@ import { useAuthStore } from "@/store/auth";
 import { HandoverModal } from "@/components/HandoverModal";
 import { HandoverConfigForm } from "@/components/HandoverConfigForm";
 import { AssignmentModal } from "@/components/AssignmentModal";
+import { ReassignModal } from "@/components/ReassignModal";
+import { CollaboratorSection } from "@/components/CollaboratorSection";
 import type { HandoverStatus } from "@/lib/api/handover";
 
 /**
@@ -43,6 +45,16 @@ interface ProjectDetail {
   target_submit: string | null;
   sales_pic: { id: string | null; name: string | null; email: string | null };
   assigned_sa: { id: string | null; name: string | null; email: string | null } | null;
+  collaborators: {
+    id: string;
+    user_id: string;
+    user_name: string;
+    user_email: string;
+    user_role: string;
+    role: string;
+    added_by_name: string;
+    created_at: string;
+  }[];
   gdrive_folder_id: string | null;
   created_at: string;
   updated_at: string;
@@ -58,6 +70,7 @@ export default function ProjectDetailPage() {
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showReassignModal, setShowReassignModal] = useState(false);
 
   // Fetch detail proyek
   const { data: project, error: projError, isLoading } = useSWR<ProjectDetail>(
@@ -138,6 +151,18 @@ export default function ProjectDetailPage() {
                              rounded-lg hover:bg-primary-700 transition-colors min-h-[36px]"
                 >
                   Assign SA
+                </button>
+              )}
+              {/* Tombol Reassign SA — hanya Lead_SA/Admin dan proyek sudah punya SA */}
+              {project.assigned_sa &&
+                ["Assigned", "Ready", "Pending Assignment"].includes(project.status) &&
+                (user?.role === "Lead_SA" || user?.role === "Admin") && (
+                <button
+                  onClick={() => setShowReassignModal(true)}
+                  className="px-3 py-1.5 text-sm font-medium text-amber-700 border border-amber-300
+                             rounded-lg hover:bg-amber-50 transition-colors min-h-[36px]"
+                >
+                  Reassign SA
                 </button>
               )}
               {/* Tombol Edit */}
@@ -317,6 +342,12 @@ export default function ProjectDetailPage() {
           {/* Section: Activity Log Proyek */}
           <ProjectActivitySection projectId={projectId} />
 
+          {/* Section: Kolaborator */}
+          <CollaboratorSection
+            projectId={projectId}
+            initialCollaborators={project.collaborators}
+          />
+
           {/* Section: Konfigurasi Handover */}
           {shouldShowConfigForm && (
             <div className="bg-white border border-amber-200 rounded-lg p-5">
@@ -353,6 +384,21 @@ export default function ProjectDetailPage() {
           onClose={() => setShowAssignModal(false)}
           onSuccess={() => {
             setShowAssignModal(false);
+            window.location.reload();
+          }}
+        />
+      )}
+
+      {/* Modal Reassign SA */}
+      {showReassignModal && project && (
+        <ReassignModal
+          projectId={project.id_project}
+          projectName={project.project_name}
+          customerName={project.customer_name}
+          currentSAName={project.assigned_sa?.name}
+          onClose={() => setShowReassignModal(false)}
+          onSuccess={() => {
+            setShowReassignModal(false);
             window.location.reload();
           }}
         />
@@ -430,6 +476,10 @@ function ProjectActivitySection({ projectId }: { projectId: string }) {
       subtask_category: string;
       duration_hours: number;
       raw_notes: string;
+      ai_polished_notes?: {
+        discussion_points: string[];
+        action_items: { description: string; pic?: string | null }[];
+      } | null;
       created_at: string;
     }[];
     total: number;
@@ -535,6 +585,22 @@ function ProjectActivitySection({ projectId }: { projectId: string }) {
                   </span>
                 </div>
                 <p className="text-sm text-neutral-700 line-clamp-2">{log.raw_notes}</p>
+                {/* Action Items dari AI polishing */}
+                {log.ai_polished_notes?.action_items && log.ai_polished_notes.action_items.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {log.ai_polished_notes.action_items.map((item, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800"
+                        title={item.description}
+                      >
+                        <span className="text-amber-500">▸</span>
+                        {item.description}
+                        {item.pic && <span className="text-amber-600">(PIC: {item.pic})</span>}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ))}

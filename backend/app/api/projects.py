@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.models.project import Project
+from app.models.project_collaborator import ProjectCollaborator
 from app.models.user import User
 from app.schemas.project import FileUploadResult, ProjectResponse
 from app.schemas.response import error_response, success_response
@@ -308,6 +309,27 @@ async def get_project_detail(
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
 
+    # Validasi akses: Admin/Lead_SA selalu bisa, Sales PIC / assigned SA bisa,
+    # kolaborator bisa, lainnya 403
+    is_privileged = current_user.role in ("Lead_SA", "Admin")
+    is_sales_pic = project.sales_pic == current_user.id
+    is_assigned_sa = project.assigned_sa == current_user.id
+
+    # Cek kolaborator
+    collab_result = await db.execute(
+        select(ProjectCollaborator).where(
+            ProjectCollaborator.id_project == project_id,
+            ProjectCollaborator.user_id == current_user.id,
+        )
+    )
+    is_collaborator = collab_result.scalar_one_or_none() is not None
+
+    if not (is_privileged or is_sales_pic or is_assigned_sa or is_collaborator):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki akses ke proyek ini.",
+        )
+
     # Fetch nama Sales PIC
     sales_name = None
     sales_email = None
@@ -332,6 +354,31 @@ async def get_project_detail(
             sa_name = sa_user.name
             sa_email = sa_user.email
 
+    # Fetch collaborators
+    collabs_result = await db.execute(
+        select(ProjectCollaborator)
+        .where(ProjectCollaborator.id_project == project_id)
+        .order_by(ProjectCollaborator.created_at.desc())
+    )
+    collaborators = collabs_result.scalars().all()
+
+    collab_list = []
+    for c in collaborators:
+        c_user_result = await db.execute(select(User).where(User.id == c.user_id))
+        c_user = c_user_result.scalar_one_or_none()
+        c_adder_result = await db.execute(select(User).where(User.id == c.added_by))
+        c_adder = c_adder_result.scalar_one_or_none()
+        collab_list.append({
+            "id": str(c.id),
+            "user_id": str(c.user_id),
+            "user_name": c_user.name if c_user else "Unknown",
+            "user_email": c_user.email if c_user else "unknown",
+            "user_role": c_user.role if c_user else "Unknown",
+            "role": c.role,
+            "added_by_name": c_adder.name if c_adder else "Unknown",
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        })
+
     data = {
         "id_project": project.id_project,
         "project_name": project.project_name,
@@ -352,6 +399,7 @@ async def get_project_detail(
             "name": sa_name,
             "email": sa_email,
         } if project.assigned_sa else None,
+        "collaborators": collab_list,
         "gdrive_folder_id": project.gdrive_folder_id,
         "created_at": project.created_at.isoformat() if project.created_at else None,
         "updated_at": project.updated_at.isoformat() if project.updated_at else None,

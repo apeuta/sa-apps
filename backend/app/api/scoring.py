@@ -55,6 +55,30 @@ async def score_manual(
         db=db,
     )
 
+    # Simpan metadata deskriptif ke bant_detail (jika ada)
+    # Metadata ini ditampilkan di halaman detail proyek
+    metadata = {}
+    if body.budget_detail and body.budget_detail.mrr is not None:
+        metadata["budget_mrr"] = body.budget_detail.mrr
+    if body.authority_detail:
+        if body.authority_detail.name:
+            metadata["pic_name"] = body.authority_detail.name
+        if body.authority_detail.position:
+            metadata["pic_position"] = body.authority_detail.position
+        if body.authority_detail.email:
+            metadata["pic_email"] = body.authority_detail.email
+    if body.need_detail:
+        metadata["need_description"] = body.need_detail
+    if body.timeline_detail:
+        metadata["timeline_target"] = body.timeline_detail
+
+    if metadata:
+        # Merge dengan existing bant_detail (sub-skor numerik)
+        existing_detail = project.bant_detail or {}
+        existing_detail.update(metadata)
+        project.bant_detail = existing_detail
+        await db.commit()
+
     return success_response(
         data=bant_result.model_dump(),
         message=f"BANT scoring manual berhasil. Total skor: {bant_result.total_score}.",

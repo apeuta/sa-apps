@@ -560,3 +560,122 @@ async def assign_sa_to_project(
         data=response_data.model_dump(mode="json"),
         message=f"Proyek '{project.project_name}' berhasil ditugaskan ke {sa_user.name}.",
     )
+
+
+@router.post(
+    "/projects/{project_id}/reassign",
+    summary="Reassign SA ke proyek",
+    description=(
+        "Mengubah SA yang ditugaskan pada proyek yang sudah berstatus 'Assigned' atau 'Ready'. "
+        "Hanya Lead_SA dan Admin yang dapat melakukan reassignment."
+    ),
+)
+async def reassign_sa_to_project(
+    project_id: str,
+    body: AssignRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Reassign SA ke proyek yang sudah memiliki SA sebelumnya.
+
+    Flow:
+    1. Validasi role Lead_SA atau Admin
+    2. Validasi proyek ada dan berstatus 'Assigned' atau 'Ready'
+    3. Validasi SA baru ada dan role-nya 'SA'
+    4. Update proyek: assigned_sa ke SA baru
+    5. Insert notifikasi ke SA baru
+    """
+    _require_lead_sa(current_user)
+
+    # === 1. Validasi proyek ada ===
+    project_result = await db.execute(
+        select(Project).where(Project.id_project == project_id)
+    )
+    project = project_result.scalar_one_or_none()
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
+        )
+
+    if project.status not in ("Assigned", "Ready", "Pending Assignment"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Proyek tidak bisa di-reassign karena statusnya '{project.status}'. "
+                f"Hanya proyek berstatus 'Assigned', 'Ready', atau 'Pending Assignment' yang bisa di-reassign."
+            ),
+        )
+
+    # === 2. Validasi SA baru ada dan role-nya SA ===
+    sa_result = await db.execute(
+        select(User).where(User.id == body.sa_id)
+    )
+    sa_user = sa_result.scalar_one_or_none()
+
+    if sa_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"SA dengan ID '{body.sa_id}' tidak ditemukan.",
+        )
+
+    if sa_user.role != "SA":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"User '{sa_user.name}' memiliki role '{sa_user.role}', "
+                f"bukan 'SA'. Hanya user dengan role SA yang bisa ditugaskan."
+            ),
+        )
+
+    # === 3. Update proyek ===
+    now = datetime.now(timezone.utc)
+    old_sa_id = project.assigned_sa
+    project.assigned_sa = body.sa_id
+    project.assigned_at = now
+    project.updated_at = now
+
+    # Jika status masih Pending Assignment, ubah ke Assigned
+    if project.status == "Pending Assignment":
+        project.status = "Assigned"
+
+    # === 4. Insert notifikasi ke SA baru ===
+    notification = NotificationLog(
+        id=_generate_notification_id(),
+        event_type="reassignment",
+        recipient_user_id=body.sa_id,
+        channel="in-app",
+        status="sent",
+        reference_id=project_id,
+        metadata={
+            "project_name": project.project_name,
+            "customer_name": project.customer_name,
+            "assigned_by": current_user.name,
+            "previous_sa_id": str(old_sa_id) if old_sa_id else None,
+        },
+        created_at=now,
+    )
+    db.add(notification)
+
+    await db.commit()
+    await db.refresh(project)
+
+    logger.info(
+        f"Proyek {project_id} di-reassign ke SA {sa_user.email} "
+        f"oleh {current_user.email} (sebelumnya: {old_sa_id})"
+    )
+
+    # === 5. Build response ===
+    return success_response(
+        data={
+            "id_project": project.id_project,
+            "project_name": project.project_name,
+            "assigned_sa": str(project.assigned_sa),
+            "assigned_sa_name": sa_user.name,
+            "assigned_sa_email": sa_user.email,
+            "status": project.status,
+        },
+        message=f"SA proyek '{project.project_name}' berhasil diubah ke {sa_user.name}.",
+    )
