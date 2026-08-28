@@ -145,10 +145,10 @@ export function ProjectCard({
         {bantScore !== null && bantScore !== undefined && (
           <span
             className={`font-medium ${
-              bantScore >= 60 ? "text-green-600" : "text-orange-600"
+              bantScore >= 60 ? "text-green-600" : "text-amber-600"
             }`}
           >
-            {bantScore >= 60 ? "BANT Passed" : "Need Confirmation"}
+            {bantScore >= 60 ? "BANT Passed" : "BANT not passed"}
           </span>
         )}
       </div>

@@ -128,12 +128,14 @@ export function AssignmentModal({
 
         {/* Body — daftar SA */}
         <div className="flex-1 overflow-y-auto p-5">
-          {/* Info BANT Score */}
+          {/* Info BANT Status */}
           <div className="mb-4 p-3 bg-neutral-50 rounded-lg">
             <div className="flex items-center gap-4 text-sm">
-              <span className="text-neutral-500">BANT Score:</span>
-              <span className="font-semibold text-neutral-900">
-                {project.bant_score}
+              <span className="text-neutral-500">BANT Status:</span>
+              <span className={`font-semibold ${
+                project.bant_score >= 60 ? "text-green-600" : "text-amber-600"
+              }`}>
+                {project.bant_score >= 60 ? "Passed" : "Not Passed"}
               </span>
               {project.use_case_tags.length > 0 && (
                 <div className="flex gap-1.5 flex-wrap">

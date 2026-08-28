@@ -16,7 +16,7 @@ import type { HandoverStatus } from "@/lib/api/handover";
  * Menampilkan informasi lengkap proyek:
  * - Header: nama proyek, customer, status
  * - Info PIC: Sales yang submit, SA yang ditugaskan
- * - Detail BANT: skor total + breakdown per kriteria
+ * - Status BANT: passed / not passed (skor dihitung di backend)
  * - Info proyek: DQ Number, target submit, use case tags
  * - Activity logs terkait proyek
  *
@@ -231,53 +231,34 @@ export default function ProjectDetailPage() {
             </a>
           </div>
 
-          {/* Section: Detail BANT (data deskriptif dari isian Sales) */}
-          {project.bant_detail && (
-            <div className="bg-white border border-neutral-200 rounded-lg p-5">
-              <h2 className="text-sm font-semibold text-neutral-700 mb-3">Detail BANT</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                {/* Budget */}
-                <div className="p-3 bg-neutral-50 rounded-lg">
-                  <p className="text-xs font-medium text-neutral-500 mb-1">Budget (MRR)</p>
-                  <p className="text-neutral-800 font-medium">
-                    {project.bant_detail.budget_mrr
-                      ? `Rp ${Number(project.bant_detail.budget_mrr).toLocaleString("id-ID")}`
-                      : <span className="text-red-600 font-bold">Belum diinput</span>}
-                  </p>
-                </div>
-                {/* PIC / Authority */}
-                <div className="p-3 bg-neutral-50 rounded-lg">
-                  <p className="text-xs font-medium text-neutral-500 mb-1">PIC Customer</p>
-                  {project.bant_detail.pic_name ? (
-                    <div>
-                      <p className="text-neutral-800 font-medium">{project.bant_detail.pic_name}</p>
-                      <p className="text-xs text-neutral-500">
-                        {project.bant_detail.pic_position}
-                        {project.bant_detail.pic_email && ` — ${project.bant_detail.pic_email}`}
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-red-600 font-bold">Belum diinput</p>
-                  )}
-                </div>
-                {/* Need */}
-                <div className="p-3 bg-neutral-50 rounded-lg md:col-span-2">
-                  <p className="text-xs font-medium text-neutral-500 mb-1">Kebutuhan Teknis</p>
-                  <p className="text-neutral-800">
-                    {project.bant_detail.need_description || <span className="text-red-600 font-bold">Belum diinput</span>}
-                  </p>
-                </div>
-                {/* Timeline */}
-                <div className="p-3 bg-neutral-50 rounded-lg">
-                  <p className="text-xs font-medium text-neutral-500 mb-1">Target Timeline</p>
-                  <p className="text-neutral-800">
-                    {project.bant_detail.timeline_target
-                      ? new Date(project.bant_detail.timeline_target).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
-                      : project.target_submit
-                        ? new Date(project.target_submit).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
-                        : <span className="text-red-600 font-bold">Belum diinput</span>}
-                  </p>
-                </div>
+          {/* Section: Status BANT — hanya tampilkan pass/fail, skor dihitung di backend */}
+          {project.bant_score !== null && project.bant_score !== undefined && (
+            <div
+              className={`rounded-lg p-4 border ${
+                project.bant_score >= 60
+                  ? "bg-green-50 border-green-200"
+                  : "bg-amber-50 border-amber-200"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {project.bant_score >= 60 ? (
+                  <svg className="w-5 h-5 text-green-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                )}
+                <p
+                  className={`text-sm font-medium ${
+                    project.bant_score >= 60 ? "text-green-700" : "text-amber-700"
+                  }`}
+                >
+                  {project.bant_score >= 60
+                    ? "BANT Passed, waiting for assignment"
+                    : "BANT not passed, please refine your input"}
+                </p>
               </div>
             </div>
           )}

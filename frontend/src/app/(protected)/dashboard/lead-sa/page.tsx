@@ -580,20 +580,18 @@ function ProjectCard({
           </p>
         </div>
 
-        {/* BANT Score badge */}
+        {/* BANT Status badge */}
         <span
           className={`
             shrink-0 px-2.5 py-1 text-xs font-semibold rounded-full
             ${
-              project.bant_score >= 80
+              project.bant_score >= 60
                 ? "bg-green-100 text-green-700"
-                : project.bant_score >= 60
-                  ? "bg-blue-100 text-blue-700"
-                  : "bg-yellow-100 text-yellow-700"
+                : "bg-amber-100 text-amber-700"
             }
           `}
         >
-          BANT {project.bant_score}
+          {project.bant_score >= 60 ? "BANT Passed" : "BANT not passed"}
         </span>
       </div>
 
