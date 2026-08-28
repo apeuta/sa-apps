@@ -1,104 +1,54 @@
-# Docker Compose untuk Portal SA MVP
-# Deploy via Portainer Stack atau docker compose up -d
-# Domain: https://sa-portal.mov.co.id
+version: "3.8"
 
 services:
-  # ============================================
-  # PostgreSQL 15 Database
-  # ============================================
-  database:
+  db:
     image: postgres:15-alpine
     container_name: sa-portal-db
-    restart: on-failure:3
+    restart: always
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-sa_portal}
-      POSTGRES_USER: ${POSTGRES_USER:-sa_portal_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Database password harus diset}
+      POSTGRES_USER: sa_portal
+      POSTGRES_PASSWORD: "qpWOXX001**#"
+      POSTGRES_DB: sa_portal_db
+    ports:
+      - "5433:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sa_portal_user} -d ${POSTGRES_DB:-sa_portal}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      - /opt/docker_srv/sa-portal/postgres-data:/var/lib/postgresql/data
+    networks:
+      - sa-network
 
-  # ============================================
-  # FastAPI Backend (Python 3.11)
-  # ============================================
   backend:
     image: sa-portal-backend:latest
     container_name: sa-portal-backend
-    restart: on-failure:3
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sa_portal_user}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-sa_portal}
-      SECRET_KEY: ${SECRET_KEY:?Secret key harus diset}
-      DEMO_MODE: ${DEMO_MODE:-true}
-      ENVIRONMENT: ${ENVIRONMENT:-production}
-      FRONTEND_URL: ${FRONTEND_URL:-https://sa-portal.mov.co.id}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://sa-portal.mov.co.id}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://sa-portal.mov.co.id/api/v1/auth/callback}
-      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
-      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GDRIVE_SERVICE_ACCOUNT_KEY: ${GDRIVE_SERVICE_ACCOUNT_KEY:-}
-      GMAIL_CREDENTIALS: ${GMAIL_CREDENTIALS:-}
-      GCAL_WEBHOOK_ENDPOINT: ${GCAL_WEBHOOK_ENDPOINT:-}
+    restart: always
     depends_on:
-      database:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 40s
+      - db
+    environment:
+      DATABASE_URL: "postgresql://sa_portal:qpWOXX001%2A%2A%23@db:5432/sa_portal_db"
+    ports:
+      - "8555:8000"
+    volumes:
+      - /opt/docker_srv/sa-portal/backend-data:/app/data
+      - /opt/docker_srv/sa-portal/backend-logs:/app/logs
+    networks:
+      - sa-network
 
-  # ============================================
-  # Next.js Frontend (Node 20)
-  # ============================================
   frontend:
     image: sa-portal-frontend:latest
     container_name: sa-portal-frontend
-    restart: on-failure:3
-    environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://sa-portal.mov.co.id/api/v1}
-      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Portal SA}
-    depends_on:
-      backend:
-        condition: service_healthy
-
-  # ============================================
-  # Nginx Reverse Proxy
-  # ============================================
-  nginx:
-    image: nginx:alpine
-    container_name: sa-portal-nginx
     restart: always
-    ports:
-      - "${NGINX_PORT:-80}:80"
     depends_on:
-      - frontend
       - backend
-    configs:
-      - source: nginx-conf
-        target: /etc/nginx/conf.d/default.conf
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
+    ports:
+      - "3535:3000"
+    volumes:
+      - /opt/docker_srv/sa-portal/frontend-public:/app/public
+    networks:
+      - sa-network
 
-# ============================================
-# Volumes
-# ============================================
-volumes:
-  pgdata:
-    name: sa-portal-pgdata
+volumes: {}
 
-# ============================================
-# Configs (Nginx config via Docker Config)
-# ============================================
-configs:
-  nginx-conf:
-    external: true
-    name: sa-portal-nginx-conf
+networks:
+  sa-network:
+    driver: bridge
