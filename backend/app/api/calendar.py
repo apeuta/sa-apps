@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.models.activity_log import ActivityLog
@@ -36,6 +37,54 @@ from app.services.calendar_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/calendar", tags=["Calendar"])
+
+
+@router.get(
+    "/auth-url",
+    summary="Generate Google OAuth URL untuk Calendar",
+    description=(
+        "Endpoint untuk memulai OAuth flow khusus Google Calendar. "
+        "User akan di-redirect ke Google consent screen. "
+        "Setelah authorize, Google redirect kembali ke frontend dengan token di URL hash."
+    ),
+)
+async def get_calendar_auth_url():
+    """
+    Generate Google OAuth URL khusus calendar scope.
+    User akan di-redirect ke Google untuk authorize akses calendar.
+    Setelah callback, token akan tersedia di URL hash frontend.
+    """
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=error_response(
+                message="Google OAuth belum dikonfigurasi. Calendar sync tidak tersedia."
+            ),
+        )
+
+    # State parameter: "calendar_auth|{frontend_url}"
+    # Callback handler akan detect prefix ini dan handle sebagai calendar auth
+    frontend_url = settings.FRONTEND_URL.rstrip("/")
+    state = f"calendar_auth|{frontend_url}"
+
+    params = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "https://www.googleapis.com/auth/calendar.readonly",
+        "state": state,
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true",
+    }
+
+    query_string = "&".join(f"{k}={v}" for k, v in params.items())
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{query_string}"
+
+    return success_response(
+        data={"auth_url": auth_url},
+        message="URL otorisasi Google Calendar berhasil dibuat.",
+    )
 
 
 def _generate_log_id() -> str:

@@ -3,6 +3,7 @@ API endpoints untuk autentikasi Google OAuth 2.0.
 Menangani login, callback, refresh token, logout, get current user, dan demo login.
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
@@ -30,6 +31,8 @@ from app.services.auth_service import (
     TokenError,
     auth_service,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -168,7 +171,9 @@ async def callback(
 ):
     """
     Handle callback dari Google setelah user melakukan consent.
-    Memproses authorization code, validasi domain, dan buat session.
+    Mendukung 2 flow:
+    - Login biasa: state kosong atau URL redirect biasa
+    - Calendar auth: state diawali 'calendar_auth|' → tukar code, redirect ke frontend dengan token
     """
     # Handle jika user membatalkan consent
     if error:
@@ -183,6 +188,22 @@ async def callback(
             detail="Authorization code tidak ditemukan.",
         )
 
+    # === Calendar Auth Flow ===
+    # State format: "calendar_auth|{frontend_url}"
+    if state and state.startswith("calendar_auth|"):
+        frontend_url = state.split("|", 1)[1] if "|" in state else "/"
+        try:
+            google_tokens = await auth_service._exchange_code(code)
+            gcal_token = google_tokens.get("access_token", "")
+            # Redirect ke frontend dengan token di URL hash (tidak dikirim ke server)
+            redirect_url = f"{frontend_url}#gcal_token={gcal_token}"
+            return RedirectResponse(url=redirect_url)
+        except Exception as e:
+            logger.error(f"Calendar OAuth token exchange failed: {e}")
+            redirect_url = f"{frontend_url}#gcal_error=token_exchange_failed"
+            return RedirectResponse(url=redirect_url)
+
+    # === Normal Login Flow ===
     try:
         user, tokens = await auth_service.handle_callback(code, db)
     except DomainNotAllowedError as e:

@@ -74,12 +74,50 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
   }, []);
 
   /**
-   * Sync calendar — POST /calendar/sync dengan access_token dari localStorage
+   * Check URL hash untuk gcal_token setelah redirect dari Google OAuth.
+   * Format: #gcal_token=xxx atau #gcal_error=xxx
+   */
+  useState(() => {
+    if (typeof window === "undefined") return;
+    const hash = window.location.hash;
+    if (!hash) return;
+
+    const tokenMatch = hash.match(/gcal_token=([^&]+)/);
+    const errorMatch = hash.match(/gcal_error=([^&]+)/);
+
+    if (tokenMatch) {
+      localStorage.setItem("google_calendar_token", decodeURIComponent(tokenMatch[1]));
+      // Bersihkan hash dari URL
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    } else if (errorMatch) {
+      localStorage.removeItem("google_calendar_token");
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  });
+
+  /**
+   * Redirect ke Google OAuth untuk mendapatkan Calendar access token.
+   */
+  const redirectToGoogleAuth = useCallback(async () => {
+    try {
+      const result = await fetcher<{ auth_url: string }>("/calendar/auth-url");
+      window.location.href = result.auth_url;
+    } catch {
+      showToast("error", "Gagal memulai otorisasi Google Calendar");
+    }
+  }, [showToast]);
+
+  /**
+   * Sync calendar — POST /calendar/sync dengan google_calendar_token dari localStorage.
+   * Jika token belum ada, redirect ke Google OAuth dulu.
    */
   const handleSync = useCallback(async () => {
-    const accessToken = localStorage.getItem("access_token");
-    if (!accessToken) {
-      showToast("error", "Token tidak tersedia. Silakan login ulang.");
+    let gcalToken = localStorage.getItem("google_calendar_token");
+
+    if (!gcalToken) {
+      // Belum ada token Google Calendar — redirect ke OAuth
+      showToast("success", "Mengarahkan ke Google untuk otorisasi Calendar...");
+      await redirectToGoogleAuth();
       return;
     }
 
@@ -87,17 +125,23 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
     try {
       const result = await apiRequest<CalendarEvent[]>("/calendar/sync", {
         method: "POST",
-        body: { access_token: accessToken },
+        body: { access_token: gcalToken },
       });
       setEvents(Array.isArray(result) ? result : []);
       showToast("success", "Calendar berhasil disinkronisasi");
     } catch (err: unknown) {
+      // Jika token expired/invalid, hapus dan minta re-auth
       const message = err instanceof Error ? err.message : "Gagal sync calendar";
-      showToast("error", message);
+      if (message.includes("401") || message.includes("403") || message.includes("invalid")) {
+        localStorage.removeItem("google_calendar_token");
+        showToast("error", "Token Google Calendar kedaluwarsa. Silakan coba sync ulang.");
+      } else {
+        showToast("error", message);
+      }
     } finally {
       setIsSyncing(false);
     }
-  }, [showToast]);
+  }, [showToast, redirectToGoogleAuth]);
 
   /**
    * Buka modal mapping untuk event tertentu
