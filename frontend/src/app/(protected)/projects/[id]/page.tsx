@@ -263,6 +263,57 @@ export default function ProjectDetailPage() {
             </div>
           )}
 
+          {/* Section: Detail BANT — informasi dasar proyek (dari dokumen atau isian manual) */}
+          {project.bant_detail && (
+            <div className="bg-white border border-neutral-200 rounded-lg p-5">
+              <h2 className="text-sm font-semibold text-neutral-700 mb-3">Detail BANT</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                {/* Budget */}
+                <div className="p-3 bg-neutral-50 rounded-lg">
+                  <p className="text-xs font-medium text-neutral-500 mb-1">Budget (MRR)</p>
+                  <p className="text-neutral-800 font-medium">
+                    {project.bant_detail.budget_mrr
+                      ? `Rp ${Number(project.bant_detail.budget_mrr).toLocaleString("id-ID")}`
+                      : <span className="text-red-600 font-bold">Belum diinput</span>}
+                  </p>
+                </div>
+                {/* PIC / Authority */}
+                <div className="p-3 bg-neutral-50 rounded-lg">
+                  <p className="text-xs font-medium text-neutral-500 mb-1">PIC Customer</p>
+                  {project.bant_detail.pic_name ? (
+                    <div>
+                      <p className="text-neutral-800 font-medium">{project.bant_detail.pic_name}</p>
+                      <p className="text-xs text-neutral-500">
+                        {project.bant_detail.pic_position}
+                        {project.bant_detail.pic_email && ` — ${project.bant_detail.pic_email}`}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-red-600 font-bold">Belum diinput</p>
+                  )}
+                </div>
+                {/* Need */}
+                <div className="p-3 bg-neutral-50 rounded-lg md:col-span-2">
+                  <p className="text-xs font-medium text-neutral-500 mb-1">Kebutuhan Teknis</p>
+                  <p className="text-neutral-800">
+                    {project.bant_detail.need_description || <span className="text-red-600 font-bold">Belum diinput</span>}
+                  </p>
+                </div>
+                {/* Timeline */}
+                <div className="p-3 bg-neutral-50 rounded-lg">
+                  <p className="text-xs font-medium text-neutral-500 mb-1">Target Timeline</p>
+                  <p className="text-neutral-800">
+                    {project.bant_detail.timeline_target
+                      ? new Date(project.bant_detail.timeline_target).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
+                      : project.target_submit
+                        ? new Date(project.target_submit).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
+                        : <span className="text-red-600 font-bold">Belum diinput</span>}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Section: Activity Log Proyek */}
           <ProjectActivitySection projectId={projectId} />
 
