@@ -56,6 +56,8 @@ export default function ProjectDetailPage() {
 
   const [showHandoverModal, setShowHandoverModal] = useState(true);
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Fetch detail proyek
   const { data: project, error: projError, isLoading } = useSWR<ProjectDetail>(
@@ -76,6 +78,22 @@ export default function ProjectDetailPage() {
     project?.status === "Closed-Win" &&
     handoverStatus &&
     (!handoverStatus.pmo_email || !handoverStatus.delivery_email);
+
+  const canDelete = user?.role === "Lead_SA" || user?.role === "Admin";
+
+  const handleDeleteProject = async () => {
+    if (!project) return;
+    setIsDeleting(true);
+    try {
+      await apiRequest(`/projects/${project.id_project}`, { method: "DELETE" });
+      router.push("/");
+    } catch {
+      alert("Gagal menghapus proyek. Silakan coba lagi.");
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -106,6 +124,9 @@ export default function ProjectDetailPage() {
               </h1>
               <p className="text-sm text-neutral-500 mt-1">{project.customer_name}</p>
               <p className="text-xs text-neutral-400 mt-0.5 font-mono">{project.id_project}</p>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                Terakhir Diubah: {new Date(project.updated_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               {/* Tombol Assign SA — hanya Lead_SA/Admin dan status Pending Assignment */}
@@ -127,6 +148,16 @@ export default function ProjectDetailPage() {
               >
                 Edit
               </button>
+              {/* Tombol Hapus — hanya Lead_SA/Admin */}
+              {canDelete && (
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="px-3 py-1.5 text-sm font-medium text-red-600 border border-red-300
+                             rounded-lg hover:bg-red-50 transition-colors min-h-[36px]"
+                >
+                  Hapus
+                </button>
+              )}
               <span
                 className={`inline-block px-3 py-1 rounded-full text-xs font-medium shrink-0 ${
                   project.status === "Closed-Win" ? "bg-green-100 text-green-700"
@@ -158,10 +189,6 @@ export default function ProjectDetailPage() {
               <InfoRow
                 label="Dibuat"
                 value={new Date(project.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
-              />
-              <InfoRow
-                label="Terakhir Diubah"
-                value={new Date(project.updated_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
               />
             </div>
 
@@ -299,6 +326,38 @@ export default function ProjectDetailPage() {
         />
       )}
 
+      {/* Modal konfirmasi hapus proyek */}
+      {showDeleteConfirm && project && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-semibold text-neutral-900 mb-2">Hapus Proyek</h3>
+            <p className="text-sm text-neutral-600 mb-4">
+              Apakah Anda yakin ingin menghapus proyek <strong>{project.project_name}</strong> ({project.id_project})? Tindakan ini tidak dapat dibatalkan.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={isDeleting}
+                className="px-3 py-1.5 text-sm font-medium text-neutral-700 border border-neutral-300
+                           rounded-lg hover:bg-neutral-50 transition-colors min-h-[36px]
+                           disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleDeleteProject}
+                disabled={isDeleting}
+                className="px-3 py-1.5 text-sm font-medium text-white bg-red-600
+                           rounded-lg hover:bg-red-700 transition-colors min-h-[36px]
+                           disabled:opacity-50"
+              >
+                {isDeleting ? "Menghapus..." : "Hapus"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal Closed-Win */}
       {shouldShowHandoverModal && project && (
         <HandoverModal
@@ -347,36 +406,27 @@ function ProjectActivitySection({ projectId }: { projectId: string }) {
   // Hitung total jam
   const totalHours = data?.items.reduce((sum, log) => sum + log.duration_hours, 0) || 0;
 
-  // Generate summary dari activity logs (client-side untuk MVP)
-  const handleSummarize = () => {
+  // Generate summary dari activity logs menggunakan LLM (backend)
+  const handleSummarize = async () => {
     if (!data || data.items.length === 0) return;
     setIsSummarizing(true);
+    setSummary(null);
 
-    // Generate ringkasan dari data yang ada (tanpa LLM untuk MVP)
-    setTimeout(() => {
-      const categories: Record<string, number> = {};
-      let totalH = 0;
-      data.items.forEach((log) => {
-        categories[log.subtask_category] = (categories[log.subtask_category] || 0) + log.duration_hours;
-        totalH += log.duration_hours;
-      });
-
-      const catSummary = Object.entries(categories)
-        .sort((a, b) => b[1] - a[1])
-        .map(([cat, hours]) => `${cat}: ${hours} jam`)
-        .join(", ");
-
-      const latestDate = data.items.length > 0
-        ? new Date(data.items[0].created_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
-        : "";
-
+    try {
+      const result = await apiRequest<{
+        summary: string;
+        total_activities: number;
+        total_hours: number;
+      }>(`/projects/${projectId}/summarize`, { method: "POST" });
+      setSummary(result.summary);
+    } catch (err) {
+      console.error("Summarize failed:", err);
       setSummary(
-        `Total ${data.total} aktivitas dengan ${totalH} jam kerja. ` +
-        `Breakdown: ${catSummary}. ` +
-        `Aktivitas terakhir: ${latestDate}.`
+        "Gagal menghasilkan ringkasan. Silakan coba lagi."
       );
+    } finally {
       setIsSummarizing(false);
-    }, 500);
+    }
   };
 
   if (isLoading) {

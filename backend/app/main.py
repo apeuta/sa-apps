@@ -13,6 +13,8 @@ from app.core.database import Base, engine
 from app.core.exceptions import register_exception_handlers
 from app.core.rate_limiter import RateLimiterMiddleware
 from app.schemas.response import success_response
+from app.services.gemini_adapter import GeminiAdapter
+from app.services.llm_provider import llm_factory
 
 # Import semua model agar terdaftar di Base.metadata
 from app.models import (  # noqa: F401
@@ -88,6 +90,13 @@ async def startup_create_tables():
         logger.info("Database tables checked/created successfully.")
     except Exception as e:
         logger.error(f"Failed to create database tables: {e}", exc_info=True)
+
+    # Register LLM adapter agar scoring engine dan summarize bisa berfungsi
+    try:
+        llm_factory.register_adapter("gemini", GeminiAdapter)
+        logger.info("GeminiAdapter registered in LLM factory.")
+    except Exception as e:
+        logger.error(f"Failed to register GeminiAdapter: {e}", exc_info=True)
 
 
 @app.get("/health")

@@ -139,16 +139,30 @@ async def _trigger_scoring_engine(
         project_id: ID proyek yang baru dibuat.
         valid_files: List tuple (filename, content_bytes, mime_type).
     """
+    from app.core.database import AsyncSessionLocal
+    from app.services.scoring_engine import scoring_engine
+
     logger.info(
         f"[ScoringEngine] Trigger scoring untuk proyek {project_id} "
         f"dengan {len(valid_files)} file."
     )
-    # TODO: Implementasi lengkap di task 5.3 (Scoring_Engine)
-    # Saat ini hanya log — scoring engine akan diimplementasikan terpisah
     try:
-        # Placeholder: akan memanggil ScoringEngine.score_documents()
-        # dari app.services.scoring_engine setelah task 5.3 selesai
-        pass
+        # Buat session baru untuk background task (request session sudah ditutup)
+        async with AsyncSessionLocal() as db:
+            # Konversi format: (filename, content, mime_type) → (content, mime_type, filename)
+            files_for_scoring = [
+                (content, mime_type, filename)
+                for filename, content, mime_type in valid_files
+            ]
+            result = await scoring_engine.score_documents(
+                project_id=project_id,
+                files=files_for_scoring,
+                db=db,
+            )
+            logger.info(
+                f"[ScoringEngine] Scoring selesai untuk proyek {project_id}: "
+                f"total_score={result.total_score}, status={result.status}"
+            )
     except Exception as e:
         logger.error(f"[ScoringEngine] Gagal memproses proyek {project_id}: {e}")
 
@@ -244,13 +258,22 @@ async def list_projects(
     description="Mengembalikan count proyek per status untuk overview dashboard.",
 )
 async def get_status_summary(
+    sales_pic: Optional[str] = Query(None, description="Filter: 'me' untuk proyek milik user login"),
+    assigned_to: Optional[str] = Query(None, description="Filter: 'me' untuk proyek yang ditugaskan ke user login"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Hitung jumlah proyek per status."""
+    """Hitung jumlah proyek per status, dengan opsional filter berdasarkan role."""
+    query = select(Project.status, func.count(Project.id_project))
+
+    # Filter berdasarkan ownership (sama seperti list_projects)
+    if sales_pic == "me":
+        query = query.where(Project.sales_pic == current_user.id)
+    elif assigned_to == "me":
+        query = query.where(Project.assigned_sa == current_user.id)
+
     result = await db.execute(
-        select(Project.status, func.count(Project.id_project))
-        .group_by(Project.status)
+        query.group_by(Project.status)
         .order_by(func.count(Project.id_project).desc())
     )
     rows = result.all()
@@ -337,6 +360,48 @@ async def get_project_detail(
     return success_response(
         data=data,
         message="Detail proyek berhasil diambil.",
+    )
+
+
+@router.delete(
+    "/{project_id}",
+    summary="Hapus proyek",
+    description="Hapus proyek berdasarkan ID. Hanya Lead_SA dan Admin yang dapat menghapus.",
+)
+async def delete_project(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hapus proyek. Hanya tersedia untuk role Lead_SA dan Admin."""
+    # Cek role
+    if current_user.role not in ("Lead_SA", "Admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Hanya Lead SA dan Admin yang dapat menghapus proyek.",
+        )
+
+    result = await db.execute(
+        select(Project).where(Project.id_project == project_id)
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
+        )
+
+    await db.delete(project)
+    await db.commit()
+
+    logger.info(
+        f"Proyek {project_id} dihapus oleh {current_user.email} (role: {current_user.role})"
+    )
+
+    return success_response(
+        data={"id_project": project_id},
+        message=f"Proyek '{project_id}' berhasil dihapus.",
     )
 
 

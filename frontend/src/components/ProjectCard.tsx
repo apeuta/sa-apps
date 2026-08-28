@@ -148,7 +148,7 @@ export function ProjectCard({
               bantScore >= 60 ? "text-green-600" : "text-orange-600"
             }`}
           >
-            BANT: {bantScore}%
+            {bantScore >= 60 ? "BANT Passed" : "Need Confirmation"}
           </span>
         )}
       </div>

@@ -33,6 +33,26 @@ interface SalesProject {
   updated_at: string;
 }
 
+/** Tipe ringkasan proyek per status */
+interface StatusCount {
+  status: string;
+  count: number;
+}
+
+/** Warna badge per status proyek */
+const STATUS_BADGE_COLORS: Record<string, string> = {
+  "Pending Assignment": "bg-yellow-100 text-yellow-700",
+  Assigned: "bg-blue-100 text-blue-700",
+  Ready: "bg-green-100 text-green-700",
+  "Closed-Win": "bg-emerald-100 text-emerald-700",
+  "Need Clarification": "bg-orange-100 text-orange-700",
+  New: "bg-neutral-100 text-neutral-700",
+  Lost: "bg-red-100 text-red-700",
+  "Scoring Pending": "bg-purple-100 text-purple-700",
+  "Manual Review Required": "bg-pink-100 text-pink-700",
+  "Handover Complete": "bg-teal-100 text-teal-700",
+};
+
 export default function SalesDashboard() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
@@ -40,6 +60,12 @@ export default function SalesDashboard() {
   // Fetch proyek milik Sales saat ini, sorted by updated_at descending
   const { data: projects, isLoading } = useSWR<SalesProject[]>(
     user ? "/projects?sales_pic=me&sort=-updated_at" : null,
+    fetcher
+  );
+
+  // Fetch ringkasan status proyek milik Sales
+  const { data: statusSummary, isLoading: isLoadingStatus } = useSWR<StatusCount[]>(
+    user ? "/projects/status-summary?sales_pic=me" : null,
     fetcher
   );
 
@@ -66,6 +92,66 @@ export default function SalesDashboard() {
           + Request Proyek Baru
         </button>
       </div>
+
+      {/* Overview Proyek */}
+      <section>
+        <h2 className="text-lg font-semibold text-neutral-800 mb-4">
+          Overview Proyek
+        </h2>
+
+        {isLoadingStatus && (
+          <div className="rounded-lg border border-neutral-200 bg-white p-5">
+            <div className="space-y-3">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="flex items-center justify-between">
+                  <div className="h-6 w-28 bg-neutral-200 rounded-full animate-pulse" />
+                  <div className="h-6 w-8 bg-neutral-100 rounded animate-pulse" />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!isLoadingStatus && statusSummary && (
+          <div className="rounded-lg border border-neutral-200 bg-white p-5">
+            {statusSummary.length === 0 ? (
+              <p className="text-sm text-neutral-500 text-center py-4">
+                Belum ada data proyek.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {statusSummary.map((item) => (
+                  <div
+                    key={item.status}
+                    className="flex items-center justify-between"
+                  >
+                    <span
+                      className={`
+                        px-2.5 py-1 text-xs font-medium rounded-full
+                        ${STATUS_BADGE_COLORS[item.status] || "bg-neutral-100 text-neutral-600"}
+                      `}
+                    >
+                      {item.status}
+                    </span>
+                    <span className="text-lg font-semibold text-neutral-900">
+                      {item.count}
+                    </span>
+                  </div>
+                ))}
+                {/* Total */}
+                <div className="flex items-center justify-between pt-3 border-t border-neutral-100">
+                  <span className="text-sm font-medium text-neutral-600">
+                    Total
+                  </span>
+                  <span className="text-lg font-bold text-neutral-900">
+                    {statusSummary.reduce((acc, s) => acc + s.count, 0)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Loading skeleton — ditampilkan saat data belum tersedia (Req 19.5) */}
       {isLoading && <ProjectListSkeleton />}

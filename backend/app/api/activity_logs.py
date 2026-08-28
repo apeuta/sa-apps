@@ -28,6 +28,7 @@ from app.schemas.activity_log import (
 )
 from app.schemas.response import error_response, success_response
 from app.services.activity_logger import ActivityLogger
+from app.services.llm_provider import llm_factory
 
 logger = logging.getLogger(__name__)
 
@@ -244,4 +245,122 @@ async def get_project_story(
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=error_response(message="Gagal mengambil project story."),
+        )
+
+
+# Prompt untuk summarize activity logs
+SUMMARIZE_PROMPT = """Anda adalah asisten yang merangkum aktivitas proyek pre-sales.
+Berikut adalah daftar aktivitas log dari sebuah proyek. Buatlah ringkasan yang informatif dan ringkas dalam bahasa Indonesia.
+
+Ringkasan harus mencakup:
+1. Total durasi kerja dan jumlah aktivitas
+2. Breakdown aktivitas per kategori (subtask category)
+3. Progress utama yang telah dicapai
+4. Area yang memerlukan perhatian lebih (jika ada)
+
+Data aktivitas:
+{activity_data}
+
+Berikan ringkasan dalam 2-3 paragraf yang mudah dibaca."""
+
+
+@router.post(
+    "/projects/{id_project}/summarize",
+    summary="Generate LLM summary untuk proyek",
+    description=(
+        "Endpoint untuk menghasilkan ringkasan proyek menggunakan LLM "
+        "berdasarkan semua activity log yang tercatat. "
+        "Memerlukan minimal 1 activity log."
+    ),
+)
+async def summarize_project(
+    id_project: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate ringkasan proyek menggunakan LLM dari activity logs.
+
+    Flow:
+    1. Validasi project ada
+    2. Ambil semua activity log proyek
+    3. Bangun teks data aktivitas
+    4. Kirim ke LLM untuk dirangkum
+    5. Return hasil ringkasan
+    """
+    try:
+        activity_logger = ActivityLogger(db)
+
+        # Ambil SEMUA activity log proyek (tanpa pagination) untuk summary
+        result = await activity_logger.get_project_story(
+            id_project=id_project,
+            page=1,
+            page_size=200,  # Ambil sebanyak mungkin
+        )
+
+        items = result["items"]
+        if not items:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=error_response(
+                    message="Belum ada activity log untuk proyek ini. "
+                    "Tambahkan minimal 1 aktivitas sebelum meminta ringkasan."
+                ),
+            )
+
+        # Bangun teks data aktivitas
+        total_hours = sum(float(log.duration_hours) for log in items)
+        lines = []
+        for log in items:
+            polished = log.ai_polished_notes or {}
+            notes_text = polished.get("structured_notes", log.raw_notes)
+            lines.append(
+                f"- [{log.subtask_category}] {float(log.duration_hours)}h | {notes_text}"
+            )
+        activity_data = "\n".join(lines)
+
+        # Kirim ke LLM
+        prompt = SUMMARIZE_PROMPT.format(activity_data=activity_data)
+        provider = llm_factory.get_provider()
+        llm_response = await provider.complete_text(
+            prompt, temperature=0.3, max_output_tokens=1024
+        )
+
+        if llm_response.status == "success" and llm_response.content:
+            summary_text = llm_response.content
+        else:
+            # Fallback ke ringkasan sederhana jika LLM gagal
+            logger.warning(
+                f"LLM summarize gagal untuk {id_project}: {llm_response.error_message}. "
+                "Menggunakan fallback ringkasan sederhana."
+            )
+            categories: dict[str, float] = {}
+            for log in items:
+                cat = log.subtask_category
+                categories[cat] = categories.get(cat, 0.0) + float(log.duration_hours)
+            cat_summary = ", ".join(
+                f"{cat}: {hours:.1f} jam" for cat, hours in sorted(categories.items(), key=lambda x: -x[1])
+            )
+            latest_date = items[0].created_at.strftime("%d %B %Y")
+            summary_text = (
+                f"Total {len(items)} aktivitas dengan {total_hours:.1f} jam kerja. "
+                f"Breakdown: {cat_summary}. "
+                f"Aktivitas terakhir: {latest_date}."
+            )
+
+        return success_response(
+            data={"summary": summary_text, "total_activities": len(items), "total_hours": total_hours},
+            message="Ringkasan proyek berhasil dihasilkan.",
+        )
+
+    except ValueError as e:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content=error_response(message=str(e)),
+        )
+    except Exception as e:
+        logger.error(f"Gagal generate summary untuk proyek {id_project}: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=error_response(message="Gagal menghasilkan ringkasan. Silakan coba lagi."),
         )
