@@ -6,6 +6,7 @@ Menangani penugasan SA, daftar proyek pending, dan ketersediaan SA.
 import logging
 import random
 import string
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
