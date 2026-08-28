@@ -51,7 +51,7 @@ interface ProjectDetail {
     user_name: string;
     user_email: string;
     user_role: string;
-    role: string;
+    role: "viewer" | "contributor";
     added_by_name: string;
     created_at: string;
   }[];
