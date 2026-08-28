@@ -6,9 +6,9 @@ services:
     container_name: sa-portal-db
     restart: always
     environment:
-      POSTGRES_USER: sa_portal
-      POSTGRES_PASSWORD: "qpWOXX001**#"
-      POSTGRES_DB: sa_portal_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5433:5432"
     volumes:
@@ -29,17 +29,17 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: "postgresql+asyncpg://sa_portal:qpWOXX001%2A%2A%23@db:5432/sa_portal_db"
-      SECRET_KEY: "s3cr3t-k3y-p0rt4l-s4-mv9-pr0d"
-      DEMO_MODE: "true"
-      FRONTEND_URL: "https://sa-portal.mov.co.id"
-      CORS_ORIGINS: "https://sa-portal.mov.co.id"
-      GOOGLE_REDIRECT_URI: "https://sa-portal.mov.co.id/api/v1/auth/callback"
-      ALLOWED_DOMAINS: "mov.co.id"
-      LLM_PROVIDER: "gemini"
-      GEMINI_API_KEY: "AQ.Ab8RN6LzKPzl2iN-MEIOM9a6UJpDo_m1Mtkid7dRZp9MPbnSZQ"
-      GOOGLE_CLIENT_ID: "356073523772-fnom4m5rf92rmc31kp57jeeig5qqp6bn.apps.googleusercontent.com"
-      GOOGLE_CLIENT_SECRET: "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"
+      DATABASE_URL: ${DATABASE_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      DEMO_MODE: ${DEMO_MODE}
+      FRONTEND_URL: ${FRONTEND_URL}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
+      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
     ports:
       - "8555:8000"
     volumes:
@@ -55,8 +55,8 @@ services:
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_GOOGLE_CLIENT_ID: "356073523772-fnom4m5rf92rmc31kp57jeeig5qqp6bn.apps.googleusercontent.com"
-      BACKEND_URL: "http://backend:8000"
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID}
+      BACKEND_URL: ${BACKEND_URL}
     ports:
       - "3535:3000"
     networks:
