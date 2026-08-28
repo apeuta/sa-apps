@@ -13,6 +13,11 @@ services:
       - "5433:5432"
     volumes:
       - /opt/docker_srv/sa-portal/postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sa_portal -d sa_portal_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - sa-network
 
@@ -21,9 +26,20 @@ services:
     container_name: sa-portal-backend
     restart: always
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
-      DATABASE_URL: "postgresql://sa_portal:qpWOXX001%2A%2A%23@db:5432/sa_portal_db"
+      DATABASE_URL: "postgresql+asyncpg://sa_portal:qpWOXX001%2A%2A%23@db:5432/sa_portal_db"
+      SECRET_KEY: "s3cr3t-k3y-p0rt4l-s4-mv9-pr0d"
+      DEMO_MODE: "true"
+      FRONTEND_URL: "https://sa-portal.mov.co.id"
+      CORS_ORIGINS: "https://sa-portal.mov.co.id"
+      GOOGLE_REDIRECT_URI: "https://sa-portal.mov.co.id/api/v1/auth/callback"
+      ALLOWED_DOMAINS: "mov.co.id"
+      LLM_PROVIDER: "gemini"
+      GEMINI_API_KEY: "AQ.Ab8RN6LzKPzl2iN-MEIOM9a6UJpDo_m1Mtkid7dRZp9MPbnSZQ"
+      GOOGLE_CLIENT_ID: "356073523772-fnom4m5rf92rmc31kp57jeeig5qqp6bn.apps.googleusercontent.com"
+      GOOGLE_CLIENT_SECRET: "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"
     ports:
       - "8555:8000"
     volumes:
@@ -39,15 +55,72 @@ services:
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API_URL: http://backend:8000
+      NEXT_PUBLIC_API_URL: "https://sa-portal.mov.co.id/api/v1"
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: "356073523772-fnom4m5rf92rmc31kp57jeelg5qqp6bn.apps.googleusercontent.com"
     ports:
       - "3535:3000"
-    volumes:
-      - /opt/docker_srv/sa-portal/frontend-public:/app/public
     networks:
       - sa-network
 
-volumes: {}
+  nginx:
+    image: nginx:alpine
+    container_name: sa-portal-nginx
+    restart: always
+    ports:
+      - "8080:80"
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - sa-network
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        cat > /etc/nginx/conf.d/default.conf << 'NGINX'
+        server {
+            listen 80;
+            server_name sa-portal.mov.co.id;
+
+            location / {
+                proxy_pass http://frontend:3000;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $$http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $$host;
+                proxy_set_header X-Real-IP $$remote_addr;
+                proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $$scheme;
+            }
+
+            location /api/ {
+                proxy_pass http://backend:8000;
+                proxy_set_header Host $$host;
+                proxy_set_header X-Real-IP $$remote_addr;
+                proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $$scheme;
+                client_max_body_size 100M;
+                proxy_read_timeout 60s;
+            }
+
+            location /health {
+                proxy_pass http://backend:8000/health;
+            }
+
+            location /docs {
+                proxy_pass http://backend:8000/docs;
+            }
+
+            location /redoc {
+                proxy_pass http://backend:8000/redoc;
+            }
+
+            location /openapi.json {
+                proxy_pass http://backend:8000/openapi.json;
+            }
+        }
+        NGINX
+        nginx -g 'daemon off;'
 
 networks:
   sa-network:
