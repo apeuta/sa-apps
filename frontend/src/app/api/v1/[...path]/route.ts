@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
  */
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://backend:8000";
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
 export async function GET(
   request: NextRequest,
@@ -104,7 +105,7 @@ async function proxyRequest(
         try {
           const data = JSON.parse(body);
           if (data.tokens && data.user) {
-            const frontendCallbackUrl = new URL("/auth/callback", request.url);
+            const frontendCallbackUrl = new URL("/auth/callback", FRONTEND_URL);
             frontendCallbackUrl.searchParams.set("access_token", data.tokens.access_token);
             frontendCallbackUrl.searchParams.set("refresh_token", data.tokens.refresh_token);
             frontendCallbackUrl.searchParams.set("user", encodeURIComponent(JSON.stringify(data.user)));
@@ -124,7 +125,7 @@ async function proxyRequest(
         } catch (e) { /* ignore */ }
         console.log(`[API Proxy] ← auth/callback error ${response.status}, redirect ke /login`);
         return NextResponse.redirect(
-          new URL(`/login?error=${errorCode}`, request.url)
+          new URL(`/login?error=${errorCode}`, FRONTEND_URL)
         );
       }
     }
