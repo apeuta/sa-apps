@@ -51,6 +51,18 @@ function LoginContent() {
   const [loadingRole, setLoadingRole] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
 
+  // Cek apakah Google OAuth sudah dikonfigurasi (via backend health atau env)
+  const [oauthConfigured] = useState<boolean>(() => {
+    // Cek dari environment — jika GOOGLE_CLIENT_ID di-set, OAuth configured
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    return !!clientId && clientId.length > 10;
+  });
+
+  const handleGoogleLogin = () => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+    window.location.href = `${apiUrl}/auth/login`;
+  };
+
   const errorMessage =
     error && (ERROR_MESSAGES[error] || "Terjadi kesalahan. Silakan coba lagi.");
 
@@ -200,16 +212,19 @@ function LoginContent() {
           ))}
         </div>
 
-        {/* Google OAuth — disabled/greyed out */}
-        <div className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm opacity-60">
+        {/* Google OAuth — aktif jika backend mengembalikan oauth_configured=true */}
+        <div className={`rounded-xl border border-neutral-200 bg-white p-6 shadow-sm ${oauthConfigured ? "" : "opacity-60"}`}>
           <button
-            disabled
-            className="flex w-full items-center justify-center gap-3 rounded-lg border border-neutral-300 
-                       bg-neutral-100 px-4 py-3 min-h-[44px] text-sm font-medium text-neutral-400 
-                       cursor-not-allowed"
+            disabled={!oauthConfigured}
+            onClick={handleGoogleLogin}
+            className={`flex w-full items-center justify-center gap-3 rounded-lg border px-4 py-3 min-h-[44px] text-sm font-medium transition-colors ${
+              oauthConfigured
+                ? "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 cursor-pointer"
+                : "border-neutral-300 bg-neutral-100 text-neutral-400 cursor-not-allowed"
+            }`}
           >
             {/* Google Logo SVG */}
-            <svg className="h-5 w-5 grayscale" viewBox="0 0 24 24" aria-hidden="true">
+            <svg className={`h-5 w-5 ${oauthConfigured ? "" : "grayscale"}`} viewBox="0 0 24 24" aria-hidden="true">
               <path
                 d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
                 fill="#4285F4"
@@ -227,7 +242,7 @@ function LoginContent() {
                 fill="#EA4335"
               />
             </svg>
-            Google OAuth (Belum dikonfigurasi)
+            {oauthConfigured ? "Login dengan Google" : "Google OAuth (Belum dikonfigurasi)"}
           </button>
         </div>
 
