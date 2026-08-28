@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useAuthStore } from "@/store/auth";
 
 /**
@@ -50,13 +50,18 @@ function LoginContent() {
   const error = searchParams.get("error");
   const [loadingRole, setLoadingRole] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [oauthConfigured, setOauthConfigured] = useState(false);
 
-  // Cek apakah Google OAuth sudah dikonfigurasi (via backend health atau env)
-  const [oauthConfigured] = useState<boolean>(() => {
-    // Cek dari environment — jika GOOGLE_CLIENT_ID di-set, OAuth configured
-    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-    return !!clientId && clientId.length > 10;
-  });
+  // Fetch auth config dari backend saat mount
+  useEffect(() => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+    fetch(`${apiUrl}/auth/config`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.oauth_configured) setOauthConfigured(true);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleGoogleLogin = () => {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";

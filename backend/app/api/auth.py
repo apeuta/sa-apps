@@ -34,6 +34,25 @@ from app.services.auth_service import (
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
+@router.get("/config", summary="Auth Configuration Status")
+async def get_auth_config():
+    """
+    Mengembalikan konfigurasi auth yang aktif.
+    Dipanggil frontend saat halaman login dimuat untuk menentukan
+    tombol mana yang ditampilkan (demo / Google OAuth).
+    Tidak memerlukan autentikasi.
+    """
+    oauth_configured = bool(
+        settings.GOOGLE_CLIENT_ID and
+        settings.GOOGLE_CLIENT_SECRET and
+        len(settings.GOOGLE_CLIENT_ID) > 10
+    )
+    return {
+        "demo_mode": settings.DEMO_MODE,
+        "oauth_configured": oauth_configured,
+    }
+
+
 # === Demo Mode ===
 # Konfigurasi demo users — setiap role punya email dan nama tetap
 DEMO_USERS = {
