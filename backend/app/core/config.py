@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     ALLOWED_DOMAINS: str = ""  # Comma-separated: "domain1.com,domain2.com"
     ROLE_MAPPING: str = "{}"  # JSON string: {"email@domain.com": "Admin", "*@domain.com": "SA"}
 
+    # Frontend
+    FRONTEND_URL: str = "http://localhost:3000"  # URL frontend untuk redirect setelah OAuth
+
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
