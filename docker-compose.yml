@@ -55,8 +55,7 @@ services:
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API_URL: "https://sa-portal.mov.co.id/api/v1"
-      NEXT_PUBLIC_GOOGLE_CLIENT_ID: "356073523772-fnom4m5rf92rmc31kp57jeelg5qqp6bn.apps.googleusercontent.com"
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: "356073523772-fnom4m5rf92rmc31kp57jeeig5qqp6bn.apps.googleusercontent.com"
     ports:
       - "3535:3000"
     networks:

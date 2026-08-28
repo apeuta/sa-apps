@@ -44,7 +44,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
       // Validasi token dengan backend
       try {
         const apiUrl =
-          process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+          process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
         const response = await fetch(`${apiUrl}/auth/me`, {
           headers: {
