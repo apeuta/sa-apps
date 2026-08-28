@@ -54,7 +54,7 @@ function LoginContent() {
 
   // Fetch auth config dari backend saat mount
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
     fetch(`${apiUrl}/auth/config`)
       .then((res) => res.json())
       .then((data) => {
@@ -64,7 +64,7 @@ function LoginContent() {
   }, []);
 
   const handleGoogleLogin = () => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
     window.location.href = `${apiUrl}/auth/login`;
   };
 
@@ -80,7 +80,7 @@ function LoginContent() {
 
     try {
       const apiUrl =
-        process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+        process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
       const response = await fetch(`${apiUrl}/auth/demo-login`, {
         method: "POST",

@@ -9,8 +9,10 @@
  */
 
 // Base URL API backend
+// Jika NEXT_PUBLIC_API_URL tidak di-set saat build, gunakan relative path
+// agar Nginx reverse proxy handle routing ke backend
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+  process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 /**
  * Error class khusus untuk API errors
