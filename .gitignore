@@ -1,6 +1,9 @@
 # Environment variables (berisi secrets)
 .env
 
+# Docker Compose untuk Portainer (berisi credentials)
+docker-compose.portainer.yml
+
 # Dependencies
 node_modules/
 __pycache__/

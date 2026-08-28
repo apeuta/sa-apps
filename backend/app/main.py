@@ -3,13 +3,22 @@ Portal SA MVP — Backend FastAPI Application
 Entry point utama untuk API backend.
 """
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.database import Base, engine
 from app.core.exceptions import register_exception_handlers
 from app.core.rate_limiter import RateLimiterMiddleware
 from app.schemas.response import success_response
+
+# Import semua model agar terdaftar di Base.metadata
+from app.models import (  # noqa: F401
+    User, Project, Document, ActivityLog,
+    NotificationLog, AuditLog, SLATracking,
+)
 from app.api.auth import router as auth_router
 from app.api.scoring import router as scoring_router
 from app.api.projects import router as projects_router
@@ -23,6 +32,8 @@ from app.api.sla import router as sla_router
 from app.api.notifications import router as notifications_router
 from app.api.handover import router as handover_router
 from app.api.admin import router as admin_router
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -61,6 +72,22 @@ app.include_router(sla_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(handover_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
+
+
+@app.on_event("startup")
+async def startup_create_tables():
+    """
+    Buat semua tabel database jika belum ada.
+    Ini memastikan tabel selalu tersedia bahkan jika Alembic migration
+    belum dijalankan secara manual (misalnya di deployment baru).
+    create_all() bersifat idempotent — hanya membuat tabel yang belum ada.
+    """
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables checked/created successfully.")
+    except Exception as e:
+        logger.error(f"Failed to create database tables: {e}", exc_info=True)
 
 
 @app.get("/health")

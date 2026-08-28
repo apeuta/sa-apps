@@ -349,7 +349,14 @@ export default function LeadSADashboard() {
           </div>
         ) : monthlyError ? (
           <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-            <p className="text-sm text-red-700">Gagal memuat data utilisasi.</p>
+            <p className="text-sm text-red-700">
+              Gagal memuat data utilisasi.
+              {(monthlyError as { message?: string })?.message && (
+                <span className="block mt-1 text-xs text-red-500">
+                  {(monthlyError as { message?: string }).message}
+                </span>
+              )}
+            </p>
           </div>
         ) : (
           <MonthlyUtilizationTable
