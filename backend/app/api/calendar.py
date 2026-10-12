@@ -21,7 +21,6 @@ from app.core.dependencies import get_current_user
 from app.models.activity_log import ActivityLog
 from app.models.project import Project
 from app.models.user import User
-from app.schemas.activity_log import default_phase_for_status
 from app.schemas.calendar import (
     CalendarMapRequest,
     CalendarMapResponse,
@@ -184,17 +183,19 @@ async def map_event_to_project(
     - Project tidak ditemukan → 404
     - Event sudah di-map → 409 conflict
     """
-    # Validasi project_id ada di database
-    project_result = await db.execute(
-        select(Project).where(Project.id_project == request.project_id)
-    )
-    project = project_result.scalar_one_or_none()
-
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Proyek dengan ID '{request.project_id}' tidak ditemukan.",
+    # Validasi project hanya untuk aktivitas Project
+    project = None
+    if request.work_type == "Project":
+        project_result = await db.execute(
+            select(Project).where(Project.id_project == request.project_id)
         )
+        project = project_result.scalar_one_or_none()
+
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Proyek dengan ID '{request.project_id}' tidak ditemukan.",
+            )
 
     # Hitung durasi
     if request.duration_hours:
@@ -225,12 +226,14 @@ async def map_event_to_project(
     log_id = _generate_log_id()
     now = datetime.now(timezone.utc)
 
-    # Mapping dari calendar selalu aktivitas Project; fase default dari status proyek
+    # Mapping sesuai work_type: Project (dengan proyek + fase) atau Non-Project.
+    # Konsistensi antar-field sudah divalidasi di CalendarMapRequest.
+    is_project = request.work_type == "Project"
     activity_log = ActivityLog(
         id_log=log_id,
-        work_type="Project",
-        id_project=request.project_id,
-        project_phase=default_phase_for_status(project.status),
+        work_type=request.work_type,
+        id_project=request.project_id if is_project else None,
+        project_phase=request.project_phase if is_project else None,
         sa_id=current_user.id,
         subtask_category=request.subtask_category,
         gcal_event_id=request.gcal_event_id,
@@ -302,7 +305,9 @@ async def map_event_to_project(
     # Response
     map_response = CalendarMapResponse(
         id_log=log_id,
-        id_project=request.project_id,
+        work_type=request.work_type,
+        id_project=request.project_id if is_project else None,
+        project_phase=request.project_phase if is_project else None,
         gcal_event_id=request.gcal_event_id,
         subtask_category=request.subtask_category,
         duration_hours=duration,
