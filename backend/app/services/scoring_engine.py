@@ -23,15 +23,26 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
 from app.models.notification_log import NotificationLog
 from app.models.project import Project
 from app.models.user import User
-from app.schemas.scoring import BANTResult, BANTSubScores, RecommendedDocumentInfo, SimilarProjectResult
+from app.schemas.scoring import (
+    BANTResult,
+    BANTSubScores,
+    RecommendedDocumentInfo,
+    SimilarProjectResult,
+)
 from app.services.llm_provider import LLMResponse, llm_factory
+from app.utils.guardrails import (
+    BANTExtractionResult,
+    check_document_size,
+    strip_code_fence,
+    validate_llm_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -402,24 +413,26 @@ class ScoringEngine:
                     f"Project {project_id}: Ekstraksi BANT dari '{filename}' "
                     f"(attempt {attempt}/{MAX_SCORING_RETRIES})"
                 )
+                # Guardrail dokumen: byte clamp sebelum dikirim ke LLM (Req 8.1).
+                guard = check_document_size(content, mime_type, filename)
                 response: LLMResponse = await provider.parse_document(
-                    file_content=content,
+                    file_content=guard.safe_value,
                     mime_type=mime_type,
                     prompt=BANT_EXTRACTION_PROMPT,
                 )
 
                 if response.status == "success" and response.content:
-                    # Parse JSON dari response content
-                    parsed = self._parse_llm_response(response.content)
-                    if parsed is not None:
+                    # Validasi output terstruktur terhadap kontrak (Req 8.4, 6.1).
+                    validation = validate_llm_json(response.content, BANTExtractionResult)
+                    if validation.valid:
                         logger.info(
                             f"Project {project_id}: Berhasil ekstrak BANT dari '{filename}'"
                         )
-                        return parsed
+                        return validation.data.model_dump()
                     else:
                         logger.warning(
                             f"Project {project_id}: Response LLM untuk '{filename}' "
-                            f"bukan JSON valid."
+                            f"gagal validasi schema."
                         )
                 else:
                     logger.warning(
@@ -451,15 +464,9 @@ class ScoringEngine:
             return content
 
         if isinstance(content, str):
-            # Bersihkan markdown code fences jika ada
-            text = content.strip()
-            if text.startswith("```"):
-                lines = text.split("\n")
-                # Hapus baris pertama (```json) dan terakhir (```)
-                lines = [l for l in lines if not l.strip().startswith("```")]
-                text = "\n".join(lines)
+            # Bersihkan markdown code fences via helper guardrail bersama.
             try:
-                return json.loads(text)
+                return json.loads(strip_code_fence(content))
             except json.JSONDecodeError:
                 return None
 
