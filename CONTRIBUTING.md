@@ -104,6 +104,22 @@ Perubahan schema melewati migration Alembic di `backend/alembic/versions/`. Keti
 
 ---
 
+## Rilis & Penomoran Versi
+
+Image Docker (backend + frontend) dirilis ke GHCR via `scripts/release.sh <version>` lalu di-deploy di Portainer.
+
+**Aturan penomoran versi (wajib):**
+
+- Format: `vMAJOR.MINOR` dengan **MINOR selalu dua digit** (`v4.81`, `v4.90`, `v5.00`).
+- Increment per rilis: **+0.01** (`v4.81` → `v4.82` → `v4.83` …).
+- Saat MINOR mencapai 89 lanjut ke 90 (`v4.89` → `v4.90`), bukan `v4.9`.
+- Saat MINOR mencapai 99 naik major dan reset (`v4.99` → `v5.00`).
+- Tidak valid: `v4.9` (minor satu digit), `v4.100` (tiga digit).
+
+`scripts/release.sh` memvalidasi format ini dan menolak tag yang tidak sesuai. Build selalu untuk backend dan frontend dengan tag yang sama kecuali ada alasan spesifik memakai `--backend-only`/`--frontend-only`.
+
+---
+
 ## Ekspektasi Keamanan
 
 - Simpan semua secret di environment variable; jangan pernah hardcode. `.env` di-ignore git — perbarui `.env.example` (hanya key, tanpa nilai asli) ketika Anda menambah variable baru.

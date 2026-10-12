@@ -4,9 +4,17 @@
 # ============================================
 # Penggunaan:
 #   ./scripts/release.sh <version>
-#   ./scripts/release.sh v4.2
-#   ./scripts/release.sh v4.3 --backend-only
-#   ./scripts/release.sh v4.3 --frontend-only
+#   ./scripts/release.sh v4.81
+#   ./scripts/release.sh v4.81 --backend-only
+#   ./scripts/release.sh v4.81 --frontend-only
+#
+# ATURAN PENOMORAN VERSI (WAJIB):
+#   Format: vMAJOR.MINOR dengan MINOR selalu DUA digit.
+#   - Increment per rilis: +0.01 (mis. v4.81 -> v4.82 -> v4.83 ...).
+#   - Saat MINOR mencapai 89 lanjut ke 90 (v4.89 -> v4.90), bukan v4.9.
+#   - Saat MINOR mencapai 99 naik major & reset (v4.99 -> v5.00).
+#   Contoh valid: v4.81, v4.90, v4.99, v5.00, v5.01
+#   Contoh TIDAK valid: v4.9 (minor satu digit), v4.100 (minor tiga digit)
 #
 # Prasyarat:
 #   - Docker Desktop running
@@ -51,9 +59,20 @@ if [ -z "$VERSION" ]; then
   echo "Penggunaan: ./scripts/release.sh <version> [--backend-only|--frontend-only]"
   echo ""
   echo "Contoh:"
-  echo "  ./scripts/release.sh v4.2              # Build backend + frontend"
-  echo "  ./scripts/release.sh v4.2 --backend-only   # Hanya backend"
-  echo "  ./scripts/release.sh v4.2 --frontend-only  # Hanya frontend"
+  echo "  ./scripts/release.sh v4.81              # Build backend + frontend"
+  echo "  ./scripts/release.sh v4.81 --backend-only   # Hanya backend"
+  echo "  ./scripts/release.sh v4.81 --frontend-only  # Hanya frontend"
+  exit 1
+fi
+
+# --- Validasi format versi: vMAJOR.MINOR dengan MINOR dua digit ---
+# Lihat "ATURAN PENOMORAN VERSI" di header. Minor WAJIB dua digit (00-99).
+if ! echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]{2}$'; then
+  echo "❌ Format versi tidak valid: $VERSION"
+  echo ""
+  echo "Format wajib: vMAJOR.MINOR dengan MINOR dua digit (contoh: v4.81, v4.90, v5.00)."
+  echo "Aturan: increment +0.01 per rilis; v4.89 -> v4.90; v4.99 -> v5.00."
+  echo "Contoh tidak valid: v4.9 (minor satu digit), v4.100 (tiga digit)."
   exit 1
 fi
 
