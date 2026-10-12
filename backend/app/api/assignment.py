@@ -233,8 +233,12 @@ async def get_sa_utilization(
         # Default tahun berjalan
         target_year = year or date_type.today().year
 
-        # Query semua SA (atau filter per sa_id)
-        sa_query = select(User).where(User.role == "SA").order_by(User.name)
+        # Query semua SA & Lead_SA (keduanya mencatat aktivitas), atau filter per sa_id
+        sa_query = (
+            select(User)
+            .where(User.role.in_(["SA", "Lead_SA"]))
+            .order_by(User.name)
+        )
         if sa_id:
             try:
                 sa_uuid = uuid.UUID(sa_id)
@@ -419,6 +423,99 @@ async def get_project_utilization(
     return success_response(
         data=result_data,
         message=f"Data utilisasi untuk {len(result_data)} proyek.",
+    )
+
+
+@router.get(
+    "/utilization/summary",
+    summary="Ringkasan utilisasi per work_type & fase proyek",
+    description=(
+        "Agregasi jam kerja (activity logs) per bulan: Project vs Non-Project, "
+        "serta breakdown fase proyek (Pre/Implementation/Post). Hanya untuk Lead_SA. "
+        "Mencakup aktivitas SA dan Lead_SA."
+    ),
+)
+async def get_utilization_summary(
+    year: int | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ringkasan utilisasi dua dimensi untuk dashboard Lead SA.
+
+    Response:
+    {
+      "year": 2026,
+      "work_type": {
+        "months": {"1": {"Project": 10.0, "Non-Project": 2.0}, ...},
+        "totals": {"Project": 120.0, "Non-Project": 24.0},
+        "grand_total": 144.0
+      },
+      "project_phase": {
+        "totals": {"Pre-Implementation": 100.0, "Implementation": 15.0, "Post-Implementation": 5.0},
+        "total": 120.0
+      }
+    }
+    """
+    _require_lead_sa(current_user)
+
+    from datetime import date as date_type, datetime as dt_type
+
+    target_year = year or date_type.today().year
+    year_start = dt_type(target_year, 1, 1, tzinfo=timezone.utc)
+    year_end = dt_type(target_year + 1, 1, 1, tzinfo=timezone.utc)
+
+    log_result = await db.execute(
+        select(ActivityLog)
+        .where(ActivityLog.created_at >= year_start)
+        .where(ActivityLog.created_at < year_end)
+    )
+    logs = log_result.scalars().all()
+
+    # Dimensi 1: work_type per bulan
+    months_wt: dict[int, dict[str, float]] = {
+        m: {"Project": 0.0, "Non-Project": 0.0} for m in range(1, 13)
+    }
+    totals_wt: dict[str, float] = {"Project": 0.0, "Non-Project": 0.0}
+
+    # Dimensi 2: project_phase (hanya Project)
+    phase_totals: dict[str, float] = {
+        "Pre-Implementation": 0.0,
+        "Implementation": 0.0,
+        "Post-Implementation": 0.0,
+    }
+
+    for log in logs:
+        hours = float(log.duration_hours)
+        wt = log.work_type if log.work_type in ("Project", "Non-Project") else "Project"
+        month = log.created_at.month
+
+        months_wt[month][wt] += hours
+        totals_wt[wt] += hours
+
+        if wt == "Project" and log.project_phase in phase_totals:
+            phase_totals[log.project_phase] += hours
+
+    work_type_data = {
+        "months": {
+            str(m): {k: round(v, 2) for k, v in months_wt[m].items()}
+            for m in range(1, 13)
+        },
+        "totals": {k: round(v, 2) for k, v in totals_wt.items()},
+        "grand_total": round(sum(totals_wt.values()), 2),
+    }
+    project_phase_data = {
+        "totals": {k: round(v, 2) for k, v in phase_totals.items()},
+        "total": round(sum(phase_totals.values()), 2),
+    }
+
+    return success_response(
+        data={
+            "year": target_year,
+            "work_type": work_type_data,
+            "project_phase": project_phase_data,
+        },
+        message=f"Ringkasan utilisasi tahun {target_year}.",
     )
 
 

@@ -346,6 +346,17 @@ export default function LeadSADashboard() {
         </section>
       </div>
 
+      {/* Section 4a: Komposisi Utilisasi (Project vs Non-Project + Fase) */}
+      <section>
+        <h2 className="text-lg font-semibold text-neutral-800 mb-4">
+          Komposisi Utilisasi
+        </h2>
+        <UtilizationSummarySection
+          year={utilizationYear}
+          onYearChange={setUtilizationYear}
+        />
+      </section>
+
       {/* Section 4: Utilisasi SA per Bulan */}
       <section>
         <h2 className="text-lg font-semibold text-neutral-800 mb-4">
@@ -817,6 +828,197 @@ function ProjectUtilizationSection() {
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// === Section: Komposisi Utilisasi (work_type + fase) ===
+
+interface UtilizationSummaryData {
+  year: number;
+  work_type: {
+    months: Record<string, { Project: number; "Non-Project": number }>;
+    totals: { Project: number; "Non-Project": number };
+    grand_total: number;
+  };
+  project_phase: {
+    totals: Record<string, number>;
+    total: number;
+  };
+}
+
+const PHASE_LABELS = [
+  "Pre-Implementation",
+  "Implementation",
+  "Post-Implementation",
+] as const;
+
+const PHASE_COLORS: Record<string, string> = {
+  "Pre-Implementation": "bg-indigo-500",
+  Implementation: "bg-amber-500",
+  "Post-Implementation": "bg-teal-500",
+};
+
+/**
+ * Section komposisi utilisasi:
+ * - Stacked bar Project vs Non-Project per bulan
+ * - Breakdown fase proyek (Pre / Implementation / Post)
+ * Chart dibuat manual dengan div + Tailwind (tanpa library).
+ */
+function UtilizationSummarySection({
+  year,
+  onYearChange,
+}: {
+  year: number;
+  onYearChange: (y: number) => void;
+}) {
+  const { data, isLoading, error } = useSWR<UtilizationSummaryData>(
+    `/utilization/summary?year=${year}`,
+    fetcher,
+    { keepPreviousData: true }
+  );
+
+  if (isLoading && !data) {
+    return (
+      <div className="rounded-lg border border-neutral-200 bg-white p-5">
+        <div className="space-y-3 animate-pulse">
+          <div className="h-6 bg-neutral-200 rounded w-1/3" />
+          <div className="h-40 bg-neutral-100 rounded w-full" />
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+        <p className="text-sm text-red-700">Gagal memuat komposisi utilisasi.</p>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  // Nilai maksimum bulanan (Project + Non-Project) untuk skala tinggi bar
+  const monthlyTotals = MONTH_LABELS.map((_, idx) => {
+    const m = data.work_type.months[String(idx + 1)] || { Project: 0, "Non-Project": 0 };
+    return m.Project + m["Non-Project"];
+  });
+  const maxMonthly = Math.max(1, ...monthlyTotals);
+
+  const grand = data.work_type.grand_total || 0;
+  const projectTotal = data.work_type.totals.Project || 0;
+  const nonProjectTotal = data.work_type.totals["Non-Project"] || 0;
+
+  return (
+    <div className="space-y-4">
+      {/* Filter tahun + total */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <label htmlFor="comp-year" className="text-xs text-neutral-500">Tahun</label>
+          <select
+            id="comp-year"
+            value={year}
+            onChange={(e) => onYearChange(Number(e.target.value))}
+            className="px-2 py-1.5 border border-neutral-300 rounded-md text-sm
+              focus:outline-none focus:ring-1 focus:ring-primary-500"
+          >
+            {[year - 1, year, year + 1].map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+        </div>
+        <div className="ml-auto flex items-center gap-4 text-xs text-neutral-600">
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm bg-primary-500 inline-block" />
+            Project <span className="font-semibold text-neutral-800">{projectTotal} jam</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm bg-neutral-400 inline-block" />
+            Non-Project <span className="font-semibold text-neutral-800">{nonProjectTotal} jam</span>
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Stacked bar Project vs Non-Project per bulan */}
+        <div className="lg:col-span-2 rounded-lg border border-neutral-200 bg-white p-5">
+          <h3 className="text-sm font-medium text-neutral-700 mb-4">
+            Project vs Non-Project per Bulan
+          </h3>
+          {grand === 0 ? (
+            <p className="text-sm text-neutral-400 text-center py-8">
+              Belum ada data activity log untuk tahun {year}.
+            </p>
+          ) : (
+            <div className="flex items-end justify-between gap-1 h-48">
+              {MONTH_LABELS.map((label, idx) => {
+                const m = data.work_type.months[String(idx + 1)] || { Project: 0, "Non-Project": 0 };
+                const total = m.Project + m["Non-Project"];
+                const barHeightPct = (total / maxMonthly) * 100;
+                const projPct = total > 0 ? (m.Project / total) * 100 : 0;
+                const nonProjPct = total > 0 ? (m["Non-Project"] / total) * 100 : 0;
+                return (
+                  <div key={idx} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
+                    <div
+                      className="w-full max-w-[28px] rounded-t overflow-hidden flex flex-col justify-end"
+                      style={{ height: `${barHeightPct}%` }}
+                      title={`${label}: Project ${m.Project}j, Non-Project ${m["Non-Project"]}j`}
+                    >
+                      <div className="bg-primary-500 w-full" style={{ height: `${projPct}%` }} />
+                      <div className="bg-neutral-400 w-full" style={{ height: `${nonProjPct}%` }} />
+                    </div>
+                    <span className="text-[10px] text-neutral-400">{label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Breakdown fase proyek */}
+        <div className="rounded-lg border border-neutral-200 bg-white p-5">
+          <h3 className="text-sm font-medium text-neutral-700 mb-4">
+            Fase Proyek (jam)
+          </h3>
+          {data.project_phase.total === 0 ? (
+            <p className="text-sm text-neutral-400 text-center py-8">
+              Belum ada aktivitas Project.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {PHASE_LABELS.map((phase) => {
+                const hours = data.project_phase.totals[phase] || 0;
+                const pct = data.project_phase.total > 0
+                  ? (hours / data.project_phase.total) * 100
+                  : 0;
+                return (
+                  <div key={phase}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-neutral-600">{phase}</span>
+                      <span className="text-xs font-semibold text-neutral-800">
+                        {hours} jam ({Math.round(pct)}%)
+                      </span>
+                    </div>
+                    <div className="w-full h-2.5 bg-neutral-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${PHASE_COLORS[phase] || "bg-neutral-400"}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="pt-2 border-t border-neutral-100 flex items-center justify-between">
+                <span className="text-xs font-medium text-neutral-600">Total Project</span>
+                <span className="text-sm font-bold text-neutral-900">
+                  {data.project_phase.total} jam
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
