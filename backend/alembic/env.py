@@ -28,8 +28,13 @@ from app.models import (  # noqa: F401
 # Konfigurasi Alembic dari .ini file
 config = context.config
 
-# Override sqlalchemy.url dari settings aplikasi
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Override sqlalchemy.url dari settings aplikasi.
+# Escape '%' menjadi '%%' karena ConfigParser (dipakai set_main_option)
+# memperlakukan '%' sebagai sintaks interpolasi. Tanpa ini, password yang
+# mengandung '%' (mis. hasil URL-encoding seperti %2A) membuat Alembic gagal
+# dengan "invalid interpolation syntax". ConfigParser akan meng-unescape
+# '%%' -> '%' saat nilai dibaca kembali, sehingga URL ke engine tetap benar.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 # Setup logging dari config file
 if config.config_file_name is not None:
