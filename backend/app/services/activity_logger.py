@@ -18,12 +18,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity_log import ActivityLog
 from app.models.project import Project
-from app.services.llm_provider import llm_factory, LLMResponse
+from app.services.llm_provider import LLMResponse, llm_factory
+from app.utils.guardrails import PolishResult, sanitize_text_input, validate_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -168,17 +169,21 @@ class ActivityLogger:
         try:
             provider = llm_factory.get_provider()
 
+            # Guardrail teks: sanitize raw notes sebelum dikirim ke LLM (Req 8.2).
+            guard = sanitize_text_input(raw_notes)
+
             # Kirim ke LLM untuk structuring
             response: LLMResponse = await provider.structure_text(
-                text=raw_notes,
+                text=guard.safe_value,
                 output_schema=AI_POLISH_OUTPUT_SCHEMA,
             )
 
             # Cek apakah response berhasil
             if response.status == "success" and response.content is not None:
-                # Validasi format response
-                content = response.content
-                if isinstance(content, dict) and "discussion_points" in content:
+                # Validasi output terstruktur terhadap kontrak PolishResult (Req 8.4).
+                validation = validate_llm_json(response.content, PolishResult)
+                if validation.valid:
+                    content = validation.data.model_dump()
                     logger.info(
                         f"AI polishing berhasil. "
                         f"Points: {len(content.get('discussion_points', []))}, "
@@ -186,9 +191,9 @@ class ActivityLogger:
                     )
                     return content
                 else:
+                    # Output tidak valid → None agar entry ditandai needs_repolish (Req 8.5).
                     logger.warning(
-                        f"AI polishing: format response tidak sesuai schema. "
-                        f"Content type: {type(content)}"
+                        "AI polishing: output gagal validasi schema PolishResult."
                     )
                     return None
             else:

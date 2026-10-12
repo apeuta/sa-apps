@@ -29,6 +29,7 @@ from app.schemas.activity_log import (
 from app.schemas.response import error_response, success_response
 from app.services.activity_logger import ActivityLogger
 from app.services.llm_provider import llm_factory
+from app.utils.guardrails import is_nonempty_summary, sanitize_text_input
 
 logger = logging.getLogger(__name__)
 
@@ -317,19 +318,31 @@ async def summarize_project(
             )
         activity_data = "\n".join(lines)
 
+        # Guardrail teks: sanitize data aktivitas sebelum dikirim ke LLM (Req 8.3).
+        guard = sanitize_text_input(activity_data)
+
         # Kirim ke LLM
-        prompt = SUMMARIZE_PROMPT.format(activity_data=activity_data)
+        prompt = SUMMARIZE_PROMPT.format(activity_data=guard.safe_value)
         provider = llm_factory.get_provider()
         llm_response = await provider.complete_text(
             prompt, temperature=0.3, max_output_tokens=1024
         )
 
-        if llm_response.status == "success" and llm_response.content:
+        if (
+            llm_response.status == "success"
+            and llm_response.content
+            and is_nonempty_summary(llm_response.content)
+        ):
             summary_text = llm_response.content
         else:
-            # Fallback ke ringkasan sederhana jika LLM gagal
+            # Fallback_Non_LLM jika LLM gagal ATAU summary tidak valid (Req 7.1-7.3).
+            reason = (
+                llm_response.error_message
+                if llm_response.status != "success"
+                else "summary LLM kosong atau tidak valid"
+            )
             logger.warning(
-                f"LLM summarize gagal untuk {id_project}: {llm_response.error_message}. "
+                f"LLM summarize gagal untuk {id_project}: {reason}. "
                 "Menggunakan fallback ringkasan sederhana."
             )
             categories: dict[str, float] = {}
