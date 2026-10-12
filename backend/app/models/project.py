@@ -1,6 +1,7 @@
 """
 Model SQLAlchemy untuk tabel Projects.
 Menyimpan data proyek yang dikelola oleh Sales dan SA.
+Catatan: kolom sales_pic menyimpan requester (bisa Sales, SA, atau Lead_SA).
 """
 
 import uuid
@@ -53,7 +54,7 @@ class Project(Base):
         UUID(as_uuid=True),
         ForeignKey("users.id"),
         nullable=False,
-        comment="FK ke user Sales yang bertanggung jawab",
+        comment="FK ke user requester yang membuat request (Sales/SA/Lead_SA)",
     )
     assigned_sa: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

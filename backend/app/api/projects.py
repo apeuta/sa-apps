@@ -504,9 +504,10 @@ async def update_project(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    summary="Submit request proyek pre-sales baru",
+    summary="Submit request SA (request proyek pre-sales baru)",
     description=(
-        "Endpoint untuk Sales mengajukan request proyek baru. "
+        "Endpoint untuk mengajukan Request SA (proyek pre-sales baru). "
+        "Dapat diakses oleh role Sales, SA, dan Lead_SA. "
         "Menerima form data + file attachment (PDF/DOCX, max 20MB/file, max 5 files). "
         "Membuat record project dengan status 'New' dan trigger scoring engine async."
     ),

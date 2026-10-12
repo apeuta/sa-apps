@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
 import {
@@ -63,6 +64,7 @@ const STATUS_BADGE_COLORS: Record<string, string> = {
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
 
 export default function LeadSADashboard() {
+  const router = useRouter();
   // State untuk modal assignment
   const [assigningProject, setAssigningProject] =
     useState<PendingProject | null>(null);
@@ -118,13 +120,25 @@ export default function LeadSADashboard() {
   return (
     <div className="space-y-6">
       {/* Header halaman */}
-      <div>
-        <h1 className="text-2xl font-semibold text-neutral-900">
-          Dashboard Lead SA
-        </h1>
-        <p className="mt-1 text-neutral-500">
-          Kelola assignment proyek dan pantau utilisasi tim SA.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-neutral-900">
+            Dashboard Lead SA
+          </h1>
+          <p className="mt-1 text-neutral-500">
+            Kelola assignment proyek dan pantau utilisasi tim SA.
+          </p>
+        </div>
+
+        {/* Tombol Request SA — Lead SA bisa mengajukan request proyek baru */}
+        <button
+          onClick={() => router.push("/projects/new")}
+          className="px-4 py-2 text-sm font-medium text-white bg-primary-600
+                     rounded-lg hover:bg-primary-700 transition-colors duration-100
+                     min-h-[44px] min-w-[44px] shrink-0"
+        >
+          + Request SA
+        </button>
       </div>
 
       {/* Toast notification */}

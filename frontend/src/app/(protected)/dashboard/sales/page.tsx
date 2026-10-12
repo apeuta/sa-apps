@@ -82,14 +82,14 @@ export default function SalesDashboard() {
           </p>
         </div>
 
-        {/* Tombol Request Proyek Baru */}
+        {/* Tombol Request SA */}
         <button
           onClick={() => router.push("/projects/new")}
           className="px-4 py-2 text-sm font-medium text-white bg-primary-600
                      rounded-lg hover:bg-primary-700 transition-colors duration-100
                      min-h-[44px] min-w-[44px]"
         >
-          + Request Proyek Baru
+          + Request SA
         </button>
       </div>
 
@@ -224,7 +224,7 @@ function EmptyState({ onCreateNew }: { onCreateNew: () => void }) {
                    rounded-lg hover:bg-primary-700 transition-colors duration-100
                    min-h-[44px]"
       >
-        Request Proyek Baru
+        Request SA
       </button>
     </div>
   );

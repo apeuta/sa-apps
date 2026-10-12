@@ -85,7 +85,7 @@ class ProjectResponse(BaseModel):
     target_submit: date
     estimasi_nilai: Decimal
     status: str = Field(default="New", description="Status awal proyek")
-    sales_pic: UUID = Field(..., description="ID Sales yang membuat request")
+    sales_pic: UUID = Field(..., description="ID requester yang membuat request (Sales/SA/Lead_SA)")
     created_at: datetime
     files: list[FileUploadResult] = Field(
         default_factory=list,

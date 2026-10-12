@@ -106,13 +106,25 @@ export default function SADashboard() {
   return (
     <div className="space-y-6">
       {/* Header halaman */}
-      <div>
-        <h1 className="text-2xl font-semibold text-neutral-900">
-          Dashboard SA
-        </h1>
-        <p className="mt-1 text-neutral-500">
-          Daftar proyek yang ditugaskan kepada Anda.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-neutral-900">
+            Dashboard SA
+          </h1>
+          <p className="mt-1 text-neutral-500">
+            Daftar proyek yang ditugaskan kepada Anda.
+          </p>
+        </div>
+
+        {/* Tombol Request SA — SA bisa mengajukan request proyek baru */}
+        <button
+          onClick={() => router.push("/projects/new")}
+          className="px-4 py-2 text-sm font-medium text-white bg-primary-600
+                     rounded-lg hover:bg-primary-700 transition-colors duration-100
+                     min-h-[44px] min-w-[44px] shrink-0"
+        >
+          + Request SA
+        </button>
       </div>
 
       {/* Overview Proyek */}

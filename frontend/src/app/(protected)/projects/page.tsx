@@ -96,15 +96,16 @@ export default function ProjectsPage() {
               : user?.role === "SA"
                 ? "Proyek yang ditugaskan kepada Anda"
                 : "Semua proyek"}
+            {/* Catatan: tombol "Request SA" tersedia untuk Sales, SA, dan Lead SA */}
           </p>
         </div>
-        {user?.role === "Sales" && (
+        {["Sales", "SA", "Lead_SA"].includes(user?.role ?? "") && (
           <button
             onClick={() => router.push("/projects/new")}
             className="px-4 py-2 text-sm font-medium text-white bg-primary-600
                        rounded-lg hover:bg-primary-700 transition-colors min-h-[44px]"
           >
-            + Request Proyek Baru
+            + Request SA
           </button>
         )}
       </div>
@@ -187,8 +188,8 @@ export default function ProjectsPage() {
               <p className="text-sm text-neutral-500 mb-4">
                 {searchQuery || statusFilter
                   ? "Coba ubah kata kunci atau filter status."
-                  : user?.role === "Sales"
-                    ? "Buat request proyek baru untuk memulai."
+                  : ["Sales", "SA", "Lead_SA"].includes(user?.role ?? "")
+                    ? "Buat Request SA untuk memulai."
                     : "Belum ada proyek yang tersedia."}
               </p>
               {(searchQuery || statusFilter) && (

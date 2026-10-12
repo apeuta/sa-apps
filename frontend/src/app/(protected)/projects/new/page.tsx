@@ -12,7 +12,7 @@ import {
 } from "@/lib/api/projects";
 
 /**
- * Halaman Form Request Proyek Baru
+ * Halaman Form Request SA
  *
  * Fitur:
  * - Input fields: nama proyek, nama customer, target submit, estimasi nilai
@@ -314,7 +314,7 @@ export default function NewProjectPage() {
       {/* Page Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-neutral-900">
-          Request Proyek Baru
+          Request SA
         </h1>
         <p className="text-sm text-neutral-500 mt-1">
           Ajukan request proyek pre-sales dengan mengisi form berikut
