@@ -39,7 +39,9 @@ def _build_log_response(log) -> dict:
     """Helper untuk membangun response dict dari ActivityLog model."""
     return {
         "id_log": log.id_log,
+        "work_type": log.work_type,
         "id_project": log.id_project,
+        "project_phase": log.project_phase,
         "sa_id": str(log.sa_id),
         "subtask_category": log.subtask_category,
         "duration_hours": float(log.duration_hours),
@@ -84,7 +86,9 @@ async def create_activity_log(
         # Buat log baru — service menangani validasi project dan AI polishing
         activity_log = await activity_logger.create_log(
             sa_id=current_user.id,
+            work_type=payload.work_type,
             id_project=payload.id_project,
+            project_phase=payload.project_phase,
             subtask_category=payload.subtask_category,
             duration_hours=payload.duration_hours,
             raw_notes=payload.raw_notes,

@@ -21,6 +21,7 @@ from app.core.dependencies import get_current_user
 from app.models.activity_log import ActivityLog
 from app.models.project import Project
 from app.models.user import User
+from app.schemas.activity_log import default_phase_for_status
 from app.schemas.calendar import (
     CalendarMapRequest,
     CalendarMapResponse,
@@ -224,9 +225,12 @@ async def map_event_to_project(
     log_id = _generate_log_id()
     now = datetime.now(timezone.utc)
 
+    # Mapping dari calendar selalu aktivitas Project; fase default dari status proyek
     activity_log = ActivityLog(
         id_log=log_id,
+        work_type="Project",
         id_project=request.project_id,
+        project_phase=default_phase_for_status(project.status),
         sa_id=current_user.id,
         subtask_category=request.subtask_category,
         gcal_event_id=request.gcal_event_id,

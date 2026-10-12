@@ -211,9 +211,12 @@ async def get_or_create_activity_log(
         print(f"  [ok] Activity log sudah ada: {log_data['id_log']}")
         return existing
 
+    work_type = log_data.get("work_type", "Project")
     log = ActivityLog(
         id_log=log_data["id_log"],
-        id_project=log_data["id_project"],
+        work_type=work_type,
+        id_project=log_data.get("id_project"),
+        project_phase=log_data.get("project_phase"),
         sa_id=sa_id,
         subtask_category=log_data["subtask_category"],
         duration_hours=Decimal(str(log_data["duration_hours"])),
@@ -222,7 +225,7 @@ async def get_or_create_activity_log(
     )
     db.add(log)
     await db.flush()
-    print(f"  [+] Log: {log_data['subtask_category']} ({log_data['duration_hours']}h)")
+    print(f"  [+] Log: [{work_type}] {log_data['subtask_category']} ({log_data['duration_hours']}h)")
     return log
 
 
@@ -246,6 +249,7 @@ async def seed_all():
             sa1 = users["demo-sa@portal-sa.local"]
             sa2 = users["demo-sa2@portal-sa.local"]
             sa3 = users["demo-sa3@portal-sa.local"]
+            lead_sa = users["demo-lead@portal-sa.local"]
 
             # == 2. Buat Projects ==
             print("\n[2/4] Membuat demo projects...")
@@ -391,49 +395,65 @@ async def seed_all():
             def make_date(year: int, month: int, day: int) -> datetime:
                 return datetime(year, month, day, 10, 0, 0, tzinfo=timezone.utc)
 
+            # Semua log Project default fase Pre-Implementation (mayoritas pre-sales).
+            # Non-Project: id_project & project_phase None, subtask dari set Non-Project.
+            PRE = "Pre-Implementation"
             activity_logs_data = [
                 # === SA1 (Demo SA) — Juni 2026 ===
-                {"id_log": "LOG-001", "id_project": "PRJ-DEMO-005", "subtask_category": "Meeting Pre-Sales", "duration_hours": 2.0, "raw_notes": "Meeting Pre-Sales IoT Data Pipeline dengan PT Koneksi Pintar. Diskusi arsitektur Kinesis + Lambda.", "created_at": make_date(2026, 6, 3)},
-                {"id_log": "LOG-002", "id_project": "PRJ-DEMO-005", "subtask_category": "Create PropTek", "duration_hours": 6.0, "raw_notes": "Menyusun PropTek IoT pipeline: Kinesis Data Streams + Firehose + S3 + Athena.", "created_at": make_date(2026, 6, 5)},
-                {"id_log": "LOG-003", "id_project": "PRJ-DEMO-005", "subtask_category": "Customer Workshop", "duration_hours": 4.0, "raw_notes": "Workshop demo IoT data ingestion dengan customer. Hands-on Kinesis producer SDK.", "created_at": make_date(2026, 6, 10)},
+                {"id_log": "LOG-001", "work_type": "Project", "id_project": "PRJ-DEMO-005", "project_phase": PRE, "subtask_category": "Customer Meeting", "duration_hours": 2.0, "raw_notes": "Meeting IoT Data Pipeline dengan PT Koneksi Pintar. Diskusi arsitektur Kinesis + Lambda.", "created_at": make_date(2026, 6, 3)},
+                {"id_log": "LOG-002", "work_type": "Project", "id_project": "PRJ-DEMO-005", "project_phase": PRE, "subtask_category": "Technical Document", "duration_hours": 6.0, "raw_notes": "Menyusun PropTek IoT pipeline: Kinesis Data Streams + Firehose + S3 + Athena.", "created_at": make_date(2026, 6, 5)},
+                {"id_log": "LOG-003", "work_type": "Project", "id_project": "PRJ-DEMO-005", "project_phase": PRE, "subtask_category": "Customer Meeting", "duration_hours": 4.0, "raw_notes": "Workshop demo IoT data ingestion dengan customer. Hands-on Kinesis producer SDK.", "created_at": make_date(2026, 6, 10)},
+                # === SA1 — Non-Project Juni 2026 ===
+                {"id_log": "LOG-NP1", "work_type": "Non-Project", "subtask_category": "Training", "duration_hours": 8.0, "raw_notes": "AWS Analytics Specialty training (hari 1).", "created_at": make_date(2026, 6, 12)},
+                {"id_log": "LOG-NP2", "work_type": "Non-Project", "subtask_category": "Self-Lab", "duration_hours": 3.0, "raw_notes": "Hands-on lab Kinesis Data Analytics di akun sandbox.", "created_at": make_date(2026, 6, 18)},
                 # === SA1 — Juli 2026 ===
-                {"id_log": "LOG-004", "id_project": "PRJ-DEMO-001", "subtask_category": "Meeting Pre-Sales", "duration_hours": 2.0, "raw_notes": "Meeting awal dengan PT Nusantara Digital. Diskusi kebutuhan migrasi DWH on-premise ke Redshift.", "created_at": make_date(2026, 7, 2)},
-                {"id_log": "LOG-005", "id_project": "PRJ-DEMO-001", "subtask_category": "Create PropTek", "duration_hours": 8.0, "raw_notes": "Menyusun draft PropTek Redshift Serverless + S3 data lake. Termasuk diagram arsitektur dan sizing.", "created_at": make_date(2026, 7, 7)},
-                {"id_log": "LOG-006", "id_project": "PRJ-DEMO-007", "subtask_category": "Internal Discussion", "duration_hours": 2.0, "raw_notes": "Diskusi internal tentang arsitektur Real-Time Analytics: Kinesis vs MSK untuk streaming.", "created_at": make_date(2026, 7, 12)},
-                {"id_log": "LOG-007", "id_project": "PRJ-DEMO-007", "subtask_category": "Create PropTek", "duration_hours": 5.0, "raw_notes": "Buat PropTek real-time analytics: Kinesis + Lambda + QuickSight.", "created_at": make_date(2026, 7, 15)},
+                {"id_log": "LOG-004", "work_type": "Project", "id_project": "PRJ-DEMO-001", "project_phase": PRE, "subtask_category": "Customer Meeting", "duration_hours": 2.0, "raw_notes": "Meeting awal dengan PT Nusantara Digital. Diskusi kebutuhan migrasi DWH on-premise ke Redshift.", "created_at": make_date(2026, 7, 2)},
+                {"id_log": "LOG-005", "work_type": "Project", "id_project": "PRJ-DEMO-001", "project_phase": PRE, "subtask_category": "Technical Document", "duration_hours": 8.0, "raw_notes": "Menyusun draft PropTek Redshift Serverless + S3 data lake. Termasuk diagram arsitektur dan sizing.", "created_at": make_date(2026, 7, 7)},
+                {"id_log": "LOG-006", "work_type": "Project", "id_project": "PRJ-DEMO-007", "project_phase": PRE, "subtask_category": "Internal Meeting", "duration_hours": 2.0, "raw_notes": "Diskusi internal tentang arsitektur Real-Time Analytics: Kinesis vs MSK untuk streaming.", "created_at": make_date(2026, 7, 12)},
+                {"id_log": "LOG-007", "work_type": "Project", "id_project": "PRJ-DEMO-007", "project_phase": PRE, "subtask_category": "Technical Document", "duration_hours": 5.0, "raw_notes": "Buat PropTek real-time analytics: Kinesis + Lambda + QuickSight.", "created_at": make_date(2026, 7, 15)},
                 # === SA1 — Agustus 2026 ===
-                {"id_log": "LOG-008", "id_project": "PRJ-DEMO-001", "subtask_category": "Peer Review", "duration_hours": 2.0, "raw_notes": "Peer review PropTek DWH migration dengan Budi. Feedback: tambahkan cost comparison.", "created_at": make_date(2026, 8, 4)},
-                {"id_log": "LOG-009", "id_project": "PRJ-DEMO-001", "subtask_category": "Create BOQ", "duration_hours": 4.0, "raw_notes": "Menyusun BOQ Redshift RA3 nodes + S3 storage + Glue ETL jobs.", "created_at": make_date(2026, 8, 8)},
-                {"id_log": "LOG-010", "id_project": "PRJ-DEMO-007", "subtask_category": "Customer Workshop", "duration_hours": 3.0, "raw_notes": "Workshop QuickSight dashboard demo ke PT Media Interaktif.", "created_at": make_date(2026, 8, 15)},
+                {"id_log": "LOG-008", "work_type": "Project", "id_project": "PRJ-DEMO-001", "project_phase": PRE, "subtask_category": "Document Review", "duration_hours": 2.0, "raw_notes": "Peer review PropTek DWH migration dengan Budi. Feedback: tambahkan cost comparison.", "created_at": make_date(2026, 8, 4)},
+                {"id_log": "LOG-009", "work_type": "Project", "id_project": "PRJ-DEMO-001", "project_phase": PRE, "subtask_category": "Commercial Document", "duration_hours": 4.0, "raw_notes": "Menyusun BOQ Redshift RA3 nodes + S3 storage + Glue ETL jobs.", "created_at": make_date(2026, 8, 8)},
+                {"id_log": "LOG-010", "work_type": "Project", "id_project": "PRJ-DEMO-007", "project_phase": PRE, "subtask_category": "Customer Meeting", "duration_hours": 3.0, "raw_notes": "Workshop QuickSight dashboard demo ke PT Media Interaktif.", "created_at": make_date(2026, 8, 15)},
 
                 # === SA2 (Budi Prakoso) — Juli 2026 ===
-                {"id_log": "LOG-011", "id_project": "PRJ-DEMO-002", "subtask_category": "Meeting Pre-Sales", "duration_hours": 2.0, "raw_notes": "Meeting awal EKS migration. Customer ingin pindah dari on-prem K8s ke EKS.", "created_at": make_date(2026, 7, 3)},
-                {"id_log": "LOG-012", "id_project": "PRJ-DEMO-002", "subtask_category": "Create PropTek", "duration_hours": 7.0, "raw_notes": "PropTek EKS: cluster design, networking (VPC CNI), observability (CloudWatch Container Insights).", "created_at": make_date(2026, 7, 8)},
-                {"id_log": "LOG-013", "id_project": "PRJ-DEMO-002", "subtask_category": "Peer Review", "duration_hours": 1.5, "raw_notes": "Peer review PropTek dengan tim SA. Masukan: tambahkan migration runbook.", "created_at": make_date(2026, 7, 14)},
+                {"id_log": "LOG-011", "work_type": "Project", "id_project": "PRJ-DEMO-002", "project_phase": PRE, "subtask_category": "Customer Meeting", "duration_hours": 2.0, "raw_notes": "Meeting awal EKS migration. Customer ingin pindah dari on-prem K8s ke EKS.", "created_at": make_date(2026, 7, 3)},
+                {"id_log": "LOG-012", "work_type": "Project", "id_project": "PRJ-DEMO-002", "project_phase": PRE, "subtask_category": "Technical Document", "duration_hours": 7.0, "raw_notes": "PropTek EKS: cluster design, networking (VPC CNI), observability (CloudWatch Container Insights).", "created_at": make_date(2026, 7, 8)},
+                {"id_log": "LOG-013", "work_type": "Project", "id_project": "PRJ-DEMO-002", "project_phase": PRE, "subtask_category": "Document Review", "duration_hours": 1.5, "raw_notes": "Peer review PropTek dengan tim SA. Masukan: tambahkan migration runbook.", "created_at": make_date(2026, 7, 14)},
+                {"id_log": "LOG-NP3", "work_type": "Non-Project", "subtask_category": "Exam", "duration_hours": 2.0, "raw_notes": "Ujian sertifikasi AWS Solutions Architect Professional.", "created_at": make_date(2026, 7, 20)},
                 # === SA2 — Agustus 2026 ===
-                {"id_log": "LOG-014", "id_project": "PRJ-DEMO-002", "subtask_category": "Create BOQ", "duration_hours": 5.0, "raw_notes": "BOQ EKS: compute (m6i.xlarge x 6 nodes), networking, ALB, monitoring.", "created_at": make_date(2026, 8, 2)},
-                {"id_log": "LOG-015", "id_project": "PRJ-DEMO-002", "subtask_category": "Customer Workshop", "duration_hours": 4.0, "raw_notes": "Hands-on EKS deployment workshop. Demo CI/CD pipeline CodePipeline + ArgoCD.", "created_at": make_date(2026, 8, 10)},
-                {"id_log": "LOG-016", "id_project": "PRJ-DEMO-008", "subtask_category": "Meeting Pre-Sales", "duration_hours": 2.0, "raw_notes": "Meeting PT Global Logistics: Aurora PostgreSQL multi-region dengan Global Database.", "created_at": make_date(2026, 8, 18)},
-                {"id_log": "LOG-017", "id_project": "PRJ-DEMO-008", "subtask_category": "Create BOQ", "duration_hours": 3.0, "raw_notes": "BOQ Aurora: db.r6g.xlarge primary + 2 reader, cross-region replica.", "created_at": make_date(2026, 8, 22)},
+                {"id_log": "LOG-014", "work_type": "Project", "id_project": "PRJ-DEMO-002", "project_phase": PRE, "subtask_category": "Commercial Document", "duration_hours": 5.0, "raw_notes": "BOQ EKS: compute (m6i.xlarge x 6 nodes), networking, ALB, monitoring.", "created_at": make_date(2026, 8, 2)},
+                {"id_log": "LOG-015", "work_type": "Project", "id_project": "PRJ-DEMO-002", "project_phase": PRE, "subtask_category": "Customer Meeting", "duration_hours": 4.0, "raw_notes": "Hands-on EKS deployment workshop. Demo CI/CD pipeline CodePipeline + ArgoCD.", "created_at": make_date(2026, 8, 10)},
+                {"id_log": "LOG-016", "work_type": "Project", "id_project": "PRJ-DEMO-008", "project_phase": PRE, "subtask_category": "Customer Meeting", "duration_hours": 2.0, "raw_notes": "Meeting PT Global Logistics: Aurora PostgreSQL multi-region dengan Global Database.", "created_at": make_date(2026, 8, 18)},
+                {"id_log": "LOG-017", "work_type": "Project", "id_project": "PRJ-DEMO-008", "project_phase": PRE, "subtask_category": "Commercial Document", "duration_hours": 3.0, "raw_notes": "BOQ Aurora: db.r6g.xlarge primary + 2 reader, cross-region replica.", "created_at": make_date(2026, 8, 22)},
 
                 # === SA3 (Ayu Lestari) — Agustus 2026 ===
-                {"id_log": "LOG-018", "id_project": "PRJ-DEMO-006", "subtask_category": "Meeting Pre-Sales", "duration_hours": 2.5, "raw_notes": "Meeting Bank Nusantara: compliance requirement (PCI-DSS, ISO 27001). Diskusi GuardDuty + Security Hub.", "created_at": make_date(2026, 8, 5)},
-                {"id_log": "LOG-019", "id_project": "PRJ-DEMO-006", "subtask_category": "Create PropTek", "duration_hours": 6.0, "raw_notes": "PropTek Security Compliance: GuardDuty, Security Hub, Config Rules, CloudTrail.", "created_at": make_date(2026, 8, 9)},
-                {"id_log": "LOG-020", "id_project": "PRJ-DEMO-006", "subtask_category": "Internal Discussion", "duration_hours": 1.5, "raw_notes": "Diskusi internal: best practice landing zone untuk banking sector.", "created_at": make_date(2026, 8, 14)},
-                {"id_log": "LOG-021", "id_project": "PRJ-DEMO-006", "subtask_category": "Peer Review", "duration_hours": 2.0, "raw_notes": "Peer review security architecture dengan Lead SA.", "created_at": make_date(2026, 8, 20)},
+                {"id_log": "LOG-018", "work_type": "Project", "id_project": "PRJ-DEMO-006", "project_phase": PRE, "subtask_category": "Assessment", "duration_hours": 2.5, "raw_notes": "Assessment Bank Nusantara: compliance requirement (PCI-DSS, ISO 27001). Diskusi GuardDuty + Security Hub.", "created_at": make_date(2026, 8, 5)},
+                {"id_log": "LOG-019", "work_type": "Project", "id_project": "PRJ-DEMO-006", "project_phase": PRE, "subtask_category": "Technical Document", "duration_hours": 6.0, "raw_notes": "PropTek Security Compliance: GuardDuty, Security Hub, Config Rules, CloudTrail.", "created_at": make_date(2026, 8, 9)},
+                {"id_log": "LOG-020", "work_type": "Project", "id_project": "PRJ-DEMO-006", "project_phase": PRE, "subtask_category": "Internal Meeting", "duration_hours": 1.5, "raw_notes": "Diskusi internal: best practice landing zone untuk banking sector.", "created_at": make_date(2026, 8, 14)},
+                {"id_log": "LOG-021", "work_type": "Project", "id_project": "PRJ-DEMO-006", "project_phase": PRE, "subtask_category": "Document Review", "duration_hours": 2.0, "raw_notes": "Peer review security architecture dengan Lead SA.", "created_at": make_date(2026, 8, 20)},
+                {"id_log": "LOG-NP4", "work_type": "Non-Project", "subtask_category": "Self-Learning", "duration_hours": 4.0, "raw_notes": "Belajar AWS Security Hub + Config conformance packs.", "created_at": make_date(2026, 8, 25)},
+
+                # === Lead SA (Demo Lead SA) juga mencatat aktivitasnya ===
+                {"id_log": "LOG-022", "work_type": "Project", "id_project": "PRJ-DEMO-006", "project_phase": PRE, "subtask_category": "Principal Meeting", "duration_hours": 1.5, "raw_notes": "Alignment dengan Principal AWS terkait security reference architecture.", "created_at": make_date(2026, 8, 21)},
+                {"id_log": "LOG-NP5", "work_type": "Non-Project", "subtask_category": "Internal Presentation", "duration_hours": 2.0, "raw_notes": "Presentasi internal: review utilisasi tim SA kuartal berjalan.", "created_at": make_date(2026, 8, 27)},
+                {"id_log": "LOG-NP6", "work_type": "Non-Project", "subtask_category": "Principal Meeting", "duration_hours": 1.5, "raw_notes": "Quarterly sync dengan Principal AWS: roadmap enablement tim SA.", "created_at": make_date(2026, 8, 28)},
             ]
 
-            # SA assignment per log
+            # Assignment pembuat log per id_log (SA & Lead SA)
             sa_assignment = {
                 "LOG-001": sa1.id, "LOG-002": sa1.id, "LOG-003": sa1.id,
+                "LOG-NP1": sa1.id, "LOG-NP2": sa1.id,
                 "LOG-004": sa1.id, "LOG-005": sa1.id, "LOG-006": sa1.id,
                 "LOG-007": sa1.id, "LOG-008": sa1.id, "LOG-009": sa1.id,
                 "LOG-010": sa1.id,
                 "LOG-011": sa2.id, "LOG-012": sa2.id, "LOG-013": sa2.id,
+                "LOG-NP3": sa2.id,
                 "LOG-014": sa2.id, "LOG-015": sa2.id, "LOG-016": sa2.id,
                 "LOG-017": sa2.id,
                 "LOG-018": sa3.id, "LOG-019": sa3.id, "LOG-020": sa3.id,
-                "LOG-021": sa3.id,
+                "LOG-021": sa3.id, "LOG-NP4": sa3.id,
+                "LOG-022": lead_sa.id, "LOG-NP5": lead_sa.id, "LOG-NP6": lead_sa.id,
             }
 
             for log_data in activity_logs_data:
