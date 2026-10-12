@@ -35,7 +35,7 @@ Dokumen pelacakan untuk 11 fitur yang dibutuhkan agar mencapai MVP yang layak. S
 | 8 | Due date + integrasi calendar | 🟡 Partial | `target_submit` ada; calendar read-only, tidak ada push due date |
 | 9 | Edit due date / ikon pensil edit | 🟡 Partial | Alur edit berfungsi; masih tombol teks, bukan ikon pensil |
 | 10 | BoQ compare vs Requirement | 🔴 Belum ada | Tidak ada fitur perbandingan; tipe "Requirement" belum ada |
-| 11 | Guardrails | 🔴 Belum ada | Konten user dikirim mentah ke Gemini; default auth tidak aman |
+| 11 | Guardrails | ✅ Selesai | Guardrail LLM terpusat (size clamp, PII flag-and-log, mitigasi prompt-injection, validasi output) di tiga Call_Site; hardening default auth dilacak di fitur 1 / Fase 0 |
 
 ---
 
@@ -148,10 +148,10 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 
 **Tujuan:** lapisan keamanan di sekitar semua pemanggilan Gemini. (Hardening auth sudah dikerjakan di Fase 0.) Sebaiknya mendarat sebelum/bersama Fase 6 karena fitur itu mengirim dokumen utuh ke LLM.
 
-- [ ] 7.1 Input safety: batas ukuran/konten dan mitigasi prompt-injection sebelum pemanggilan di `gemini_adapter.py` / `scoring_engine.py` / `activity_logger.py`.
-- [ ] 7.2 Output validation: paksa schema JSON yang diharapkan pada response terstruktur; tolak/retry pada output malformed atau di luar kontrak.
-- [ ] 7.3 **Perlu keputusan:** cakupan handling PII — flag vs redact data personal di dokumen upload dan notes. Asumsi default: flag-and-log untuk MVP, redaction nanti.
-- [ ] 7.4 Sentralisasi guardrails dalam satu module agar setiap entry point LLM melewatinya (package `utils/` saat ini kosong — tempat yang pas untuk ini).
+- [x] 7.1 Input safety: batas ukuran/konten dan mitigasi prompt-injection sebelum pemanggilan di `scoring_engine.py` / `activity_logger.py` / `activity_logs.py` (size/byte clamp + delimiter-wrap + neutralize).
+- [x] 7.2 Output validation: paksa schema JSON yang diharapkan pada response terstruktur; tolak/retry pada output malformed atau di luar kontrak (`validate_llm_json` + Pydantic contracts).
+- [x] 7.3 **Keputusan diambil:** handling PII memakai flag-and-log untuk MVP (regex Indonesia-centric, tanpa redaction, tanpa nilai mentah di log); redaction ditunda.
+- [x] 7.4 Sentralisasi guardrails dalam satu module `backend/app/utils/guardrails.py` yang dilewati setiap Call_Site LLM.
 
 **Kriteria selesai:** tidak ada konten user yang sampai ke Gemini tanpa melewati guardrail input; semua output terstruktur tervalidasi schema.
 
