@@ -6,6 +6,30 @@ Untuk *apa* yang sedang kita bangun dan dalam urutan apa, lihat [`docs/ROADMAP.m
 
 ---
 
+## Toolchain
+
+Repo ini memakai [mise](https://mise.jdx.dev) untuk mengelola versi toolchain agar konsisten lintas contributor. Versi di-pin di `mise.toml` pada root repo.
+
+Setup sekali:
+
+1. Install mise — lihat [panduan instalasi mise](https://mise.jdx.dev/getting-started.html).
+2. Dari root repo, jalankan `mise install` untuk memasang versi tool yang di-pin.
+
+Tool yang dikelola saat ini:
+
+| Tool | Versi (pin) |
+|------|-------------|
+| Python | 3.11 |
+| Node.js | 20 |
+
+Versi di-pin ke major agar selaras dengan Dockerfile. **Docker tetap menjadi sumber kebenaran untuk build produksi** (`python:3.11-slim`, `node:20-alpine`); mise menyediakan toolchain lokal yang setara untuk development. Ketika Anda menaikkan versi tool, perbarui `mise.toml` dan Dockerfile terkait bersamaan agar tidak drift.
+
+PostgreSQL (versi 15) dijalankan via Docker Compose, bukan mise.
+
+> Tasks (mis. `mise run test`/`lint`) dan env management belum dikonfigurasi — akan ditambahkan kemudian.
+
+---
+
 ## Model Branching
 
 - `main` adalah branch integrasi. `main` harus selalu bisa di-build dan deployable.

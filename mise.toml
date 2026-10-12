@@ -1,0 +1,11 @@
+# Toolchain untuk Portal SA — dikelola dengan mise (https://mise.jdx.dev)
+#
+# Jalankan `mise install` di root repo untuk memasang versi tool yang di-pin di bawah.
+# Versi di-pin ke major agar selaras dengan Dockerfile (build produksi tetap
+# memakai image Docker sebagai sumber kebenaran: python:3.11-slim, node:20-alpine).
+#
+# Tasks dan env management akan ditambahkan kemudian.
+
+[tools]
+python = "3.11"
+node = "20"

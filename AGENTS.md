@@ -32,6 +32,14 @@ Bagian di bawah hanya memuat aturan khusus agen yang tidak bisa Anda simpulkan d
 
 ---
 
+## Toolchain
+
+- Toolchain dikelola dengan [mise](https://mise.jdx.dev); versi di-pin di `mise.toml` pada root. Jalankan `mise install` untuk menyamakan versi lokal.
+- Saat ini: Python 3.11, Node 20 (di-pin major). PostgreSQL 15 via Docker Compose.
+- Docker tetap sumber kebenaran untuk build produksi; jaga `mise.toml` dan Dockerfile selaras saat menaikkan versi. Detail di `CONTRIBUTING.md`.
+
+---
+
 ## Verification gate
 
 Belum ada CI otomatis. Sebelum menandai pekerjaan selesai atau membuka PR, verifikasi manual (detail di `CONTRIBUTING.md`):
