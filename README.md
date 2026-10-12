@@ -56,8 +56,9 @@ sa-apps/                        # Root repository (= root di VM)
 │   ├── alembic/               # Database migrations
 │   ├── scripts/               # Seed data & utilities
 │   ├── tests/                 # Unit tests
-│   ├── Dockerfile             # Multi-stage build
-│   └── requirements.txt
+│   ├── Dockerfile             # Multi-stage build (uv + uv.lock)
+│   ├── pyproject.toml         # Manifest & dependency (sumber kebenaran)
+│   └── uv.lock                # Lockfile (versi di-pin, reproducible)
 ├── frontend/                   # Next.js PWA frontend
 │   ├── src/
 │   │   ├── app/               # Pages (App Router)

@@ -2,6 +2,7 @@
 name = "portal-sa-backend"
 version = "1.0.0"
 description = "Backend API untuk Portal SA — manajemen proyek pre-sales dan aktivitas harian SA"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi==0.115.6",
@@ -21,12 +22,28 @@ dependencies = [
     "python-dotenv==1.0.1",
 ]
 
-[project.optional-dependencies]
+# Dependency group untuk development (PEP 735). Ini sumber kebenaran dev deps
+# saat memakai uv: `uv sync` memasang group ini secara default, `uv sync --no-dev`
+# untuk build produksi. Tidak ikut ter-ship ke package.
+[dependency-groups]
 dev = [
     "hypothesis==6.119.3",
     "pytest==8.3.4",
     "pytest-asyncio==0.24.0",
+    "ruff==0.8.4",
 ]
+
+# Build backend uv-native (uv_build). Menggantikan setuptools: tanpa config
+# package discovery, build cepat, dan terintegrasi penuh dengan uv/uv.lock.
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# Flat layout (bukan src/): module `app` ada langsung di root `backend/`.
+# `alembic/` adalah tooling migration, bukan bagian package — tidak di-ship.
+module-name = "app"
+module-root = ""
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -37,4 +54,6 @@ target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
+# E: pycodestyle errors, F: pyflakes, I: isort. Baseline konservatif —
+# perluasan ruleset (UP/B/C4/SIM) ditangani di effort terpisah.
 select = ["E", "F", "I"]
