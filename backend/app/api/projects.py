@@ -22,7 +22,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, func, desc, asc
+from sqlalchemy import select, func, desc, asc, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -200,7 +200,25 @@ async def list_projects(
     """
     query = select(Project)
 
-    # Filter berdasarkan ownership
+    # === Scoping akses berbasis role (dipaksa server-side) ===
+    # Lead_SA & Admin: akses ke seluruh proyek.
+    # Sales & SA: hanya proyek terkait dirinya (sebagai sales_pic / assigned_sa)
+    #             ATAU proyek di mana ia terdaftar sebagai collaborator.
+    # Catatan: query param sales_pic=me / assigned_to=me hanya penyempit opsional,
+    # bukan satu-satunya penjaga akses (sebelumnya rawan bypass bila param tidak dikirim).
+    if current_user.role not in ("Lead_SA", "Admin"):
+        collab_subquery = select(ProjectCollaborator.id_project).where(
+            ProjectCollaborator.user_id == current_user.id
+        )
+        query = query.where(
+            or_(
+                Project.sales_pic == current_user.id,
+                Project.assigned_sa == current_user.id,
+                Project.id_project.in_(collab_subquery),
+            )
+        )
+
+    # Penyempit opsional dari query param (hanya mempersempit, tidak memperluas akses)
     if sales_pic == "me":
         query = query.where(Project.sales_pic == current_user.id)
     elif assigned_to == "me":
@@ -264,10 +282,24 @@ async def get_status_summary(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Hitung jumlah proyek per status, dengan opsional filter berdasarkan role."""
+    """Hitung jumlah proyek per status, dengan filter berbasis role."""
     query = select(Project.status, func.count(Project.id_project))
 
-    # Filter berdasarkan ownership (sama seperti list_projects)
+    # === Scoping akses berbasis role (sama seperti list_projects) ===
+    # Lead_SA & Admin: seluruh proyek. Sales & SA: proyek terkait + collaborator.
+    if current_user.role not in ("Lead_SA", "Admin"):
+        collab_subquery = select(ProjectCollaborator.id_project).where(
+            ProjectCollaborator.user_id == current_user.id
+        )
+        query = query.where(
+            or_(
+                Project.sales_pic == current_user.id,
+                Project.assigned_sa == current_user.id,
+                Project.id_project.in_(collab_subquery),
+            )
+        )
+
+    # Penyempit opsional dari query param
     if sales_pic == "me":
         query = query.where(Project.sales_pic == current_user.id)
     elif assigned_to == "me":

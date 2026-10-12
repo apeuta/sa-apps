@@ -188,6 +188,21 @@ async def add_collaborator(
             detail=f"User dengan ID '{body.user_id}' tidak ditemukan.",
         )
 
+    # === Aturan role penambah terhadap role target ===
+    # - Sales hanya bisa menambahkan sesama Sales
+    # - SA hanya bisa menambahkan sesama SA
+    # - Lead_SA / Admin bisa menambahkan role apa pun
+    if current_user.role == "Sales" and target_user.role != "Sales":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sales hanya dapat menambahkan sesama Sales sebagai kolaborator.",
+        )
+    if current_user.role == "SA" and target_user.role != "SA":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SA hanya dapat menambahkan sesama SA sebagai kolaborator.",
+        )
+
     # Validasi role kolaborator
     if body.role not in ("viewer", "contributor"):
         raise HTTPException(
