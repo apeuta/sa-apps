@@ -17,16 +17,30 @@ import { ActivityLogForm } from "@/components/ActivityLogForm";
  * Requirements: 8.1
  */
 
+interface ProjectItem {
+  id_project: string;
+  project_name: string;
+  status?: string;
+}
+
 interface Project {
   id: string;
   project_name: string;
+  status?: string;
 }
 
 export default function ActivityLogsPage() {
-  const { data: projects, isLoading: projectsLoading } = useSWR<Project[]>(
+  const { data: rawProjects, isLoading: projectsLoading } = useSWR<ProjectItem[]>(
     "/projects",
     fetcher
   );
+
+  // API mengembalikan id_project; form butuh { id, project_name, status }
+  const projects: Project[] = (rawProjects || []).map((p) => ({
+    id: p.id_project,
+    project_name: p.project_name,
+    status: p.status,
+  }));
 
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -64,7 +78,7 @@ export default function ActivityLogsPage() {
           </div>
         ) : (
           <ActivityLogForm
-            projects={projects || []}
+            projects={projects}
             onSuccess={() => setRefreshKey((k) => k + 1)}
           />
         )}
