@@ -1,0 +1,71 @@
+# AGENTS.md
+
+Instruksi untuk AI coding agent yang bekerja di repository ini. Dirancang portabel lintas contributor, model, dan harness — ikuti instruksi ini apa pun tool yang Anda jalankan.
+
+File ini melengkapi, bukan menggandakan, dokumen lain. Sumber kebenaran:
+
+- **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — workflow lengkap: branching, commit, pull request, verification gate, migration, keamanan. **Baca dan ikuti ini.**
+- **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — apa yang sedang dibangun, dalam urutan apa, dengan kriteria selesai per fase.
+- **[`README.md`](README.md)** — gambaran produk dan setup untuk manusia.
+
+Bagian di bawah hanya memuat aturan khusus agen yang tidak bisa Anda simpulkan dari kode.
+
+---
+
+## Bahasa
+
+- Proyek ini berbahasa Indonesia, ditujukan untuk user berbahasa Indonesia.
+- Tulis semua output dalam **bahasa Indonesia**: balasan chat, dokumen markdown, komentar, docstring, commit message, deskripsi PR, dan pesan yang menghadap user.
+- **Istilah teknis tetap bahasa Inggris** — nama di dalam kode (field, class, enum, path), istilah engineering (build, deploy, stub, schema, migration, endpoint, state machine), istilah proses (branch, commit, merge, pull request, review), dan istilah keamanan (secret, credential, guardrail, prompt-injection). Jangan terjemahkan istilah ini ke bahasa Indonesia.
+
+---
+
+## Git workflow (wajib)
+
+- **Dilarang commit langsung ke `main` — tanpa pengecualian.** Termasuk perubahan dokumentasi dan one-liner.
+- Setiap unit pekerjaan: buat feature branch dari `main` terbaru, lalu masuk ke `main` lewat pull request.
+- Nama branch mengikuti convention di `CONTRIBUTING.md`: `feat/<slug>`, `fix/<slug>`, `refactor/<slug>`, `docs/<slug>`.
+- Commit memakai [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`).
+- Buat commit hanya ketika pekerjaan siap. Stage file secara spesifik — jangan `git add .` atau `git add -A`.
+- Jangan pernah commit secret. Jika sebuah file kemungkinan memuat secret (`.env`, credential, token), tandai sebelum staging dan jangan echo nilainya.
+- Jangan ubah git config. Jangan pakai perintah git destruktif (force push, reset --hard, clean -f) tanpa izin eksplisit user.
+
+---
+
+## Toolchain
+
+- Toolchain dikelola dengan [mise](https://mise.jdx.dev); versi di-pin di `mise.toml` pada root. Jalankan `mise install` untuk menyamakan versi lokal.
+- Saat ini: Python 3.11, Node 20 (di-pin major). PostgreSQL 15 via Docker Compose.
+- Docker tetap sumber kebenaran untuk build produksi; jaga `mise.toml` dan Dockerfile selaras saat menaikkan versi. Detail di `CONTRIBUTING.md`.
+
+---
+
+## Verification gate
+
+Belum ada CI otomatis. Sebelum menandai pekerjaan selesai atau membuka PR, verifikasi manual (detail di `CONTRIBUTING.md`):
+
+- **Backend** — test suite lolos dan app bisa di-import/start bersih. Test di `backend/tests/`, setup di `backend/pyproject.toml`.
+- **Frontend** — lolos type-check dan build tanpa error. Script di `frontend/package.json`.
+- **Full stack** — untuk perubahan runtime (migration, env var, service startup), konfirmasi stack naik via Docker Compose dan `/health` healthy.
+- Sebuah perubahan belum selesai hanya karena command keluar tanpa error. Verifikasi terhadap perilaku yang dimaksud.
+
+---
+
+## Database
+
+- Perubahan schema wajib disertai migration Alembic di `backend/alembic/versions/` dalam PR yang sama dengan perubahan model SQLAlchemy.
+- Jangan andalkan auto-create table saat startup sebagai mekanisme migration.
+
+---
+
+## Struktur proyek (orientasi cepat)
+
+- `backend/` — FastAPI (Python). `app/api` (router), `app/services` (business logic), `app/models` (SQLAlchemy), `app/schemas` (Pydantic), `app/core` (config, database, middleware).
+- `frontend/` — Next.js (TypeScript, App Router). `src/app` (page), `src/components`, `src/lib` (API client), `src/store` (Zustand).
+- `.kiro/specs/sa-portal-mvp/` — spec asli (requirements, design, tasks). Perlakukan sebagai historis; `docs/ROADMAP.md` adalah rencana aktif.
+
+---
+
+## Pengerjaan overhaul MVP saat ini
+
+Overhaul MVP yang sedang berjalan dikerjakan **satu fase roadmap per branch** (`feat/phase-<N>-<slug>`), satu fase per waktu, diverifikasi terhadap kriteria selesai di `docs/ROADMAP.md`. Update checkbox roadmap di branch yang sama dengan pekerjaannya. Detail di bagian "Workflow Overhaul Saat Ini" pada `CONTRIBUTING.md`.
