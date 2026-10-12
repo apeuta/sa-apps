@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: int = 30  # Timeout per request ke LLM
     LLM_MAX_RETRIES: int = 3  # Jumlah retry saat gagal
 
+    # Guardrails LLM
+    LLM_MAX_INPUT_CHARS: int = 20000  # batas karakter input teks
+    LLM_MAX_DOCUMENT_BYTES: int = 10_485_760  # 10 MB batas byte dokumen
+    GUARDRAIL_PII_DETECTION_ENABLED: bool = True  # toggle PII_Detector
+
     # API Keys per provider
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
