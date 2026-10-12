@@ -57,10 +57,28 @@ export function CollaboratorSection({
   const collaborators = data?.items ?? initialCollaborators ?? [];
 
   // Search users
-  const { data: searchResults } = useSWR<UserSearchResult[]>(
+  const { data: searchResultsRaw } = useSWR<UserSearchResult[]>(
     searchQuery.length >= 2 ? `/projects/users/search?q=${encodeURIComponent(searchQuery)}&limit=10` : null,
     fetcher
   );
+
+  // Batasi kandidat sesuai aturan role penambah (selaras dengan backend):
+  // - Sales hanya bisa menambahkan sesama Sales
+  // - SA hanya bisa menambahkan sesama SA
+  // - Lead_SA / Admin bisa menambahkan role apa pun
+  const searchResults = (searchResultsRaw ?? []).filter((u) => {
+    if (user?.role === "Sales") return u.role === "Sales";
+    if (user?.role === "SA") return u.role === "SA";
+    return true; // Lead_SA / Admin
+  });
+
+  // Keterangan batasan untuk ditampilkan di form
+  const addRestrictionNote =
+    user?.role === "Sales"
+      ? "Sebagai Sales, Anda hanya dapat menambahkan sesama Sales."
+      : user?.role === "SA"
+        ? "Sebagai SA, Anda hanya dapat menambahkan sesama SA."
+        : null;
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -156,6 +174,13 @@ export function CollaboratorSection({
       {/* Add form */}
       {showAddForm && (
         <div className="mb-4 p-3 bg-neutral-50 rounded-lg border border-neutral-200 space-y-3">
+          {/* Keterangan batasan role */}
+          {addRestrictionNote && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
+              {addRestrictionNote}
+            </p>
+          )}
+
           {/* Search user */}
           <div ref={searchRef} className="relative">
             <label className="text-xs font-medium text-neutral-600 mb-1 block">
@@ -173,8 +198,15 @@ export function CollaboratorSection({
                          focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
             />
 
+            {/* Tidak ada kandidat yang cocok setelah filter role */}
+            {searchQuery.length >= 2 && !selectedUser && searchResults.length === 0 && (
+              <p className="mt-1 text-xs text-neutral-400">
+                Tidak ada user yang cocok dan diizinkan untuk ditambahkan.
+              </p>
+            )}
+
             {/* Search results dropdown */}
-            {searchResults && searchResults.length > 0 && !selectedUser && (
+            {searchResults.length > 0 && !selectedUser && (
               <div className="absolute z-10 w-full mt-1 bg-white border border-neutral-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
                 {searchResults.map((u) => (
                   <button
