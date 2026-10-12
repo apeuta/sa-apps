@@ -8,11 +8,17 @@ import { CalendarSync } from "@/components/CalendarSync";
  * Halaman Calendar Sync
  *
  * Panel untuk:
- * - Sinkronisasi Google Calendar events
- * - Mapping events ke proyek
+ * - Sinkronisasi Google Calendar events (tampilan kalender bulanan)
+ * - Mapping events ke subtask + proyek terkait
  *
  * Requirements: 13.1, 13.2
  */
+
+/** Bentuk item dari API /projects (field id_project) */
+interface ProjectItem {
+  id_project: string;
+  project_name: string;
+}
 
 interface Project {
   id: string;
@@ -21,19 +27,25 @@ interface Project {
 
 export default function CalendarSyncPage() {
   // Fetch daftar proyek untuk mapping dropdown
-  const { data: projects, isLoading: projectsLoading } = useSWR<Project[]>(
+  const { data: rawProjects, isLoading: projectsLoading } = useSWR<ProjectItem[]>(
     "/projects",
     fetcher
   );
 
+  // Normalisasi: API mengembalikan id_project, komponen butuh { id, project_name }
+  const projects: Project[] = (rawProjects || []).map((p) => ({
+    id: p.id_project,
+    project_name: p.project_name,
+  }));
+
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-neutral-900">Calendar Sync</h1>
           <p className="mt-1 text-neutral-500 text-sm">
-            Sinkronisasi Google Calendar dan mapping ke proyek
+            Sinkronisasi Google Calendar dan mapping aktivitas ke subtask + proyek
           </p>
         </div>
         {/* Link kembali ke Activity Log */}
@@ -49,14 +61,14 @@ export default function CalendarSyncPage() {
       </div>
 
       {/* Calendar Sync Panel */}
-      <section className="bg-white rounded-xl border border-neutral-200 p-6 shadow-sm">
+      <section className="bg-white rounded-xl border border-neutral-200 p-4 sm:p-6 shadow-sm">
         {projectsLoading ? (
           <div className="space-y-3 animate-pulse">
             <div className="h-10 bg-neutral-200 rounded w-full" />
-            <div className="h-32 bg-neutral-200 rounded w-full" />
+            <div className="h-80 bg-neutral-200 rounded w-full" />
           </div>
         ) : (
-          <CalendarSync projects={projects || []} />
+          <CalendarSync projects={projects} />
         )}
       </section>
     </div>

@@ -1,22 +1,22 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import useSWR from "swr";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { fetcher, apiRequest } from "@/lib/fetcher";
 
 /**
- * Komponen Calendar Sync — sinkronisasi Google Calendar events
+ * Komponen Calendar Sync — tampilan kalender bulanan Google Calendar
  *
- * Fitur:
- * - Tombol "Sync Calendar" untuk fetch events dari GCal
- * - Daftar events yang tersinkronisasi
- * - Tombol "Map ke Proyek" untuk setiap event → modal mapping
- * - Setelah mapping berhasil, event ditandai ✓
+ * Alur:
+ * 1. Sync Calendar → fetch events (7 hari lalu + 7 hari depan) via OAuth token
+ * 2. Event ditandai sebagai titik pada grid kalender bulanan
+ * 3. Klik tanggal → panel detail menampilkan event pada hari itu
+ * 4. Klik "Map ke Subtask" pada event → modal pilih proyek + subtask + durasi
+ * 5. Submit → POST /calendar/map membuat ActivityLog
  *
  * Requirements: 13.1, 13.2
  */
 
-// Kategori subtask
+// Kategori subtask — harus selaras dengan VALID_SUBTASK_CATEGORIES di backend
 const SUBTASK_CATEGORIES = [
   "Meeting Pre-Sales",
   "Create PropTek",
@@ -26,19 +26,32 @@ const SUBTASK_CATEGORIES = [
   "Customer Workshop",
 ] as const;
 
+const WEEKDAY_LABELS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+const MONTH_LABELS = [
+  "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+  "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+];
+
 interface Project {
   id: string;
   project_name: string;
 }
 
 interface CalendarEvent {
-  id: string;
+  // Backend mengirim gcal_event_id (bukan id), lihat CalendarEventResponse
+  gcal_event_id: string;
   title: string;
   description?: string;
   start: string;
   end: string;
   is_all_day: boolean;
   is_mapped?: boolean;
+}
+
+/** Bentuk response dari POST /calendar/sync (dibungkus { events, total_events }) */
+interface CalendarSyncResult {
+  events: CalendarEvent[];
+  total_events: number;
 }
 
 interface CalendarSyncProps {
@@ -53,10 +66,39 @@ interface MapFormState {
   raw_notes: string;
 }
 
+/** Kunci tanggal lokal (YYYY-MM-DD) dari string ISO atau tanggal all-day */
+function dateKey(iso: string): string {
+  // All-day event: start berupa "YYYY-MM-DD" tanpa waktu
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Kunci tanggal lokal dari objek Date */
+function keyFromDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function CalendarSync({ projects }: CalendarSyncProps) {
   const [isSyncing, setIsSyncing] = useState(false);
+  const [hasSynced, setHasSynced] = useState(false);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [mappedIds, setMappedIds] = useState<Set<string>>(new Set());
+
+  // Navigasi kalender
+  const today = useMemo(() => new Date(), []);
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(today.getMonth()); // 0-11
+  const [selectedKey, setSelectedKey] = useState<string>(keyFromDate(today));
+
+  // Mapping modal
   const [mappingEventId, setMappingEventId] = useState<string | null>(null);
   const [mapForm, setMapForm] = useState<MapFormState>({
     project_id: "",
@@ -67,17 +109,15 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
   const [isMapping, setIsMapping] = useState(false);
   const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
-  // Auto-dismiss toast
   const showToast = useCallback((type: "success" | "error", message: string) => {
     setToast({ type, message });
     setTimeout(() => setToast(null), 3000);
   }, []);
 
   /**
-   * Check URL hash untuk gcal_token setelah redirect dari Google OAuth.
-   * Format: #gcal_token=xxx atau #gcal_error=xxx
+   * Baca #gcal_token / #gcal_error dari URL hash setelah redirect OAuth.
    */
-  useState(() => {
+  useEffect(() => {
     if (typeof window === "undefined") return;
     const hash = window.location.hash;
     if (!hash) return;
@@ -87,13 +127,14 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
 
     if (tokenMatch) {
       localStorage.setItem("google_calendar_token", decodeURIComponent(tokenMatch[1]));
-      // Bersihkan hash dari URL
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      showToast("success", "Google Calendar terhubung. Klik Sync Calendar untuk memuat event.");
     } else if (errorMatch) {
       localStorage.removeItem("google_calendar_token");
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      showToast("error", "Otorisasi Google Calendar gagal. Silakan coba lagi.");
     }
-  });
+  }, [showToast]);
 
   /**
    * Redirect ke Google OAuth untuk mendapatkan Calendar access token.
@@ -108,14 +149,13 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
   }, [showToast]);
 
   /**
-   * Sync calendar — POST /calendar/sync dengan google_calendar_token dari localStorage.
+   * Sync calendar — POST /calendar/sync dengan token dari localStorage.
    * Jika token belum ada, redirect ke Google OAuth dulu.
    */
   const handleSync = useCallback(async () => {
-    let gcalToken = localStorage.getItem("google_calendar_token");
+    const gcalToken = localStorage.getItem("google_calendar_token");
 
     if (!gcalToken) {
-      // Belum ada token Google Calendar — redirect ke OAuth
       showToast("success", "Mengarahkan ke Google untuk otorisasi Calendar...");
       await redirectToGoogleAuth();
       return;
@@ -123,18 +163,24 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
 
     setIsSyncing(true);
     try {
-      const result = await apiRequest<CalendarEvent[]>("/calendar/sync", {
+      const result = await apiRequest<CalendarSyncResult>("/calendar/sync", {
         method: "POST",
         body: { access_token: gcalToken },
       });
-      setEvents(Array.isArray(result) ? result : []);
-      showToast("success", "Calendar berhasil disinkronisasi");
+      const fetched = Array.isArray(result?.events) ? result.events : [];
+      setEvents(fetched);
+      setHasSynced(true);
+      showToast(
+        "success",
+        fetched.length > 0
+          ? `Calendar tersinkronisasi — ${fetched.length} event ditemukan`
+          : "Calendar tersinkronisasi, tidak ada event pada rentang 7 hari ini"
+      );
     } catch (err: unknown) {
-      // Jika token expired/invalid, hapus dan minta re-auth
       const message = err instanceof Error ? err.message : "Gagal sync calendar";
       if (message.includes("401") || message.includes("403") || message.includes("invalid")) {
         localStorage.removeItem("google_calendar_token");
-        showToast("error", "Token Google Calendar kedaluwarsa. Silakan coba sync ulang.");
+        showToast("error", "Token Google Calendar kedaluwarsa. Silakan sync ulang untuk otorisasi.");
       } else {
         showToast("error", message);
       }
@@ -143,40 +189,104 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
     }
   }, [showToast, redirectToGoogleAuth]);
 
-  /**
-   * Buka modal mapping untuk event tertentu
-   */
+  /** Kelompokkan event per tanggal (key YYYY-MM-DD) */
+  const eventsByDate = useMemo(() => {
+    const map = new Map<string, CalendarEvent[]>();
+    for (const ev of events) {
+      const key = dateKey(ev.start);
+      if (!key) continue;
+      const list = map.get(key) ?? [];
+      list.push(ev);
+      map.set(key, list);
+    }
+    return map;
+  }, [events]);
+
+  /** Event untuk tanggal yang dipilih, urut berdasarkan waktu mulai */
+  const selectedEvents = useMemo(() => {
+    const list = eventsByDate.get(selectedKey) ?? [];
+    return [...list].sort((a, b) => a.start.localeCompare(b.start));
+  }, [eventsByDate, selectedKey]);
+
+  /** Susun sel-sel grid kalender untuk bulan yang sedang ditampilkan */
+  const calendarCells = useMemo(() => {
+    const firstDay = new Date(viewYear, viewMonth, 1);
+    const startWeekday = firstDay.getDay(); // 0 (Min) - 6 (Sab)
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+
+    const cells: { date: Date | null; key: string }[] = [];
+    // Padding awal untuk hari sebelum tanggal 1
+    for (let i = 0; i < startWeekday; i++) {
+      cells.push({ date: null, key: `pad-start-${i}` });
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(viewYear, viewMonth, d);
+      cells.push({ date, key: keyFromDate(date) });
+    }
+    // Padding akhir agar grid genap (kelipatan 7)
+    while (cells.length % 7 !== 0) {
+      cells.push({ date: null, key: `pad-end-${cells.length}` });
+    }
+    return cells;
+  }, [viewYear, viewMonth]);
+
+  const goToPrevMonth = () => {
+    setViewMonth((m) => {
+      if (m === 0) {
+        setViewYear((y) => y - 1);
+        return 11;
+      }
+      return m - 1;
+    });
+  };
+
+  const goToNextMonth = () => {
+    setViewMonth((m) => {
+      if (m === 11) {
+        setViewYear((y) => y + 1);
+        return 0;
+      }
+      return m + 1;
+    });
+  };
+
+  const goToToday = () => {
+    setViewYear(today.getFullYear());
+    setViewMonth(today.getMonth());
+    setSelectedKey(keyFromDate(today));
+  };
+
+  const todayKey = keyFromDate(today);
+
+  /** Buka modal mapping untuk event tertentu */
   const openMappingModal = (eventId: string) => {
-    const event = events.find((e) => e.id === eventId);
+    const event = events.find((e) => e.gcal_event_id === eventId);
     setMappingEventId(eventId);
     setMapForm({
       project_id: "",
       subtask_category: "",
-      duration_hours: event ? calculateDuration(event.start, event.end) : "1",
+      duration_hours: event ? calculateDuration(event.start, event.end, event.is_all_day) : "1",
       raw_notes: event?.description || "",
     });
   };
 
-  /**
-   * Hitung durasi dari start-end dalam jam
-   */
-  const calculateDuration = (start: string, end: string): string => {
+  /** Hitung durasi (jam) dari start-end, kelipatan 0.25 */
+  const calculateDuration = (start: string, end: string, isAllDay: boolean): string => {
+    if (isAllDay) return "8";
     const diff = (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60);
-    return diff > 0 ? Math.round(diff * 4) / 4 + "" : "1"; // Round ke 0.25
+    return diff > 0 ? Math.round(diff * 4) / 4 + "" : "1";
   };
 
-  /**
-   * Submit mapping — POST /calendar/map
-   */
+  /** Submit mapping — POST /calendar/map */
   const handleMap = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       if (!mappingEventId || !mapForm.project_id || !mapForm.subtask_category) {
-        showToast("error", "Proyek dan kategori wajib dipilih");
+        showToast("error", "Proyek dan subtask wajib dipilih");
         return;
       }
 
-      const event = events.find((ev) => ev.id === mappingEventId);
+      const event = events.find((ev) => ev.gcal_event_id === mappingEventId);
       if (!event) return;
 
       setIsMapping(true);
@@ -199,7 +309,7 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
 
         setMappedIds((prev) => new Set(prev).add(mappingEventId));
         setMappingEventId(null);
-        showToast("success", "Event berhasil di-mapping ke proyek");
+        showToast("success", "Event berhasil di-mapping ke subtask proyek");
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Gagal mapping event";
         showToast("error", message);
@@ -210,15 +320,30 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
     [mappingEventId, mapForm, events, showToast]
   );
 
-  // Format waktu event
-  const formatEventTime = (iso: string) => {
-    return new Date(iso).toLocaleString("id-ID", {
-      day: "numeric",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+  /** Format jam event (HH:mm) atau "Seharian" */
+  const formatEventTime = (event: CalendarEvent): string => {
+    if (event.is_all_day) return "Seharian";
+    const start = new Date(event.start);
+    const end = new Date(event.end);
+    const fmt = (d: Date) =>
+      d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+    return `${fmt(start)} – ${fmt(end)}`;
   };
+
+  /** Label tanggal panel detail */
+  const selectedDateLabel = useMemo(() => {
+    const [y, m, d] = selectedKey.split("-").map(Number);
+    if (!y) return "";
+    const date = new Date(y, m - 1, d);
+    return date.toLocaleDateString("id-ID", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+  }, [selectedKey]);
+
+  const mappingEvent = events.find((e) => e.gcal_event_id === mappingEventId);
 
   return (
     <div className="space-y-4">
@@ -236,14 +361,14 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
         </div>
       )}
 
-      {/* Header: Tombol Sync */}
-      <div className="flex items-center justify-between">
+      {/* Header: judul + tombol Sync */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h3 className="text-sm font-medium text-neutral-700">Google Calendar Events</h3>
         <button
           onClick={handleSync}
           disabled={isSyncing}
           className="px-4 py-2 text-sm font-medium rounded-lg min-h-[44px]
-            bg-primary-600 text-white hover:bg-primary-700 
+            bg-primary-600 text-white hover:bg-primary-700
             disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {isSyncing ? (
@@ -260,74 +385,169 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
         </button>
       </div>
 
-      {/* Daftar events */}
-      {events.length === 0 ? (
-        <div className="p-6 text-center text-neutral-500 border border-neutral-200 rounded-lg">
-          <p className="text-sm">Klik &quot;Sync Calendar&quot; untuk mengambil events terbaru</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {events.map((event) => {
-            const isMapped = mappedIds.has(event.id) || event.is_mapped;
-            return (
-              <div
-                key={event.id}
-                className={`p-4 border rounded-lg transition-colors ${
-                  isMapped
-                    ? "border-green-200 bg-green-50"
-                    : "border-neutral-200 hover:border-neutral-300"
-                }`}
+      {/* Grid kalender + panel detail */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Kalender bulanan */}
+        <div className="lg:col-span-2 rounded-xl border border-neutral-200 p-4">
+          {/* Navigasi bulan */}
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-base font-semibold text-neutral-800">
+              {MONTH_LABELS[viewMonth]} {viewYear}
+            </h4>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={goToPrevMonth}
+                className="w-9 h-9 flex items-center justify-center rounded-md hover:bg-neutral-100 text-neutral-600"
+                aria-label="Bulan sebelumnya"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h4 className="text-sm font-medium text-neutral-800 truncate">
+                ‹
+              </button>
+              <button
+                onClick={goToToday}
+                className="px-3 h-9 text-xs font-medium rounded-md hover:bg-neutral-100 text-primary-600"
+              >
+                Hari Ini
+              </button>
+              <button
+                onClick={goToNextMonth}
+                className="w-9 h-9 flex items-center justify-center rounded-md hover:bg-neutral-100 text-neutral-600"
+                aria-label="Bulan berikutnya"
+              >
+                ›
+              </button>
+            </div>
+          </div>
+
+          {/* Label hari */}
+          <div className="grid grid-cols-7 gap-1 mb-1">
+            {WEEKDAY_LABELS.map((w) => (
+              <div key={w} className="text-center text-[11px] font-medium text-neutral-400 py-1">
+                {w}
+              </div>
+            ))}
+          </div>
+
+          {/* Sel tanggal */}
+          <div className="grid grid-cols-7 gap-1">
+            {calendarCells.map((cell) => {
+              if (!cell.date) {
+                return <div key={cell.key} className="aspect-square" />;
+              }
+              const dayEvents = eventsByDate.get(cell.key) ?? [];
+              const isSelected = cell.key === selectedKey;
+              const isToday = cell.key === todayKey;
+              return (
+                <button
+                  key={cell.key}
+                  onClick={() => setSelectedKey(cell.key)}
+                  className={`aspect-square rounded-md flex flex-col items-center justify-center gap-1
+                    text-sm transition-colors relative
+                    ${isSelected
+                      ? "bg-primary-600 text-white"
+                      : isToday
+                        ? "bg-primary-50 text-primary-700 hover:bg-primary-100"
+                        : "text-neutral-700 hover:bg-neutral-100"
+                    }`}
+                >
+                  <span className={isToday && !isSelected ? "font-semibold" : ""}>
+                    {cell.date.getDate()}
+                  </span>
+                  {/* Penanda event */}
+                  {dayEvents.length > 0 && (
+                    <span className="flex items-center gap-0.5">
+                      {dayEvents.slice(0, 3).map((_, i) => (
+                        <span
+                          key={i}
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            isSelected ? "bg-white" : "bg-primary-500"
+                          }`}
+                        />
+                      ))}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {!hasSynced && (
+            <p className="mt-4 text-center text-xs text-neutral-400">
+              Klik &quot;Sync Calendar&quot; untuk memuat event dari Google Calendar
+              (rentang 7 hari lalu sampai 7 hari depan).
+            </p>
+          )}
+        </div>
+
+        {/* Panel detail harian */}
+        <div className="rounded-xl border border-neutral-200 p-4">
+          <p className="text-[11px] font-medium text-neutral-400 uppercase tracking-wide">
+            Detail untuk
+          </p>
+          <h4 className="text-sm font-semibold text-neutral-800 mb-3">
+            {selectedDateLabel}
+          </h4>
+
+          {selectedEvents.length === 0 ? (
+            <div className="py-8 text-center text-sm text-neutral-400">
+              {hasSynced
+                ? "Tidak ada event pada tanggal ini"
+                : "Belum ada event. Sinkronkan calendar terlebih dahulu."}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {selectedEvents.map((event) => {
+                const isMapped = mappedIds.has(event.gcal_event_id) || event.is_mapped;
+                return (
+                  <div
+                    key={event.gcal_event_id}
+                    className={`p-3 border rounded-lg ${
+                      isMapped ? "border-green-200 bg-green-50" : "border-neutral-200"
+                    }`}
+                  >
+                    <div className="flex items-start gap-2 mb-1">
+                      <h5 className="text-sm font-medium text-neutral-800 flex-1 min-w-0 break-words">
                         {event.title}
-                      </h4>
+                      </h5>
                       {event.is_all_day && (
-                        <span className="px-1.5 py-0.5 text-[10px] font-medium bg-neutral-100 text-neutral-600 rounded">
+                        <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium bg-neutral-100 text-neutral-600 rounded">
                           All Day
                         </span>
                       )}
-                      {isMapped && (
-                        <span className="px-1.5 py-0.5 text-[10px] font-medium bg-green-100 text-green-700 rounded">
-                          ✓ Mapped
-                        </span>
-                      )}
                     </div>
-                    <p className="text-xs text-neutral-500">
-                      {formatEventTime(event.start)} — {formatEventTime(event.end)}
-                    </p>
+                    <p className="text-xs text-neutral-500">{formatEventTime(event)}</p>
                     {event.description && (
-                      <p className="text-xs text-neutral-400 mt-1 truncate">{event.description}</p>
+                      <p className="text-xs text-neutral-400 mt-1 line-clamp-2">
+                        {event.description}
+                      </p>
+                    )}
+
+                    {isMapped ? (
+                      <span className="inline-flex items-center gap-1 mt-2 px-2 py-1 text-[11px] font-medium bg-green-100 text-green-700 rounded">
+                        ✓ Sudah di-mapping
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => openMappingModal(event.gcal_event_id)}
+                        className="mt-2 w-full px-3 py-2 text-xs font-medium rounded-md min-h-[40px]
+                          bg-primary-50 text-primary-700 hover:bg-primary-100 transition-colors"
+                      >
+                        Map ke Subtask
+                      </button>
                     )}
                   </div>
-
-                  {/* Tombol Map ke Proyek */}
-                  {!isMapped && (
-                    <button
-                      onClick={() => openMappingModal(event.id)}
-                      className="shrink-0 px-3 py-2 text-xs font-medium rounded-md min-h-[44px] min-w-[44px]
-                        bg-primary-50 text-primary-700 hover:bg-primary-100 transition-colors"
-                    >
-                      Map ke Proyek
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Modal Mapping */}
       {mappingEventId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
-            <h3 className="text-lg font-semibold text-neutral-800 mb-4">Map Event ke Proyek</h3>
-            <p className="text-sm text-neutral-500 mb-4">
-              {events.find((e) => e.id === mappingEventId)?.title}
-            </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-neutral-800 mb-1">Map Event ke Subtask</h3>
+            <p className="text-sm text-neutral-500 mb-4">{mappingEvent?.title}</p>
 
             <form onSubmit={handleMap} className="space-y-4">
               {/* Pilih proyek */}
@@ -347,12 +567,17 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
                     <option key={p.id} value={p.id}>{p.project_name}</option>
                   ))}
                 </select>
+                {projects.length === 0 && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    Tidak ada proyek tersedia untuk di-mapping.
+                  </p>
+                )}
               </div>
 
-              {/* Kategori */}
+              {/* Subtask category */}
               <div>
                 <label htmlFor="map-category" className="block text-sm font-medium text-neutral-700 mb-1">
-                  Kategori <span className="text-red-500">*</span>
+                  Subtask <span className="text-red-500">*</span>
                 </label>
                 <select
                   id="map-category"
@@ -361,7 +586,7 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
                   className="w-full px-3 py-2.5 border border-neutral-300 rounded-lg text-sm
                     focus:outline-none focus:ring-2 focus:ring-primary-500"
                 >
-                  <option value="">Pilih kategori...</option>
+                  <option value="">Pilih subtask...</option>
                   {SUBTASK_CATEGORIES.map((cat) => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
