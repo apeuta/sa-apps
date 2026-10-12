@@ -35,22 +35,33 @@ class ActivityLog(Base):
         primary_key=True,
         comment="ID log aktivitas (format custom)",
     )
-    id_project: Mapped[str] = mapped_column(
+    id_project: Mapped[Optional[str]] = mapped_column(
         String(50),
         ForeignKey("projects.id_project"),
-        nullable=False,
-        comment="FK ke proyek terkait",
+        nullable=True,
+        comment="FK ke proyek terkait (wajib untuk work_type=Project, NULL untuk Non-Project)",
     )
     sa_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id"),
         nullable=False,
-        comment="FK ke user SA yang melakukan aktivitas",
+        comment="FK ke user yang melakukan aktivitas (SA atau Lead_SA)",
+    )
+    work_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="Project",
+        comment="Jenis aktivitas: Project atau Non-Project",
+    )
+    project_phase: Mapped[Optional[str]] = mapped_column(
+        String(30),
+        nullable=True,
+        comment="Fase proyek (Pre-Implementation/Implementation/Post-Implementation); NULL untuk Non-Project",
     )
     subtask_category: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        comment="Kategori aktivitas SA",
+        comment="Sub-kategori aktivitas (tergantung work_type)",
     )
     gcal_event_id: Mapped[Optional[str]] = mapped_column(
         String(255),
@@ -83,11 +94,31 @@ class ActivityLog(Base):
 
     # Constraints dan Indexes
     __table_args__ = (
+        # Union seluruh sub-kategori valid (Project + Non-Project).
+        # Kecocokan subtask dengan work_type divalidasi di layer schema/service.
         CheckConstraint(
-            "subtask_category IN ('Meeting Pre-Sales', 'Create PropTek', "
-            "'Create BOQ', 'Peer Review', 'Internal Discussion', "
-            "'Customer Workshop')",
+            "subtask_category IN ("
+            "'Assessment', 'Internal Meeting', 'Customer Meeting', "
+            "'Principal Meeting', 'Commercial Document', 'Technical Document', "
+            "'Document Review', 'Training', 'Self-Lab', 'Self-Learning', "
+            "'Exam', 'Internal Presentation', 'External Presentation')",
             name="chk_activity_logs_subtask_category",
+        ),
+        CheckConstraint(
+            "work_type IN ('Project', 'Non-Project')",
+            name="chk_activity_logs_work_type",
+        ),
+        CheckConstraint(
+            "project_phase IS NULL OR project_phase IN "
+            "('Pre-Implementation', 'Implementation', 'Post-Implementation')",
+            name="chk_activity_logs_project_phase",
+        ),
+        # Konsistensi: Project wajib punya id_project + project_phase;
+        # Non-Project tidak boleh punya keduanya.
+        CheckConstraint(
+            "(work_type = 'Project' AND id_project IS NOT NULL AND project_phase IS NOT NULL) "
+            "OR (work_type = 'Non-Project' AND id_project IS NULL AND project_phase IS NULL)",
+            name="chk_activity_logs_worktype_consistency",
         ),
         CheckConstraint(
             "duration_hours BETWEEN 0.25 AND 24.00",

@@ -89,37 +89,46 @@ class ActivityLogger:
     async def create_log(
         self,
         sa_id: uuid.UUID,
-        id_project: str,
         subtask_category: str,
         duration_hours: Decimal,
         raw_notes: str,
+        work_type: str = "Project",
+        id_project: Optional[str] = None,
+        project_phase: Optional[str] = None,
         gcal_event_id: Optional[str] = None,
     ) -> ActivityLog:
         """
         Buat activity log baru.
 
         Flow:
-        1. Validasi project_id ada di database
+        1. Jika Project: validasi project_id ada di database
         2. Generate ID log unik
         3. Coba polish notes via AI
         4. Simpan record ke database (dengan atau tanpa polished notes)
 
         Args:
-            sa_id: UUID user SA yang membuat log.
-            id_project: ID proyek terkait.
-            subtask_category: Kategori subtask.
+            sa_id: UUID user (SA atau Lead_SA) yang membuat log.
+            subtask_category: Sub-kategori aktivitas (tergantung work_type).
             duration_hours: Durasi dalam jam.
-            raw_notes: Catatan mentah dari SA.
+            raw_notes: Catatan mentah.
+            work_type: 'Project' atau 'Non-Project'.
+            id_project: ID proyek (wajib untuk Project, None untuk Non-Project).
+            project_phase: Fase proyek (wajib untuk Project, None untuk Non-Project).
             gcal_event_id: ID event Google Calendar (opsional).
 
         Returns:
             Instance ActivityLog yang sudah tersimpan.
 
         Raises:
-            ValueError: Jika project_id tidak ditemukan.
+            ValueError: Jika Project dan project_id tidak ditemukan.
         """
-        # Validasi project exists
-        await self._validate_project(id_project)
+        # Validasi project hanya untuk aktivitas Project
+        if work_type == "Project":
+            await self._validate_project(id_project)
+        else:
+            # Non-Project: pastikan tidak terkait proyek/fase
+            id_project = None
+            project_phase = None
 
         # Generate ID unik
         id_log = _generate_log_id()
@@ -130,7 +139,9 @@ class ActivityLogger:
         # Buat record activity log
         activity_log = ActivityLog(
             id_log=id_log,
+            work_type=work_type,
             id_project=id_project,
+            project_phase=project_phase,
             sa_id=sa_id,
             subtask_category=subtask_category,
             duration_hours=duration_hours,
@@ -144,8 +155,9 @@ class ActivityLogger:
         await self.db.commit()
         await self.db.refresh(activity_log)
 
+        target = id_project if work_type == "Project" else "Non-Project"
         logger.info(
-            f"Activity log dibuat: {id_log} untuk proyek {id_project} "
+            f"Activity log dibuat: {id_log} ({target}) "
             f"(polished: {'ya' if ai_polished_notes else 'tidak'})"
         )
 
