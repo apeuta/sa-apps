@@ -1,11 +1,18 @@
 # Toolchain untuk Portal SA — dikelola dengan mise (https://mise.jdx.dev)
 #
 # Jalankan `mise install` di root repo untuk memasang versi tool yang di-pin di bawah.
-# Versi di-pin ke major agar selaras dengan Dockerfile (build produksi tetap
-# memakai image Docker sebagai sumber kebenaran: python:3.11-slim, node:20-alpine).
+# Versi di-pin agar selaras dengan Dockerfile (build produksi tetap memakai image
+# Docker sebagai sumber kebenaran: python:3.11-slim, node:20-alpine, uv 0.13).
+#
+# Semua tool yang dibutuhkan untuk mengembangkan repo ini di-track di sini —
+# tambahkan tool baru ke blok [tools] agar seluruh contributor memakai versi sama.
 #
 # Tasks dan env management akan ditambahkan kemudian.
 
 [tools]
 python = "3.11"
 node = "20"
+# uv: package manager & build backend untuk backend/ (sumber kebenaran dependency
+# via pyproject.toml + uv.lock). Di-pin ke minor 0.13 selaras dengan Dockerfile
+# (ghcr.io/astral-sh/uv:0.13) dan build backend uv_build (>=0.13,<0.14).
+uv = "0.13"
