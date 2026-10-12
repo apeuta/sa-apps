@@ -1,0 +1,28 @@
+# Dependencies — diinstall ulang di dalam image (stage deps: npm ci)
+node_modules
+
+# Build output — dibuild ulang di dalam image (stage builder: npm run build)
+.next
+out
+
+# Git & env
+.git
+.gitignore
+.env
+.env.local
+.env.*.local
+
+# Cache & log
+.DS_Store
+*.log
+npm-debug.log*
+.turbo
+.swc
+
+# IDE
+.vscode
+.idea
+
+# Dockerfile sendiri tidak perlu masuk context
+Dockerfile
+.dockerignore
