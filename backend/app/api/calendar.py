@@ -62,10 +62,14 @@ async def get_calendar_auth_url():
             ),
         )
 
-    # State parameter: "calendar_auth|{frontend_url}"
-    # Callback handler akan detect prefix ini dan handle sebagai calendar auth
+    # State parameter: "calendar_auth|{return_url}"
+    # Callback handler akan detect prefix ini dan handle sebagai calendar auth.
+    # return_url diarahkan ke halaman Calendar Sync agar komponen CalendarSync
+    # (yang membaca #gcal_token dari URL hash) ter-mount dan menangkap token.
+    # Tanpa path ini, user mendarat di root dan token tidak pernah terbaca.
     frontend_url = settings.FRONTEND_URL.rstrip("/")
-    state = f"calendar_auth|{frontend_url}"
+    return_url = f"{frontend_url}/activity-logs/calendar"
+    state = f"calendar_auth|{return_url}"
 
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,

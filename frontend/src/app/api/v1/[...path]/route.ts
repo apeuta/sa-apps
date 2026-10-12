@@ -101,6 +101,20 @@ async function proxyRequest(
     // Google OAuth redirect ke /api/v1/auth/callback (API route), bukan
     // frontend page. Jadi kita perlu redirect ke /auth/callback dengan data.
     if (path === "auth/callback") {
+      // Calendar Auth Flow: backend membalas 3xx redirect ke
+      // {frontend_url}#gcal_token=... (atau #gcal_error=...).
+      // Karena proxy pakai redirect:"manual", redirect itu TIDAK diikuti —
+      // kita harus teruskan Location header ke browser agar token (di URL hash)
+      // sampai ke halaman calendar. Tanpa ini, flow jatuh ke cabang error
+      // di bawah dan user salah diarahkan ke /login.
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (location) {
+          console.log(`[API Proxy] ← auth/callback redirect (calendar flow) → ${location}`);
+          return NextResponse.redirect(location);
+        }
+      }
+
       if (response.status === 200) {
         try {
           const data = JSON.parse(body);
