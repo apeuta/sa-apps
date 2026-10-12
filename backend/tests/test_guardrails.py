@@ -10,11 +10,12 @@ Override settings via ``monkeypatch.setattr("app.utils.guardrails.settings. ..."
 mengikuti keputusan desain (settings dibaca saat call-time).
 """
 
+import contextlib
 import json
 import logging
 
-import pytest
-from hypothesis import given, settings as hyp_settings
+from hypothesis import given
+from hypothesis import settings as hyp_settings
 from hypothesis import strategies as st
 
 from app.utils import guardrails as g
@@ -121,9 +122,6 @@ def test_property_2_size_clamp_dokumen_kecil(content):
     result = check_document_size(content, "application/pdf", "dok.pdf")
     assert len(result.safe_value) == min(len(content), MAX_BYTES)
     assert result.truncated is (len(content) > MAX_BYTES)
-
-
-import contextlib
 
 
 @contextlib.contextmanager
