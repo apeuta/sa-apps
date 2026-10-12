@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSidebarStore } from "@/store/sidebar";
 import { useAuthStore } from "@/store/auth";
+import { logout } from "@/lib/auth";
 
 /**
  * Sidebar Navigation — collapsible (Requirement 19.7)
@@ -125,11 +126,17 @@ function getNavItemsForRole(role?: string): NavItem[] {
 
 export function Sidebar() {
   const { isOpen, toggle } = useSidebarStore();
-  const { user } = useAuthStore();
+  const { user, clearUser } = useAuthStore();
   const pathname = usePathname();
 
   // Dapatkan item navigasi sesuai role
   const navItems = getNavItemsForRole(user?.role);
+
+  /** Logout: reset store lalu revoke session + redirect ke /login */
+  const handleLogout = () => {
+    clearUser();
+    void logout();
+  };
 
   return (
     <aside
@@ -257,8 +264,8 @@ export function Sidebar() {
         </ul>
       </nav>
 
-      {/* Footer — info user */}
-      <div className="border-t border-neutral-100 p-3">
+      {/* Footer — info user + logout */}
+      <div className="border-t border-neutral-100 p-3 space-y-2">
         <div
           className={`flex items-center gap-3 ${isOpen ? "" : "justify-center"}`}
         >
@@ -278,6 +285,34 @@ export function Sidebar() {
             </div>
           )}
         </div>
+
+        {/* Tombol Logout */}
+        <button
+          onClick={handleLogout}
+          className={`flex items-center gap-3 rounded-lg px-3 w-full
+            min-h-[44px] text-sm font-medium
+            text-neutral-600 hover:bg-red-50 hover:text-red-600
+            transition-colors duration-100
+            ${isOpen ? "" : "justify-center"}`}
+          title="Keluar"
+          aria-label="Keluar"
+        >
+          <svg
+            className="w-5 h-5 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+            />
+          </svg>
+          {isOpen && <span>Keluar</span>}
+        </button>
       </div>
     </aside>
   );
