@@ -58,8 +58,8 @@ def _get_valid_next_statuses(current_status: str, user_role: str) -> list[str]:
     if next_status:
         valid.append(next_status)
 
-    # Status "Lost" — hanya Lead_SA, dari status manapun kecuali "Handover Complete" dan "Lost" sendiri
-    if user_role == "Lead_SA" and current_status not in LOST_EXCLUDED_STATUSES:
+    # Status "Lost" — hanya Lead_SA/Admin, dari status manapun kecuali "Handover Complete" dan "Lost" sendiri
+    if user_role in ("Lead_SA", "Admin") and current_status not in LOST_EXCLUDED_STATUSES:
         valid.append("Lost")
 
     return valid
@@ -159,11 +159,11 @@ async def update_project_status(
     old_status = project.status
     new_status = body.new_status
 
-    # Khusus status "Lost" — hanya Lead_SA yang bisa
-    if new_status == "Lost" and current_user.role != "Lead_SA":
+    # Khusus status "Lost" — hanya Lead_SA/Admin yang bisa
+    if new_status == "Lost" and current_user.role not in ("Lead_SA", "Admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Hanya Lead_SA yang dapat mengubah status proyek menjadi 'Lost'.",
+            detail="Hanya Lead_SA atau Admin yang dapat mengubah status proyek menjadi 'Lost'.",
         )
 
     # Validasi transisi menggunakan state machine
