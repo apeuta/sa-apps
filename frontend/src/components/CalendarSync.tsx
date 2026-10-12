@@ -35,6 +35,43 @@ const MONTH_LABELS = [
   "Juli", "Agustus", "September", "Oktober", "November", "Desember",
 ];
 
+// Konstanta Google Calendar API — fetch langsung dari browser.
+// Dilakukan di sisi klien (bukan via backend /calendar/sync) untuk menghindari
+// WAF Cloudflare yang memblokir POST ke origin dengan payload token.
+// Token Google (OAuth) dikirim langsung browser -> Google via HTTPS.
+const GCAL_EVENTS_ENDPOINT =
+  "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const GCAL_RANGE_DAYS = 7;
+const GCAL_MAX_RESULTS = 200;
+
+/** Bentuk mentah item event dari Google Calendar API */
+interface GCalRawEvent {
+  id?: string;
+  summary?: string;
+  description?: string;
+  start?: { date?: string; dateTime?: string };
+  end?: { date?: string; dateTime?: string };
+}
+
+/**
+ * Parse satu item event Google menjadi CalendarEvent.
+ * Mereplikasi logika backend: deteksi all-day via 'date' vs 'dateTime'.
+ */
+function parseGCalEvent(item: GCalRawEvent): CalendarEvent | null {
+  if (!item.id) return null;
+  const startRaw = item.start || {};
+  const endRaw = item.end || {};
+  const isAllDay = !!startRaw.date && !startRaw.dateTime;
+  return {
+    gcal_event_id: item.id,
+    title: item.summary || "(No Title)",
+    description: item.description,
+    start: isAllDay ? startRaw.date! : startRaw.dateTime || "",
+    end: isAllDay ? endRaw.date || "" : endRaw.dateTime || "",
+    is_all_day: isAllDay,
+  };
+}
+
 interface Project {
   id: string;
   project_name: string;
@@ -49,12 +86,6 @@ interface CalendarEvent {
   end: string;
   is_all_day: boolean;
   is_mapped?: boolean;
-}
-
-/** Bentuk response dari POST /calendar/sync (dibungkus { events, total_events }) */
-interface CalendarSyncResult {
-  events: CalendarEvent[];
-  total_events: number;
 }
 
 interface CalendarSyncProps {
@@ -152,7 +183,8 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
   }, [showToast]);
 
   /**
-   * Sync calendar — POST /calendar/sync dengan token dari localStorage.
+   * Sync calendar — fetch events LANGSUNG dari Google Calendar API di browser.
+   * Tidak lagi via backend /calendar/sync agar tidak kena WAF Cloudflare.
    * Jika token belum ada, redirect ke Google OAuth dulu.
    */
   const handleSync = useCallback(async () => {
@@ -166,11 +198,42 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
 
     setIsSyncing(true);
     try {
-      const result = await apiRequest<CalendarSyncResult>("/calendar/sync", {
-        method: "POST",
-        body: { access_token: gcalToken },
+      // Rentang: 7 hari lalu sampai 7 hari depan
+      const now = new Date();
+      const timeMin = new Date(now.getTime() - GCAL_RANGE_DAYS * 86400000).toISOString();
+      const timeMax = new Date(now.getTime() + GCAL_RANGE_DAYS * 86400000).toISOString();
+      const query = new URLSearchParams({
+        timeMin,
+        timeMax,
+        maxResults: String(GCAL_MAX_RESULTS),
+        singleEvents: "true",
+        orderBy: "startTime",
       });
-      const fetched = Array.isArray(result?.events) ? result.events : [];
+
+      const resp = await fetch(`${GCAL_EVENTS_ENDPOINT}?${query.toString()}`, {
+        headers: {
+          Authorization: `Bearer ${gcalToken}`,
+          Accept: "application/json",
+        },
+      });
+
+      // Token kedaluwarsa / tidak sah → minta re-auth
+      if (resp.status === 401 || resp.status === 403) {
+        localStorage.removeItem("google_calendar_token");
+        showToast("error", "Token Google Calendar kedaluwarsa. Silakan sync ulang untuk otorisasi.");
+        return;
+      }
+      if (!resp.ok) {
+        showToast("error", `Gagal sync calendar (Google ${resp.status}).`);
+        return;
+      }
+
+      const data = await resp.json();
+      const items: GCalRawEvent[] = Array.isArray(data?.items) ? data.items : [];
+      const fetched = items
+        .map(parseGCalEvent)
+        .filter((e): e is CalendarEvent => e !== null);
+
       setEvents(fetched);
       setHasSynced(true);
       showToast(
@@ -181,12 +244,7 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
       );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Gagal sync calendar";
-      if (message.includes("401") || message.includes("403") || message.includes("invalid")) {
-        localStorage.removeItem("google_calendar_token");
-        showToast("error", "Token Google Calendar kedaluwarsa. Silakan sync ulang untuk otorisasi.");
-      } else {
-        showToast("error", message);
-      }
+      showToast("error", message);
     } finally {
       setIsSyncing(false);
     }
