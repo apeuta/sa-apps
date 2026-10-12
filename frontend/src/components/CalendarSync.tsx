@@ -17,13 +17,16 @@ import { fetcher, apiRequest } from "@/lib/fetcher";
  */
 
 // Kategori subtask — harus selaras dengan VALID_SUBTASK_CATEGORIES di backend
+// Mapping calendar selalu aktivitas Project → pakai sub-kategori set Project.
+// Backend /calendar/map yang mengisi work_type=Project + project_phase default.
 const SUBTASK_CATEGORIES = [
-  "Meeting Pre-Sales",
-  "Create PropTek",
-  "Create BOQ",
-  "Peer Review",
-  "Internal Discussion",
-  "Customer Workshop",
+  "Assessment",
+  "Internal Meeting",
+  "Customer Meeting",
+  "Principal Meeting",
+  "Commercial Document",
+  "Technical Document",
+  "Document Review",
 ] as const;
 
 const WEEKDAY_LABELS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
