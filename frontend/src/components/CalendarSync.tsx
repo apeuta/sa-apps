@@ -17,9 +17,8 @@ import { fetcher, apiRequest } from "@/lib/fetcher";
  */
 
 // Kategori subtask — harus selaras dengan VALID_SUBTASK_CATEGORIES di backend
-// Mapping calendar selalu aktivitas Project → pakai sub-kategori set Project.
-// Backend /calendar/map yang mengisi work_type=Project + project_phase default.
-const SUBTASK_CATEGORIES = [
+// Sub-kategori per work_type — selaras dengan backend schemas/activity_log.py
+const PROJECT_SUBTASK_CATEGORIES = [
   "Assessment",
   "Internal Meeting",
   "Customer Meeting",
@@ -28,6 +27,31 @@ const SUBTASK_CATEGORIES = [
   "Technical Document",
   "Document Review",
 ] as const;
+
+const NON_PROJECT_SUBTASK_CATEGORIES = [
+  "Training",
+  "Self-Lab",
+  "Self-Learning",
+  "Exam",
+  "Internal Meeting",
+  "Internal Presentation",
+  "External Presentation",
+  "Principal Meeting",
+] as const;
+
+const PROJECT_PHASES = [
+  "Pre-Implementation",
+  "Implementation",
+  "Post-Implementation",
+] as const;
+
+type WorkType = "Project" | "Non-Project";
+type ProjectPhase = (typeof PROJECT_PHASES)[number];
+
+/** Default fase dari status proyek — selaras backend default_phase_for_status */
+function defaultPhaseForStatus(status?: string): ProjectPhase {
+  return status === "Handover Complete" ? "Implementation" : "Pre-Implementation";
+}
 
 const WEEKDAY_LABELS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
 const MONTH_LABELS = [
@@ -75,6 +99,7 @@ function parseGCalEvent(item: GCalRawEvent): CalendarEvent | null {
 interface Project {
   id: string;
   project_name: string;
+  status?: string;
 }
 
 interface CalendarEvent {
@@ -94,7 +119,9 @@ interface CalendarSyncProps {
 }
 
 interface MapFormState {
+  work_type: WorkType;
   project_id: string;
+  project_phase: ProjectPhase;
   subtask_category: string;
   duration_hours: string;
   raw_notes: string;
@@ -135,7 +162,9 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
   // Mapping modal
   const [mappingEventId, setMappingEventId] = useState<string | null>(null);
   const [mapForm, setMapForm] = useState<MapFormState>({
+    work_type: "Project",
     project_id: "",
+    project_phase: "Pre-Implementation",
     subtask_category: "",
     duration_hours: "1",
     raw_notes: "",
@@ -324,7 +353,9 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
     const event = events.find((e) => e.gcal_event_id === eventId);
     setMappingEventId(eventId);
     setMapForm({
+      work_type: "Project",
       project_id: "",
+      project_phase: "Pre-Implementation",
       subtask_category: "",
       duration_hours: event ? calculateDuration(event.start, event.end, event.is_all_day) : "1",
       raw_notes: event?.description || "",
@@ -342,8 +373,9 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
   const handleMap = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!mappingEventId || !mapForm.project_id || !mapForm.subtask_category) {
-        showToast("error", "Proyek dan subtask wajib dipilih");
+      const isProject = mapForm.work_type === "Project";
+      if (!mappingEventId || !mapForm.subtask_category || (isProject && !mapForm.project_id)) {
+        showToast("error", isProject ? "Proyek dan subtask wajib dipilih" : "Subtask wajib dipilih");
         return;
       }
 
@@ -352,20 +384,26 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
 
       setIsMapping(true);
       try {
+        const body: Record<string, unknown> = {
+          gcal_event_id: mappingEventId,
+          work_type: mapForm.work_type,
+          subtask_category: mapForm.subtask_category,
+          duration_hours: parseFloat(mapForm.duration_hours) || undefined,
+          raw_notes: mapForm.raw_notes.trim() || undefined,
+          event_title: event.title,
+          event_description: event.description || undefined,
+          is_all_day: event.is_all_day,
+          event_start: event.start,
+          event_end: event.end,
+        };
+        if (isProject) {
+          body.project_id = mapForm.project_id;
+          body.project_phase = mapForm.project_phase;
+        }
+
         await apiRequest("/calendar/map", {
           method: "POST",
-          body: {
-            gcal_event_id: mappingEventId,
-            project_id: mapForm.project_id,
-            subtask_category: mapForm.subtask_category,
-            duration_hours: parseFloat(mapForm.duration_hours) || undefined,
-            raw_notes: mapForm.raw_notes.trim() || undefined,
-            event_title: event.title,
-            event_description: event.description || undefined,
-            is_all_day: event.is_all_day,
-            event_start: event.start,
-            event_end: event.end,
-          },
+          body,
         });
 
         setMappedIds((prev) => new Set(prev).add(mappingEventId));
@@ -611,31 +649,93 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
             <p className="text-sm text-neutral-500 mb-4">{mappingEvent?.title}</p>
 
             <form onSubmit={handleMap} className="space-y-4">
-              {/* Pilih proyek */}
+              {/* Jenis aktivitas (work_type) */}
               <div>
-                <label htmlFor="map-project" className="block text-sm font-medium text-neutral-700 mb-1">
-                  Proyek <span className="text-red-500">*</span>
+                <label className="block text-sm font-medium text-neutral-700 mb-1">
+                  Jenis Aktivitas <span className="text-red-500">*</span>
                 </label>
-                <select
-                  id="map-project"
-                  value={mapForm.project_id}
-                  onChange={(e) => setMapForm((f) => ({ ...f, project_id: e.target.value }))}
-                  className="w-full px-3 py-2.5 border border-neutral-300 rounded-lg text-sm
-                    focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
-                  <option value="">Pilih proyek...</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.project_name}</option>
+                <div className="flex gap-2">
+                  {(["Project", "Non-Project"] as WorkType[]).map((wt) => (
+                    <button
+                      key={wt}
+                      type="button"
+                      onClick={() =>
+                        setMapForm((f) => ({
+                          ...f,
+                          work_type: wt,
+                          // reset field yang tak relevan + subtask (set berubah)
+                          project_id: wt === "Non-Project" ? "" : f.project_id,
+                          subtask_category: "",
+                        }))
+                      }
+                      className={`flex-1 px-3 py-2 text-sm font-medium rounded-lg border transition-colors min-h-[40px] ${
+                        mapForm.work_type === wt
+                          ? "bg-primary-50 text-primary-700 border-primary-300"
+                          : "bg-white text-neutral-600 border-neutral-300 hover:bg-neutral-50"
+                      }`}
+                    >
+                      {wt}
+                    </button>
                   ))}
-                </select>
-                {projects.length === 0 && (
-                  <p className="text-xs text-amber-600 mt-1">
-                    Tidak ada proyek tersedia untuk di-mapping.
-                  </p>
-                )}
+                </div>
               </div>
 
-              {/* Subtask category */}
+              {/* Proyek + Fase (hanya untuk Project) */}
+              {mapForm.work_type === "Project" && (
+                <>
+                  <div>
+                    <label htmlFor="map-project" className="block text-sm font-medium text-neutral-700 mb-1">
+                      Proyek <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      id="map-project"
+                      value={mapForm.project_id}
+                      onChange={(e) => {
+                        const pid = e.target.value;
+                        const proj = projects.find((p) => p.id === pid);
+                        setMapForm((f) => ({
+                          ...f,
+                          project_id: pid,
+                          project_phase: defaultPhaseForStatus(proj?.status),
+                        }));
+                      }}
+                      className="w-full px-3 py-2.5 border border-neutral-300 rounded-lg text-sm
+                        focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    >
+                      <option value="">Pilih proyek...</option>
+                      {projects.map((p) => (
+                        <option key={p.id} value={p.id}>{p.project_name}</option>
+                      ))}
+                    </select>
+                    {projects.length === 0 && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Tidak ada proyek tersedia untuk di-mapping.
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label htmlFor="map-phase" className="block text-sm font-medium text-neutral-700 mb-1">
+                      Fase Proyek <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      id="map-phase"
+                      value={mapForm.project_phase}
+                      onChange={(e) =>
+                        setMapForm((f) => ({ ...f, project_phase: e.target.value as ProjectPhase }))
+                      }
+                      className="w-full px-3 py-2.5 border border-neutral-300 rounded-lg text-sm
+                        focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    >
+                      {PROJECT_PHASES.map((ph) => (
+                        <option key={ph} value={ph}>{ph}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {/* Subtask (tergantung work_type) */}
               <div>
                 <label htmlFor="map-category" className="block text-sm font-medium text-neutral-700 mb-1">
                   Subtask <span className="text-red-500">*</span>
@@ -648,7 +748,10 @@ export function CalendarSync({ projects }: CalendarSyncProps) {
                     focus:outline-none focus:ring-2 focus:ring-primary-500"
                 >
                   <option value="">Pilih subtask...</option>
-                  {SUBTASK_CATEGORIES.map((cat) => (
+                  {(mapForm.work_type === "Non-Project"
+                    ? NON_PROJECT_SUBTASK_CATEGORIES
+                    : PROJECT_SUBTASK_CATEGORIES
+                  ).map((cat) => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
                 </select>
