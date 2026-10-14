@@ -22,7 +22,8 @@ Bagian di bawah hanya memuat aturan khusus agen yang tidak bisa Anda simpulkan d
 
 ## Git workflow (wajib)
 
-- **Dilarang commit langsung ke `main` — tanpa pengecualian.** Termasuk perubahan dokumentasi dan one-liner.
+- **Dilarang commit langsung ke `main` — tanpa pengecualian.** Termasuk perubahan dokumentasi dan one-liner. Aturan ini ditegakkan secara mekanis: branch protection GitHub pada `main` (penjaga utama, tidak bisa di-bypass) + pre-push hook lokal di `.githooks/` (umpan balik cepat). Jangan pernah `merge`/`push` ke `main` dari lokal — selesaikan pekerjaan di feature branch, push branch itu, lalu buka PR.
+- Jika git belum mengenali hook repo (clone baru tanpa mise), arahkan sekali: `git config core.hooksPath .githooks` (atau `mise run setup-hooks`). Pengguna mise otomatis via `[hooks] enter`. Jangan pakai `--no-verify`.
 - Setiap unit pekerjaan: buat feature branch dari `main` terbaru, lalu masuk ke `main` lewat pull request.
 - Nama branch mengikuti convention di `CONTRIBUTING.md`: `feat/<slug>`, `fix/<slug>`, `refactor/<slug>`, `docs/<slug>`.
 - Commit memakai [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`).

@@ -56,6 +56,43 @@ Pemisahan ini disengaja: secret backend (DB password, API key, OAuth secret) tid
 
 ---
 
+## Penegakan "Tanpa Direct Commit ke `main`"
+
+Aturan "dilarang commit langsung ke `main`" ditegakkan di dua lapis — bukan sekadar imbauan di dokumen. Ini penting agar berlaku **agnostik terhadap tool**: siapa pun yang bekerja di repo ini, manusia maupun coding agent apa pun, tunduk pada mekanisme yang sama.
+
+**Lapis 1 — Branch protection di GitHub (penjaga utama, tidak bisa di-bypass).**
+Proteksi pada branch `main` di sisi server menolak direct push dan mewajibkan merge lewat PR. Karena hidup di remote, lapis ini tidak bisa dilewati dari sisi klien (termasuk dengan `--no-verify`). Mengaktifkannya butuh akses admin repo; lihat perintah `gh` di bawah.
+
+**Lapis 2 — Pre-push hook lokal (umpan balik cepat).**
+`.githooks/pre-push` menolak push langsung ke `main`/`master` di mesin lokal, sebelum menabrak server. Hook ini di-version di dalam repo (`.githooks/`), jadi dipakai siapa pun yang clone — asalkan git diarahkan ke sana lewat `core.hooksPath`:
+
+- **Pengguna mise:** otomatis via `[hooks] enter` di `mise.toml` saat masuk direktori repo.
+- **Tanpa mise:** jalankan sekali per clone — `mise run setup-hooks`, atau langsung:
+
+  ```
+  git config core.hooksPath .githooks
+  ```
+
+Lapis 2 bisa di-bypass dengan `git push --no-verify`; karena itu lapis 1 adalah penjaga yang sebenarnya. Dokumen (`AGENTS.md`/`CONTRIBUTING.md`) adalah sumber niat, bukan penegakan.
+
+**Mengaktifkan branch protection (perlu akses admin repo):**
+
+```
+gh api -X PUT repos/<owner>/<repo>/branches/main/protection \
+  --input - <<'JSON'
+{
+  "required_pull_request_reviews": { "required_approving_review_count": 1 },
+  "required_status_checks": null,
+  "enforce_admins": true,
+  "restrictions": null
+}
+JSON
+```
+
+Setelah CI tersedia, isi `required_status_checks` dengan nama check-nya agar PR wajib hijau sebelum merge.
+
+---
+
 ## Konvensi Commit
 
 Kita memakai [Conventional Commits](https://www.conventionalcommits.org/). Setiap pesan commit diawali dengan tipe:

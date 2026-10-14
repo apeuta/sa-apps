@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+#
+# pre-push hook — mencegah push langsung ke branch terproteksi (main/master).
+#
+# Semua perubahan harus masuk main lewat feature branch + pull request.
+# Hook ini berlaku untuk siapa pun yang push dari repo ini — manusia maupun
+# coding agent — selama core.hooksPath mengarah ke .githooks/ (lihat mise.toml
+# task `setup-hooks`, atau jalankan: git config core.hooksPath .githooks).
+#
+# Ini adalah umpan balik cepat sisi klien, BUKAN penjaga utama. Penjaga yang
+# sebenarnya adalah GitHub branch protection pada main (tidak bisa di-bypass).
+# Hook ini bisa dilewati dengan `git push --no-verify`, jadi jangan diandalkan
+# sebagai satu-satunya kontrol.
+
+set -euo pipefail
+
+PROTECTED_BRANCHES="main master"
+
+# git mengirim baris "<local_ref> <local_sha> <remote_ref> <remote_sha>" via stdin
+# untuk tiap ref yang akan di-push.
+while read -r local_ref local_sha remote_ref remote_sha; do
+  for protected in $PROTECTED_BRANCHES; do
+    if [ "$remote_ref" = "refs/heads/$protected" ]; then
+      echo "" >&2
+      echo "✖ Push langsung ke '$protected' ditolak." >&2
+      echo "" >&2
+      echo "  Semua perubahan harus masuk '$protected' lewat pull request." >&2
+      echo "  Buat feature branch lalu buka PR:" >&2
+      echo "" >&2
+      echo "    git switch -c fix/<slug>" >&2
+      echo "    git push -u origin fix/<slug>" >&2
+      echo "    gh pr create --base $protected" >&2
+      echo "" >&2
+      exit 1
+    fi
+  done
+done
+
+exit 0
