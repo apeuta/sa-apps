@@ -43,11 +43,11 @@ Dokumen pelacakan untuk 11 fitur yang dibutuhkan agar mencapai MVP yang layak. S
 
 Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungsionalitas yang sudah ada.
 
-- [ ] **B1. Crash `metadata=` pada `NotificationLog`** — `backend/app/services/scoring_engine.py` ~line 623 mengirim `metadata=` ke constructor model, padahal atributnya `notification_metadata` (`metadata` reserved oleh SQLAlchemy). Ini raise saat runtime, merusak notifikasi scoring ke Lead SA dan jalur notifikasi manual-review. _Fix: ganti jadi `notification_metadata=`._
+- [x] **B1. Crash `metadata=` pada `NotificationLog`** — `backend/app/services/scoring_engine.py` ~line 623 mengirim `metadata=` ke constructor model, padahal atributnya `notification_metadata` (`metadata` reserved oleh SQLAlchemy). Ini raise saat runtime, merusak notifikasi scoring ke Lead SA dan jalur notifikasi manual-review. _Fix: ganti jadi `notification_metadata=`._
 - [ ] **B2. Folder provisioner tidak pernah dipanggil** — `backend/app/api/assignment.py` `_trigger_folder_provisioner` (~line 54) adalah stub `pass` dengan TODO, padahal response melaporkan `folder_provisioning_triggered=True`. Service `FolderProvisioner` sudah diimplementasikan penuh tapi tidak pernah di-wire. (Ditangani di Fase 2 / fitur 5.)
-- [ ] **B3. `/health` melaporkan status DB palsu** — `backend/app/main.py` mengembalikan `"database": "healthy"` yang di-hardcode, bukan memanggil `check_database_health()` yang sudah ada. Membatalkan fungsi Docker health check.
+- [x] **B3. `/health` melaporkan status DB palsu** — `backend/app/main.py` mengembalikan `"database": "healthy"` yang di-hardcode, bukan memanggil `check_database_health()` yang sudah ada. Membatalkan fungsi Docker health check.
 - [ ] **B4. `estimasi_nilai` tidak dipersist** — `create_project` memvalidasi dan mengembalikannya tapi tidak ada kolom di model `Project`, jadi nilai opportunity hilang. (Ditangani di Fase 1 / fitur 2.)
-- [ ] **B5. `create_all` saat startup melewati Alembic** — `main.py` membuat tabel otomatis, bersaing dengan migrasi Alembic. Pilih satu mekanisme untuk menghindari schema drift.
+- [x] **B5. `create_all` saat startup melewati Alembic** — `main.py` membuat tabel otomatis, bersaing dengan migrasi Alembic. Pilih satu mekanisme untuk menghindari schema drift.
 
 ---
 
@@ -59,7 +59,7 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 - [ ] 0.2 Hapus default `JWT_SECRET_KEY` yang tidak aman; fail fast saat startup jika belum di-set. Selaraskan penamaan `SECRET_KEY` (README) vs `JWT_SECRET_KEY` (kode). (`config.py`, `README.md`)
 - [ ] 0.3 Berhenti mengirim JWT access/refresh token sebagai query param URL di redirect OAuth callback; pindah ke URL hash (seperti flow calendar yang sudah ada) atau httpOnly cookie. (`frontend/src/app/api/v1/[...path]/route.ts`)
 - [ ] 0.4 Kunci default CORS dari `*` menjadi allow-list yang digerakkan env. (`config.py`, `main.py`)
-- [ ] 0.5 Fix bug **B1** (notifikasi `metadata=`), **B3** (health check DB sungguhan), **B5** (putuskan Alembic vs `create_all`).
+- [x] 0.5 Fix bug **B1** (notifikasi `metadata=`), **B3** (health check DB sungguhan), **B5** (putuskan Alembic vs `create_all`).
 
 **Kriteria selesai:** app menolak start dengan default tidak aman; token tidak pernah muncul di URL/log; jalur notifikasi scoring berfungsi; health check mencerminkan status DB sebenarnya.
 

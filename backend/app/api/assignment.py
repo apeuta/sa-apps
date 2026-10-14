@@ -15,10 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
+from app.models.activity_log import ActivityLog
 from app.models.notification_log import NotificationLog
 from app.models.project import Project
 from app.models.user import User
-from app.models.activity_log import ActivityLog
 from app.schemas.assignment import (
     AssignmentResponse,
     AssignRequest,
@@ -148,9 +148,7 @@ async def get_available_sa(
     terminal_statuses = ("Closed-Win", "Handover Complete", "Lost")
 
     # Query semua user dengan role SA
-    sa_result = await db.execute(
-        select(User).where(User.role == "SA").order_by(User.name)
-    )
+    sa_result = await db.execute(select(User).where(User.role == "SA").order_by(User.name))
     sa_users = sa_result.scalars().all()
 
     # Hitung jumlah proyek aktif per SA menggunakan subquery
@@ -227,18 +225,15 @@ async def get_sa_utilization(
     """
     _require_lead_sa(current_user)
 
-    from datetime import date as date_type, datetime as dt_type
+    from datetime import date as date_type
+    from datetime import datetime as dt_type
 
     try:
         # Default tahun berjalan
         target_year = year or date_type.today().year
 
         # Query semua SA & Lead_SA (keduanya mencatat aktivitas), atau filter per sa_id
-        sa_query = (
-            select(User)
-            .where(User.role.in_(["SA", "Lead_SA"]))
-            .order_by(User.name)
-        )
+        sa_query = select(User).where(User.role.in_(["SA", "Lead_SA"])).order_by(User.name)
         if sa_id:
             try:
                 sa_uuid = uuid.UUID(sa_id)
@@ -287,12 +282,14 @@ async def get_sa_utilization(
             sa_months = {str(m): round(months_data.get(m, 0.0), 2) for m in range(1, 13)}
             sa_total = sum(months_data.values())
 
-            monthly_data.append({
-                "sa_id": str(sa.id),
-                "sa_name": sa.name,
-                "months": sa_months,
-                "total_hours": round(sa_total, 2),
-            })
+            monthly_data.append(
+                {
+                    "sa_id": str(sa.id),
+                    "sa_name": sa.name,
+                    "months": sa_months,
+                    "total_hours": round(sa_total, 2),
+                }
+            )
 
             for m in range(1, 13):
                 summary_months[m] += months_data.get(m, 0.0)
@@ -349,14 +346,11 @@ async def get_project_utilization(
     from sqlalchemy import text as sa_text
 
     # Subquery: jam per SA per proyek
-    sa_hours_query = (
-        select(
-            ActivityLog.id_project,
-            ActivityLog.sa_id,
-            func.sum(ActivityLog.duration_hours).label("hours"),
-        )
-        .group_by(ActivityLog.id_project, ActivityLog.sa_id)
-    )
+    sa_hours_query = select(
+        ActivityLog.id_project,
+        ActivityLog.sa_id,
+        func.sum(ActivityLog.duration_hours).label("hours"),
+    ).group_by(ActivityLog.id_project, ActivityLog.sa_id)
     sa_hours_result = await db.execute(sa_hours_query)
     sa_hours_rows = sa_hours_result.all()
 
@@ -373,9 +367,7 @@ async def get_project_utilization(
     if not project_ids:
         return success_response(data=[], message="Belum ada data activity log.")
 
-    projects_result = await db.execute(
-        select(Project).where(Project.id_project.in_(project_ids))
-    )
+    projects_result = await db.execute(select(Project).where(Project.id_project.in_(project_ids)))
     projects = {p.id_project: p for p in projects_result.scalars().all()}
 
     # Query semua SA users untuk nama
@@ -384,9 +376,7 @@ async def get_project_utilization(
         for entry in entries:
             all_sa_ids.add(entry["sa_id"])
 
-    sa_users_result = await db.execute(
-        select(User).where(User.id.in_(list(all_sa_ids)))
-    )
+    sa_users_result = await db.execute(select(User).where(User.id.in_(list(all_sa_ids))))
     sa_name_map = {u.id: u.name for u in sa_users_result.scalars().all()}
 
     # Build response
@@ -408,14 +398,16 @@ async def get_project_utilization(
         # Sort personnel by hours descending
         personnel.sort(key=lambda x: x["hours"], reverse=True)
 
-        result_data.append({
-            "id_project": pid,
-            "project_name": project.project_name,
-            "customer_name": project.customer_name,
-            "status": project.status,
-            "total_hours": round(total_hours, 2),
-            "sa_personnel": personnel,
-        })
+        result_data.append(
+            {
+                "id_project": pid,
+                "project_name": project.project_name,
+                "customer_name": project.customer_name,
+                "status": project.status,
+                "total_hours": round(total_hours, 2),
+                "sa_personnel": personnel,
+            }
+        )
 
     # Sort by total_hours descending
     result_data.sort(key=lambda x: x["total_hours"], reverse=True)
@@ -459,7 +451,8 @@ async def get_utilization_summary(
     """
     _require_lead_sa(current_user)
 
-    from datetime import date as date_type, datetime as dt_type
+    from datetime import date as date_type
+    from datetime import datetime as dt_type
 
     target_year = year or date_type.today().year
     year_start = dt_type(target_year, 1, 1, tzinfo=timezone.utc)
@@ -497,10 +490,7 @@ async def get_utilization_summary(
             phase_totals[log.project_phase] += hours
 
     work_type_data = {
-        "months": {
-            str(m): {k: round(v, 2) for k, v in months_wt[m].items()}
-            for m in range(1, 13)
-        },
+        "months": {str(m): {k: round(v, 2) for k, v in months_wt[m].items()} for m in range(1, 13)},
         "totals": {k: round(v, 2) for k, v in totals_wt.items()},
         "grand_total": round(sum(totals_wt.values()), 2),
     }
@@ -549,9 +539,7 @@ async def assign_sa_to_project(
     _require_lead_sa(current_user)
 
     # === 1. Validasi proyek ada dan berstatus "Pending Assignment" ===
-    project_result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    project_result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = project_result.scalar_one_or_none()
 
     if project is None:
@@ -570,9 +558,7 @@ async def assign_sa_to_project(
         )
 
     # === 2. Validasi SA ada dan role-nya SA ===
-    sa_result = await db.execute(
-        select(User).where(User.id == body.sa_id)
-    )
+    sa_result = await db.execute(select(User).where(User.id == body.sa_id))
     sa_user = sa_result.scalar_one_or_none()
 
     if sa_user is None:
@@ -605,7 +591,7 @@ async def assign_sa_to_project(
         channel="in-app",
         status="sent",
         reference_id=project_id,
-        metadata={
+        notification_metadata={
             "project_name": project.project_name,
             "customer_name": project.customer_name,
             "bant_score": project.bant_score,
@@ -620,10 +606,7 @@ async def assign_sa_to_project(
     await db.commit()
     await db.refresh(project)
 
-    logger.info(
-        f"Proyek {project_id} di-assign ke SA {sa_user.email} "
-        f"oleh {current_user.email}"
-    )
+    logger.info(f"Proyek {project_id} di-assign ke SA {sa_user.email} oleh {current_user.email}")
 
     # === 5. Trigger Folder_Provisioner async ===
     background_tasks.add_task(
@@ -686,9 +669,7 @@ async def reassign_sa_to_project(
     _require_lead_sa(current_user)
 
     # === 1. Validasi proyek ada ===
-    project_result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    project_result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = project_result.scalar_one_or_none()
 
     if project is None:
@@ -707,9 +688,7 @@ async def reassign_sa_to_project(
         )
 
     # === 2. Validasi SA baru ada dan role-nya SA ===
-    sa_result = await db.execute(
-        select(User).where(User.id == body.sa_id)
-    )
+    sa_result = await db.execute(select(User).where(User.id == body.sa_id))
     sa_user = sa_result.scalar_one_or_none()
 
     if sa_user is None:
@@ -746,7 +725,7 @@ async def reassign_sa_to_project(
         channel="in-app",
         status="sent",
         reference_id=project_id,
-        metadata={
+        notification_metadata={
             "project_name": project.project_name,
             "customer_name": project.customer_name,
             "assigned_by": current_user.name,
