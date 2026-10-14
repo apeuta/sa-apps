@@ -119,8 +119,7 @@ class ScoringEngine:
         # Jika tidak ada file valid, return skor 0 dan arahkan ke manual
         if not valid_files:
             logger.info(
-                f"Project {project_id}: Tidak ada file PDF/DOCX valid. "
-                f"Arahkan ke scoring manual."
+                f"Project {project_id}: Tidak ada file PDF/DOCX valid. Arahkan ke scoring manual."
             )
             result = BANTResult(
                 total_score=0,
@@ -278,9 +277,7 @@ class ScoringEngine:
             new_status = "Need Clarification"
 
         # Update status proyek
-        result = await db.execute(
-            select(Project).where(Project.id_project == project_id)
-        )
+        result = await db.execute(select(Project).where(Project.id_project == project_id))
         project = result.scalar_one_or_none()
         if project:
             project.status = new_status
@@ -350,11 +347,7 @@ class ScoringEngine:
 
         # Fetch dokumen untuk proyek-proyek yang ditemukan
         project_ids = [p.id_project for p, _ in top_projects]
-        docs_result = await db.execute(
-            select(Document).where(
-                Document.id_project.in_(project_ids)
-            )
-        )
+        docs_result = await db.execute(select(Document).where(Document.id_project.in_(project_ids)))
         all_docs = docs_result.scalars().all()
 
         # Group dokumen per proyek
@@ -605,9 +598,7 @@ class ScoringEngine:
         Notification_Service belum full-implemented, jadi kita langsung INSERT ke tabel.
         """
         # Cari semua user dengan role Lead_SA
-        result = await db.execute(
-            select(User).where(User.role == "Lead_SA")
-        )
+        result = await db.execute(select(User).where(User.role == "Lead_SA"))
         lead_sa_users = result.scalars().all()
 
         if not lead_sa_users:
@@ -627,15 +618,14 @@ class ScoringEngine:
                 channel="in-app",
                 status="sent",
                 reference_id=project_id,
-                metadata=metadata_content,
+                notification_metadata=metadata_content,
                 created_at=datetime.now(timezone.utc),
             )
             db.add(notification)
 
         await db.commit()
         logger.info(
-            f"Notifikasi dikirim ke {len(lead_sa_users)} Lead_SA "
-            f"untuk project {project_id}"
+            f"Notifikasi dikirim ke {len(lead_sa_users)} Lead_SA untuk project {project_id}"
         )
 
 
