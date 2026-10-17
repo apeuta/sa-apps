@@ -25,7 +25,7 @@ Dokumen pelacakan untuk 11 fitur yang dibutuhkan agar mencapai MVP yang layak. S
 
 | # | Fitur | Status | Gap utama |
 |---|-------|--------|-----------|
-| 1 | Halaman login | 🟡 Partial | Demo bypass aktif secara default; token OAuth lewat URL; default produksi tidak aman |
+| 1 | Halaman login | 🟡 Partial | Demo bypass aktif secara default; token OAuth lewat URL; default produksi tidak aman; `scoring.py` tanpa auth & `PATCH /projects/{id}` tanpa cek akses (B8/B9) |
 | 2 | Request Sales / buat opportunity | ✅ Selesai | `estimasi_nilai` divalidasi tapi tidak dipersist |
 | 3 | Form pertanyaan awal | 🔴 Belum ada | Tidak ada konsep kuesioner intake |
 | 4 | BANT scoring | ✅ Selesai | AI + manual keduanya berfungsi |
@@ -48,6 +48,10 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 - [ ] **B3. `/health` melaporkan status DB palsu** — `backend/app/main.py` mengembalikan `"database": "healthy"` yang di-hardcode, bukan memanggil `check_database_health()` yang sudah ada. Membatalkan fungsi Docker health check.
 - [ ] **B4. `estimasi_nilai` tidak dipersist** — `create_project` memvalidasi dan mengembalikannya tapi tidak ada kolom di model `Project`, jadi nilai opportunity hilang. (Ditangani di Fase 1 / fitur 2.)
 - [ ] **B5. `create_all` saat startup melewati Alembic** — `main.py` membuat tabel otomatis, bersaing dengan migrasi Alembic. Pilih satu mekanisme untuk menghindari schema drift.
+- [ ] **B6. `project_collaborators` tanpa migration** — tabel ini hanya terdefinisi sebagai model SQLAlchemy; tidak ada migration Alembic yang membuatnya (hanya terbentuk lewat `create_all` saat startup). Melanggar aturan AGENTS.md "jangan andalkan auto-create table sebagai mekanisme migration" dan merupakan manifestasi konkret dari B5. _Fix: tambahkan migration Alembic untuk `project_collaborators` (termasuk FK `ON DELETE CASCADE` dan `UniqueConstraint(id_project, user_id)`)._
+- [ ] **B7. `event_type="reassignment"` melanggar CheckConstraint** — `backend/app/api/assignment.py` `reassign_sa_to_project` membuat `NotificationLog(event_type="reassignment", ...)`, padahal nilai itu tidak termasuk dalam `chk_notification_logs_event_type` (`assignment`, `status_change`, `sla_reminder`, `sla_escalation`, `handover`, `doc_ready`). Bahkan setelah B1 diperbaiki, INSERT reassign tetap ditolak DB. _Fix: ganti ke `assignment`, atau tambahkan `reassignment` ke enum + migration._
+- [ ] **B8. Router `scoring.py` tanpa autentikasi** — seluruh endpoint di `backend/app/api/scoring.py` (`POST /projects/{id}/score-manual`, `GET /projects/{id}/bant-result`, `GET /projects/{id}/recommendations`) tidak memasang dependency `get_current_user`. Siapa pun yang bisa menjangkau API dapat menulis skor BANT dan mengubah status proyek (lewat `apply_threshold`). Risiko authz nyata. _Fix: pasang `get_current_user` + cek akses proyek di semua endpoint scoring._
+- [ ] **B9. `PATCH /projects/{id}` tanpa cek role/akses** — `backend/app/api/projects.py` `update_project` tidak melakukan cek role atau akses proyek, sehingga user terautentikasi mana pun bisa mengedit `project_name`/`customer_name`/`dq_number`/`bant_detail` proyek apa pun. _Fix: tambahkan cek akses proyek berbasis role, konsisten dengan endpoint project lainnya._
 
 ---
 
@@ -59,9 +63,10 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 - [ ] 0.2 Hapus default `JWT_SECRET_KEY` yang tidak aman; fail fast saat startup jika belum di-set. Selaraskan penamaan `SECRET_KEY` (README) vs `JWT_SECRET_KEY` (kode). (`config.py`, `README.md`)
 - [ ] 0.3 Berhenti mengirim JWT access/refresh token sebagai query param URL di redirect OAuth callback; pindah ke URL hash (seperti flow calendar yang sudah ada) atau httpOnly cookie. (`frontend/src/app/api/v1/[...path]/route.ts`)
 - [ ] 0.4 Kunci default CORS dari `*` menjadi allow-list yang digerakkan env. (`config.py`, `main.py`)
-- [ ] 0.5 Fix bug **B1** (notifikasi `metadata=`), **B3** (health check DB sungguhan), **B5** (putuskan Alembic vs `create_all`).
+- [ ] 0.5 Fix bug **B1** (notifikasi `metadata=`), **B3** (health check DB sungguhan — daftarkan `app/api/health.py` yang sudah benar, atau panggil `check_database_health()` di `main.py`), **B5** (putuskan Alembic vs `create_all`), **B6** (migration `project_collaborators`), **B7** (`event_type` reassign melanggar constraint).
+- [ ] 0.6 **Tutup authz yang hilang.** Pasang `get_current_user` + cek akses proyek ke semua endpoint `scoring.py` (fix **B8**); tambahkan cek role/akses ke `PATCH /projects/{id}` (fix **B9**). Pertimbangkan ekstraksi dependency `require_role(...)` yang reusable, karena cek role saat ini di-copy-paste di tiap handler sebagai `if current_user.role not in (...)`.
 
-**Kriteria selesai:** app menolak start dengan default tidak aman; token tidak pernah muncul di URL/log; jalur notifikasi scoring berfungsi; health check mencerminkan status DB sebenarnya.
+**Kriteria selesai:** app menolak start dengan default tidak aman; token tidak pernah muncul di URL/log; jalur notifikasi scoring + assignment/reassignment berfungsi; health check mencerminkan status DB sebenarnya; tidak ada endpoint yang menulis skor BANT, mengubah status, atau mengedit proyek tanpa autentikasi dan cek akses.
 
 ---
 
