@@ -20,9 +20,12 @@ Tool yang dikelola saat ini:
 | Tool | Versi (pin) |
 |------|-------------|
 | Python | 3.11 |
-| Node.js | 20 |
+| Node.js | 24 |
+| pnpm | 12 |
 
-Versi di-pin ke major agar selaras dengan Dockerfile. **Docker tetap menjadi sumber kebenaran untuk build produksi** (`python:3.11-slim`, `node:20-alpine`); mise menyediakan toolchain lokal yang setara untuk development. Ketika Anda menaikkan versi tool, perbarui `mise.toml` dan Dockerfile terkait bersamaan agar tidak drift.
+Versi di-pin ke major agar selaras dengan Dockerfile. **Docker tetap menjadi sumber kebenaran untuk build produksi** (`python:3.11-slim`, `node:24-alpine`); mise menyediakan toolchain lokal yang setara untuk development. Ketika Anda menaikkan versi tool, perbarui `mise.toml` dan Dockerfile terkait bersamaan agar tidak drift.
+
+pnpm adalah package manager untuk `frontend/` (lockfile `pnpm-lock.yaml`). Dikelola via mise untuk development lokal; di Docker dipasang eksplisit via `npm i -g pnpm@12` (tanpa corepack, versi di-pin sama dengan mise).
 
 PostgreSQL (versi 15) dijalankan via Docker Compose, bukan mise.
 
@@ -127,7 +130,7 @@ Stage file secara spesifik daripada semuanya sekaligus, agar perubahan yang tida
 Belum ada CI otomatis (**CI direncanakan** — lihat daftar lintas-fitur di [`docs/ROADMAP.md`](docs/ROADMAP.md)). Sampai itu ada, verifikasi dilakukan manual dan menjadi tanggung jawab author sebelum meminta review:
 
 - **Backend** — test suite lolos dan app bisa di-import/start dengan bersih. Setup test dan dependency ada di `backend/pyproject.toml`; test ada di `backend/tests/`.
-- **Frontend** — proyek lolos type-check dan build tanpa error. Script ada di `frontend/package.json`.
+- **Frontend** — proyek lolos type-check dan build tanpa error (`pnpm install`, lalu `pnpm run lint` dan `pnpm run build`). Script ada di `frontend/package.json`.
 - **Full stack** — jika perubahan memengaruhi runtime wiring (migration, env var, service startup), konfirmasi stack bisa naik via Docker Compose dan endpoint `/health` melaporkan healthy.
 - **Pengecekan sesuai scope** — verifikasi perubahan terhadap perilaku yang dimaksud, bukan sekadar command keluar tanpa error. Untuk perubahan UI, cek perilakunya di browser; untuk perubahan logika, jalankan code path terkait atau test-nya.
 

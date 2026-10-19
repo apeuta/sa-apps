@@ -4,37 +4,37 @@ Dikerjakan dalam dua fase/branch berurutan (lihat design.md). Fase B di-branch d
 
 ## Fase A — Toolchain (Node 24 + pnpm 12) — branch `chore/toolchain-node24-pnpm`
 
-- [ ] 1. Pin Node 24 + pnpm 12 di mise
+- [x] 1. Pin Node 24 + pnpm 12 di mise
   - Ubah `node = "20"` → `node = "24"` dan tambah `pnpm = "12"` di `[tools]` pada `mise.toml`
   - Perbarui komentar header yang menyebut `node:20-alpine` → `node:24-alpine`
   - Jalankan `mise install` dan konfirmasi Node 24 + pnpm 12 aktif
   - _Requirements: 1.1, 1.2, 1.3, 2.1, 2.2_
 
-- [ ] 2. Migrasi lockfile npm → pnpm
+- [x] 2. Migrasi lockfile npm → pnpm
   - Di `frontend/`: jalankan `pnpm import` untuk membuat `pnpm-lock.yaml` dari `package-lock.json`
   - Hapus `frontend/package-lock.json`
   - Jalankan `pnpm install` dan pastikan `node_modules` ter-materialisasi tanpa error
   - Pastikan `package.json` tidak memuat field `packageManager`
   - _Requirements: 2.3, 2.4, 2.5, 2.6_
 
-- [ ] 3. Perbarui Dockerfile frontend ke Alpine + pnpm (shape B)
+- [x] 3. Perbarui Dockerfile frontend ke Alpine + pnpm (shape B)
   - Ganti base ketiga stage ke `node:24-alpine`
   - Tambah `RUN npm i -g pnpm@12` di stage deps dan builder; hapus blok auto-deteksi lockfile + `corepack`
   - COPY `package.json pnpm-lock.yaml ./`; stage deps pakai `pnpm install --frozen-lockfile`
   - Ganti `RUN npm run build` → `RUN pnpm run build`
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
 
-- [ ] 4. Perbarui `.dockerignore` dan verifikasi build image (Fase A)
+- [x] 4. Perbarui `.dockerignore` dan verifikasi build image (Fase A)
   - Selaraskan komentar `frontend/.dockerignore` ke install path pnpm
   - `docker compose build frontend` sukses; `docker compose up` → `/health` healthy; frontend tersaji di :3000
   - _Requirements: 3.6, 3.7, 5.1_
 
-- [ ] 5. Verifikasi build lokal Fase A (masih Next 14)
+- [x] 5. Verifikasi build lokal Fase A (masih Next 14)
   - `pnpm run build` di `frontend/` hijau; `pnpm run lint` lolos
   - Konfirmasi perintah frontend lain (jika ada script) jalan di bawah pnpm
   - _Requirements: 2.6, 2.7, 5.1, 5.2_
 
-- [ ] 6. Perbarui dokumentasi toolchain (Fase A)
+- [x] 6. Perbarui dokumentasi toolchain (Fase A)
   - `AGENTS.md`: Node 20 → 24; sebut pnpm sebagai package manager frontend
   - `CONTRIBUTING.md`: tabel toolchain (Node 24 + pnpm 12); `node:20-alpine` → `node:24-alpine`; catatan verifikasi frontend npm → pnpm
   - `frontend/README.md`: perintah npm → pnpm (jika ada)
