@@ -26,7 +26,7 @@ Dokumen pelacakan untuk 11 fitur yang dibutuhkan agar mencapai MVP yang layak. S
 | # | Fitur | Status | Gap utama |
 |---|-------|--------|-----------|
 | 1 | Halaman login | 🟡 Partial | Demo bypass aktif secara default; token OAuth lewat URL; default produksi tidak aman; `scoring.py` tanpa auth & `PATCH /projects/{id}` tanpa cek akses (B8/B9) |
-| 2 | Request Sales / buat opportunity | ✅ Selesai | `estimasi_nilai` divalidasi tapi tidak dipersist |
+| 2 | Request Sales / buat opportunity | ✅ Selesai | — |
 | 3 | Form pertanyaan awal | 🔴 Belum ada | Tidak ada konsep kuesioner intake |
 | 4 | BANT scoring | ✅ Selesai | AI + manual keduanya berfungsi |
 | 5 | Kualifikasi & assignment oleh Lead SA | 🟡 Partial | Folder provisioner masih stub (`pass` + TODO); tidak ada step qualify terpisah |
@@ -46,7 +46,8 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 - [x] **B1. Crash `metadata=` pada `NotificationLog`** — `backend/app/services/scoring_engine.py` ~line 623 mengirim `metadata=` ke constructor model, padahal atributnya `notification_metadata` (`metadata` reserved oleh SQLAlchemy). Ini raise saat runtime, merusak notifikasi scoring ke Lead SA dan jalur notifikasi manual-review. _Fix: ganti jadi `notification_metadata=`._
 - [ ] **B2. Folder provisioner tidak pernah dipanggil** — `backend/app/api/assignment.py` `_trigger_folder_provisioner` (~line 54) adalah stub `pass` dengan TODO, padahal response melaporkan `folder_provisioning_triggered=True`. Service `FolderProvisioner` sudah diimplementasikan penuh tapi tidak pernah di-wire. (Ditangani di Fase 2 / fitur 5.)
 - [x] **B3. `/health` melaporkan status DB palsu** — `backend/app/main.py` mengembalikan `"database": "healthy"` yang di-hardcode, bukan memanggil `check_database_health()` yang sudah ada. Membatalkan fungsi Docker health check.
-- [ ] **B4. `estimasi_nilai` tidak dipersist** — `create_project` memvalidasi dan mengembalikannya tapi tidak ada kolom di model `Project`, jadi nilai opportunity hilang. (Ditangani di Fase 1 / fitur 2.)
+- [x] **B4. `estimasi_nilai` tidak dipersist** — `create_project` memvalidasi dan mengembalikannya tapi tidak ada kolom di model `Project`, jadi nilai opportunity hilang. (Ditangani di Fase 1 / fitur 2.) _Fix: tambah kolom `Numeric(14,2)` nullable di model `Project` + migration `005`, simpan saat create, tampilkan di detail/list, dan bisa diedit via `PATCH` dengan validasi range sama._
+- [x] **B10. `bant_detail` tidak tersimpan saat edit** — `PATCH /projects/{id}` memutasi dict `bant_detail` secara in-place, tapi kolom `JSONB` tanpa `MutableDict` membuat SQLAlchemy tidak mendeteksi perubahan sehingga `commit()` melewatinya (response 200 tapi data tidak berubah). _Fix: bungkus kolom `bant_detail` dengan `MutableDict.as_mutable(JSONB)` di model `Project` sehingga mutasi in-place terlacak._
 - [x] **B5. `create_all` saat startup melewati Alembic** — `main.py` membuat tabel otomatis, bersaing dengan migrasi Alembic. Pilih satu mekanisme untuk menghindari schema drift.
 - [x] **B6. `project_collaborators` tanpa migration** — tabel ini hanya terdefinisi sebagai model SQLAlchemy; tidak ada migration Alembic yang membuatnya (hanya terbentuk lewat `create_all` saat startup). Melanggar aturan AGENTS.md "jangan andalkan auto-create table sebagai mekanisme migration" dan merupakan manifestasi konkret dari B5. _Fix: tambahkan migration Alembic untuk `project_collaborators` (termasuk FK `ON DELETE CASCADE` dan `UniqueConstraint(id_project, user_id)`)._
 - [x] **B7. `event_type="reassignment"` melanggar CheckConstraint** — `backend/app/api/assignment.py` `reassign_sa_to_project` membuat `NotificationLog(event_type="reassignment", ...)`, padahal nilai itu tidak termasuk dalam `chk_notification_logs_event_type` (`assignment`, `status_change`, `sla_reminder`, `sla_escalation`, `handover`, `doc_ready`). Bahkan setelah B1 diperbaiki, INSERT reassign tetap ditolak DB. _Fix: ganti ke `assignment`, atau tambahkan `reassignment` ke enum + migration._
@@ -74,7 +75,7 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 
 **Tujuan:** menyelesaikan fitur yang sudah 80% jadi dengan perubahan kecil dan berisiko rendah.
 
-- [ ] 1.1 **Fitur 2:** persist `estimasi_nilai` — tambah column + migration ke `Project`, simpan saat create, tampilkan di detail/edit. (fix **B4**)
+- [x] 1.1 **Fitur 2:** persist `estimasi_nilai` — tambah column + migration ke `Project`, simpan saat create, tampilkan di detail/edit. (fix **B4**)
 - [ ] 1.2 **Fitur 7:** tambahkan `Requirement` ke `DocTypeEnum` dan constraint `CHECK` di DB; perbarui dropdown tipe dokumen di frontend. (`backend/app/schemas/document.py`, `backend/app/models/document.py`, migration, `frontend/src/components/DocumentForm.tsx`)
 - [ ] 1.3 **Fitur 9:** ganti tombol teks "Edit" dengan ikon pensil/edit di halaman detail proyek, mempertahankan alur edit yang ada. (`frontend/src/app/(protected)/projects/[id]/page.tsx`)
 
