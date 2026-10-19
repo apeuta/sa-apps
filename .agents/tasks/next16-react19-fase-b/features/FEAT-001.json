@@ -1,0 +1,33 @@
+{
+  "id": "FEAT-001",
+  "type": "chore",
+  "description": "Upgrade dependency ke Next 16 + React 19 + zustand 5 (+ swr), adaptasi async params di route handler proxy, perbaiki breaking React 19 yang muncul, tinjau next.config.js, dan verifikasi statis (type-check + build standalone). Satu unit kerja yang meninggalkan codebase dalam keadaan buildable + lolos type-check. Bergantung pada tidak ada FEAT lain.",
+  "status": "completed",
+  "steps": [
+    "Edit frontend/package.json: set `next`, `react`, `react-dom` ke versi stable terbaru lini 16/19 dengan pin EXACT (hapus `^`); `@types/react` + `@types/react-dom` ke 19.x; `swr` ke 2.3.x terbaru exact; `zustand` ke 5.x terbaru exact. Boleh jalankan `npx @next/codemod@latest upgrade latest` dari dalam frontend/ sebagai titik awal LALU review manual tiap diff (jangan terima buta; batalkan perubahan yang tak relevan dengan upgrade ini).",
+    "Jalankan `cd /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19/frontend && pnpm install` untuk resolve versi exact dan meng-generate ulang pnpm-lock.yaml. Konfirmasi tidak ada error peer-dependency React 19 (zustand 5 + swr 2.3 harus bersih).",
+    "Edit frontend/src/app/api/v1/[...path]/route.ts: ubah tipe argumen kedua kelima handler (GET/POST/PUT/PATCH/DELETE) dari `{ params }: { params: { path: string[] } }` menjadi `{ params }: { params: Promise<{ path: string[] }> }`, dan di tubuh tiap handler tambahkan `const { path } = await params;` lalu panggil `proxyRequest(request, path, \"<METHOD>\")`. Signature `proxyRequest` tidak berubah. JANGAN tambah opsi caching apa pun (route tetap dinamis by default).",
+    "Jalankan `cd /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19/frontend && pnpm exec tsc --noEmit`. Jika muncul error namespace `JSX` (global JSX.Element), ganti `JSX.Element` -> `React.JSX.Element` di frontend/src/components/Toast.tsx dan frontend/src/app/(protected)/notifications/page.tsx (pastikan `import type React from \"react\"` tersedia). HANYA lakukan jika type-check gagal karenanya. Perbaiki breaking React 19 lain yang nyata muncul dari type-check (tidak diantisipasi ada selain ini).",
+    "Tinjau frontend/next.config.js: pastikan tidak ada opsi yang di-rename/hapus di Next 16 dan `output: 'standalone'` TETAP ada (Dockerfile runtime jalankan node server.js dari .next/standalone). Jika codemod menambah key, buang yang tak perlu.",
+    "Verifikasi statis final: `pnpm exec tsc --noEmit` lolos; `pnpm run build` hijau. Konfirmasi `frontend/.next/standalone/server.js` ada. CATATAN: `pnpm run lint` TIDAK dikonfigurasi (ESLint sengaja absen sejak Fase A) — lint gagal/absen BUKAN kegagalan dan JANGAN tambah ESLint config.",
+    "Commit lokal di branch chore/next16-react19 dengan Conventional Commits (mis. `chore: upgrade ke Next 16 + React 19 dan adaptasi async params`). Stage file spesifik (package.json, pnpm-lock.yaml, route.ts, dan file lain yang benar-benar diubah). JANGAN push. JANGAN commit .next/.",
+    "Set status FEAT-001 ke completed dan catat di findings: versi exact yang ter-resolve (next/react/react-dom/@types/zustand/swr), apakah ada perbaikan JSX.Element yang perlu dilakukan, dan konfirmasi .next/standalone/server.js dihasilkan."
+  ],
+  "acceptance_criteria": [
+    "frontend/package.json mem-pin next 16.x, react & react-dom 19.x, @types/react & @types/react-dom 19.x, swr 2.3.x, zustand 5.x — semua versi EXACT (tanpa ^).",
+    "frontend/pnpm-lock.yaml ter-regenerasi dan `pnpm install` selesai tanpa error peer-dependency.",
+    "Kelima handler di frontend/src/app/api/v1/[...path]/route.ts meng-`await params` dengan tipe `Promise<{ path: string[] }>`.",
+    "`cd frontend && pnpm exec tsc --noEmit` lolos tanpa error.",
+    "`cd frontend && pnpm run build` hijau dan menghasilkan frontend/.next/standalone/server.js.",
+    "next.config.js tetap memuat `output: 'standalone'`.",
+    "Perubahan ter-commit lokal (bukan push) dengan Conventional Commits dan staging file spesifik."
+  ],
+  "verification": [
+    "cd /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19/frontend && pnpm ls next react react-dom zustand swr (versi 16/19/19/5/2.3)",
+    "cd /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19/frontend && pnpm exec tsc --noEmit (lolos)",
+    "cd /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19/frontend && pnpm run build (hijau)",
+    "ls /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19/frontend/.next/standalone/server.js (ada)"
+  ],
+  "blocked_reason": null,
+  "findings": "Versi exact ter-resolve (pin tanpa ^): next 16.4.2, react 19.3.1, react-dom 19.3.1, @types/react 19.3.0, @types/react-dom 19.3.0, zustand 5.0.15, swr 2.3.8 (mengikuti pin spec 2.3.x; 2.3.8 adalah rilis 2.3.x terbaru — catatan: swr terbaru lintas minor saat ini 2.5.1, tapi spec meminta 2.3.x). pnpm install bersih tanpa error peer-dependency React 19 (zustand 5 + swr 2.3 OK). Async params: 5 handler (GET/POST/PUT/PATCH/DELETE) di frontend/src/app/api/v1/[...path]/route.ts diubah ke tipe params Promise<{ path: string[] }> + `const { path } = await params;`; signature proxyRequest tidak berubah; tidak ada caching ditambah (route tetap dinamis ƒ). Perbaikan JSX.Element DIPERLUKAN: React 19 menghapus global namespace JSX, sehingga type-check gagal (TS2503) di frontend/src/components/Toast.tsx dan frontend/src/app/(protected)/notifications/page.tsx — diganti JSX.Element -> React.JSX.Element dan ditambah `import type React from \"react\"` di kedua file. next.config.js tidak diubah (hanya output:'standalone', tidak ada opsi deprecated). CATATAN tsconfig.json: Next 16 build otomatis menulis ulang tsconfig (mandatory: jsx 'preserve' -> 'react-jsx' untuk automatic runtime; suggested: target ES2017 + include '.next/dev/types/**/*.ts'); perubahan ini dipertahankan karena wajib Next 16 dan sudah diverifikasi type-check + build hijau. Verifikasi statis: `pnpm exec tsc --noEmit` lolos; `pnpm run build` hijau (Turbopack, 18 route); frontend/.next/standalone/server.js DIHASILKAN (konfirmasi `ls` OK). ESLint tetap absen (sesuai Fase A) — tidak ditambahkan. Belum ada runtime Docker check pada step ini (statis saja sesuai FEAT-001)."
+}

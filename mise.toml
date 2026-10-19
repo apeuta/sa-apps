@@ -2,14 +2,19 @@
 #
 # Jalankan `mise install` di root repo untuk memasang versi tool yang di-pin di bawah.
 # Versi di-pin agar selaras dengan Dockerfile (build produksi tetap memakai image
-# Docker sebagai sumber kebenaran: python:3.11-slim, node:20-alpine, uv 0.13).
+# Docker sebagai sumber kebenaran: python:3.11-slim, node:24-alpine, uv 0.13).
 #
 # Semua tool yang dibutuhkan untuk mengembangkan repo ini di-track di sini —
 # tambahkan tool baru ke blok [tools] agar seluruh contributor memakai versi sama.
 
 [tools]
 python = "3.11"
-node = "20"
+node = "24"
+# pnpm: package manager untuk frontend/ (sumber kebenaran dependency via
+# package.json + pnpm-lock.yaml). Di-pin ke major 12 selaras dengan Dockerfile
+# (install eksplisit `npm i -g pnpm@12`). Tidak memakai corepack — mise pemilik
+# tunggal versi pnpm untuk development lokal.
+pnpm = "12"
 # uv: package manager & build backend untuk backend/ (sumber kebenaran dependency
 # via pyproject.toml + uv.lock). Di-pin ke minor 0.13 selaras dengan Dockerfile
 # (ghcr.io/astral-sh/uv:0.13) dan build backend uv_build (>=0.13,<0.14).

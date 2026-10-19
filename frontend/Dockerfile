@@ -1,26 +1,27 @@
 # ============================================
 # Multi-stage Dockerfile untuk Next.js Frontend
-# Target: Node 20 Alpine, image < 500MB
+# Target: Node 24 Alpine, image < 500MB
 # ============================================
 
 # --- Stage 1: Dependencies ---
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 
 WORKDIR /app
 
-# Install dependencies berdasarkan lockfile
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
-RUN \
-    if [ -f yarn.lock ]; then yarn install --frozen-lockfile; \
-    elif [ -f package-lock.json ]; then npm ci; \
-    elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm install --frozen-lockfile; \
-    else npm install; \
-    fi
+# Install pnpm 12 secara eksplisit & ter-pin (tanpa corepack — selaras dengan mise)
+RUN npm i -g pnpm@12
+
+# Install dependencies dari pnpm-lock.yaml (frozen agar reproducible)
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 # --- Stage 2: Builder ---
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
+
+# Install pnpm 12 secara eksplisit & ter-pin (tanpa corepack — selaras dengan mise)
+RUN npm i -g pnpm@12
 
 # Copy dependencies dari stage sebelumnya
 COPY --from=deps /app/node_modules ./node_modules
@@ -34,10 +35,10 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Build Next.js application
-RUN npm run build
+RUN pnpm run build
 
 # --- Stage 3: Runtime ---
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 WORKDIR /app
 
@@ -45,8 +46,10 @@ WORKDIR /app
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-# Copy hanya file yang diperlukan untuk production
-COPY --from=builder /app/public ./public
+# Copy hanya file yang diperlukan untuk production.
+# --chown wajib: runtime berjalan sebagai user non-root `nextjs`; tanpa ini
+# public/ ter-copy sebagai root dan Next standalone server gagal baca (EACCES).
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 

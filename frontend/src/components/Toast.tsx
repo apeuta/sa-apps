@@ -9,6 +9,7 @@
  * - Animasi masuk/keluar max 200ms (Requirement 19.6)
  */
 
+import type React from "react";
 import { useEffect, useState } from "react";
 import { useToastStore, type Toast as ToastItem } from "@/store/toast";
 
@@ -73,7 +74,7 @@ const TOAST_STYLES: Record<string, string> = {
   info: "bg-primary-50 border-primary-200 text-primary-800",
 };
 
-const TOAST_ICONS: Record<string, () => JSX.Element> = {
+const TOAST_ICONS: Record<string, () => React.JSX.Element> = {
   success: SuccessIcon,
   error: ErrorIcon,
   info: InfoIcon,

@@ -1,5 +1,6 @@
 "use client";
 
+import type React from "react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR, { mutate } from "swr";
@@ -51,7 +52,7 @@ function formatRelativeTime(dateStr: string): string {
 /**
  * Mendapatkan ikon berdasarkan event type
  */
-function getEventIcon(eventType: NotificationEventType): JSX.Element {
+function getEventIcon(eventType: NotificationEventType): React.JSX.Element {
   switch (eventType) {
     case "assignment":
       return (

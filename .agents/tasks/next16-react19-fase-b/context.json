@@ -1,0 +1,29 @@
+{
+  "project_type": "Monorepo Portal SA — FastAPI backend (Python/uv) + Next.js App Router frontend (TypeScript). Fase B hanya menyentuh frontend.",
+  "language": "TypeScript (frontend). Backend Python TIDAK disentuh di Fase B.",
+  "build_system": "pnpm 12 (via mise lokal; di Docker via `npm i -g pnpm@12`, bukan corepack). Node 24. Next.js build menghasilkan standalone output.",
+  "test_framework": "Tidak ada test framework frontend. Verifikasi = type-check + build + runtime manual (sesuai verification gate CONTRIBUTING.md).",
+  "build_command": "cd frontend && pnpm run build",
+  "test_command": "cd frontend && pnpm exec tsc --noEmit (type-check). TIDAK ADA unit test runner frontend.",
+  "verification_instructions": "STATIS: (1) `cd frontend && pnpm exec tsc --noEmit` lolos; (2) `pnpm run build` hijau dan menghasilkan `frontend/.next/standalone/server.js`. CATATAN: `pnpm run lint` TIDAK dikonfigurasi (ESLint sengaja absen sejak Fase A) — lint gagal/absen BUKAN kegagalan dan ESLint config TIDAK boleh ditambah. RUNTIME: `cd frontend && docker build -t sa-portal-frontend:fase-b-test .`; `docker run -d --name fe-faseb -p 3999:3000 sa-portal-frontend:fase-b-test`; tunggu log `✓ Ready`; `curl -sf http://localhost:3999/manifest.json` → 200 JSON; `curl -sf http://localhost:3999/login` → 200 HTML; cleanup `docker rm -f fe-faseb`. Full stack opsional via `docker compose up` jika .env + backend image tersedia (cek /health). Jika Docker daemon tidak tersedia, nyatakan keterbatasan eksplisit — jangan klaim selesai.",
+  "snapshot_or_generated_files": "frontend/pnpm-lock.yaml di-generate ulang oleh `pnpm install` setelah bump versi di package.json — HARUS di-commit. frontend/.next/ adalah build artifact (gitignored, jangan commit).",
+  "environment_constraints": "Semua pekerjaan di worktree /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19 pada branch chore/next16-react19 (stacked di atas Fase A, BUKAN dari main). Path relatif akan jatuh ke parent workspace — SELALU pakai path absolut atau cd ke worktree dulu. JANGAN sentuh backend, Fase A branch, main, atau .kiro/specs/sa-portal-mvp/ (historis). JANGAN commit langsung ke main. JANGAN pakai --no-verify. docker-compose.yml memakai image prebuilt (image:, bukan build:) — untuk runtime check, build image frontend langsung. Docker daemon mungkin tidak selalu up.",
+  "contribution_requirements": "Output bahasa Indonesia (istilah teknis tetap Inggris). Conventional Commits (feat:/fix:/chore:/refactor:/docs:). Stage file spesifik — jangan `git add .`/`-A`. Pin dependency ke versi EXACT (tanpa ^). Jangan commit secret. Commit lokal di branch; JANGAN push (tugas 14 buka PR di luar scope). Update checkbox roadmap/tasks di branch yang sama dengan pekerjaannya.",
+  "key_patterns": "SEMUA page frontend adalah client component (\"use client\") yang memakai hook client useParams()/useSearchParams() dari next/navigation — hook ini TETAP sinkron di Next 16, jadi TIDAK terdampak perubahan async request API. Satu-satunya server-side async API di repo adalah route handler proxy api/v1/[...path]/route.ts (params kini Promise, wajib await). Tidak ada forwardRef, tidak ada useRef() tanpa argumen, tidak ada cookies()/headers() dari next/headers. Semua data fetching client-side (localStorage token + guard typeof window) sehingga perubahan default caching Next 15+ TIDAK berdampak — JANGAN tambah caching. Zustand store memakai API create<T>((set)=>...) standar tanpa middleware → migrasi v4->v5 nol-kode. public/sw.js adalah service worker tulisan tangan (bukan plugin next-pwa) → tak ada masalah kompatibilitas plugin.",
+  "relevant_files": [
+    "frontend/package.json — bump next/react/react-dom/@types/react(-dom)/swr/zustand (pin exact)",
+    "frontend/pnpm-lock.yaml — regenerasi via pnpm install",
+    "frontend/src/app/api/v1/[...path]/route.ts — SATU-SATUNYA file async params; await params di 5 handler GET/POST/PUT/PATCH/DELETE",
+    "frontend/next.config.js — hanya output:'standalone'; pertahankan, review opsi deprecated",
+    "frontend/tsconfig.json — skipLibCheck:true meredam churn tipe React 19; jsx:preserve",
+    "frontend/src/components/Toast.tsx — pakai JSX.Element (watch: mungkin perlu React.JSX.Element)",
+    "frontend/src/app/(protected)/notifications/page.tsx — pakai JSX.Element (watch item sama)",
+    "frontend/src/store/auth.ts, frontend/src/store/sidebar.ts, frontend/src/store/toast.ts — zustand stores, API standar (pattern untuk konfirmasi migrasi v5 nol-kode)",
+    "frontend/src/lib/fetcher.ts, frontend/src/lib/api/*.ts — semua fetch client-side (pattern untuk konfirmasi tak ada caching server-side yang perlu dipulihkan)",
+    "frontend/Dockerfile — sudah Node 24 + pnpm (Fase A); runtime jalankan node server.js dari .next/standalone",
+    "docker-compose.yml — service db/backend/frontend; frontend pakai image prebuilt (bukan build:)",
+    ".kiro/specs/toolchain-node24-pnpm-next16/tasks.md — centang 8-13, biarkan 14",
+    ".kiro/specs/toolchain-node24-pnpm-next16/design.md — bagian Fase B (referensi keputusan)"
+  ],
+  "directory_structure": "frontend/src/app — App Router (route group (auth) & (protected), dynamic projects/[id]/*, catch-all api/v1/[...path]/route.ts); frontend/src/components — komponen UI; frontend/src/lib — fetcher + api client + auth + offline-queue; frontend/src/store — zustand stores (auth/sidebar/toast); frontend/public — manifest.json, sw.js, icons. Worktree root berisi docker-compose.yml, mise.toml, dan .kiro/specs/."
+}
