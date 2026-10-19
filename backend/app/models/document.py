@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, ForeignKey, CheckConstraint, Text, DateTime
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,7 +34,7 @@ class Document(Base):
     doc_type: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        comment="Tipe dokumen: PropTek, BOQ, Mandays, MoM, RFP, HLD",
+        comment="Tipe dokumen: Requirement, PropTek, BOQ, Mandays, MoM, RFP, HLD",
     )
     status: Mapped[str] = mapped_column(
         String(20),
@@ -88,7 +88,7 @@ class Document(Base):
     # Constraints
     __table_args__ = (
         CheckConstraint(
-            "doc_type IN ('PropTek', 'BOQ', 'Mandays', 'MoM', 'RFP', 'HLD')",
+            "doc_type IN ('Requirement', 'PropTek', 'BOQ', 'Mandays', 'MoM', 'RFP', 'HLD')",
             name="chk_documents_doc_type",
         ),
         CheckConstraint(

@@ -7,7 +7,7 @@ import type { DocType, FolderType, CreateDocumentInput } from "@/lib/api/documen
  * Form untuk menambahkan dokumen baru ke proyek
  *
  * Fitur:
- * - Select tipe dokumen (PropTek, BOQ, Mandays, MoM, RFP, HLD)
+ * - Select tipe dokumen (Requirement, PropTek, BOQ, Mandays, MoM, RFP, HLD)
  * - Input link GDrive (wajib)
  * - Select folder type (Inventory, Diagram, Solutions)
  * - Textarea catatan (max 500 karakter, dengan counter)
@@ -19,6 +19,7 @@ import type { DocType, FolderType, CreateDocumentInput } from "@/lib/api/documen
 
 // Opsi tipe dokumen yang didukung
 const DOC_TYPE_OPTIONS: { value: DocType; label: string }[] = [
+  { value: "Requirement", label: "Requirement" },
   { value: "PropTek", label: "PropTek" },
   { value: "BOQ", label: "BOQ" },
   { value: "Mandays", label: "Mandays" },
@@ -278,8 +279,8 @@ export function DocumentForm({ onSubmit, isSubmitting = false, onCancel }: Docum
             type="button"
             onClick={onCancel}
             disabled={isSubmitting}
-            className="flex-1 py-2.5 px-4 rounded-lg font-medium text-neutral-700 
-                       border border-neutral-300 hover:bg-neutral-50 
+            className="flex-1 py-2.5 px-4 rounded-lg font-medium text-neutral-700
+                       border border-neutral-300 hover:bg-neutral-50
                        transition-colors duration-100 min-h-[44px]
                        disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -290,7 +291,7 @@ export function DocumentForm({ onSubmit, isSubmitting = false, onCancel }: Docum
           type="submit"
           disabled={isSubmitting}
           className={`
-            flex-1 py-2.5 px-4 rounded-lg font-medium text-white 
+            flex-1 py-2.5 px-4 rounded-lg font-medium text-white
             transition-all duration-200 min-h-[44px]
             ${isSubmitting
               ? "bg-neutral-400 cursor-not-allowed"

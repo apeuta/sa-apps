@@ -3,16 +3,18 @@ Schema Pydantic untuk endpoint Document Tracking.
 Digunakan untuk validasi request/response pada fitur CRUD dan state machine dokumen.
 """
 
+import uuid
 from datetime import datetime
 from enum import Enum
 from typing import Optional
-import uuid
 
 from pydantic import BaseModel, Field
 
 
 class DocTypeEnum(str, Enum):
     """Tipe dokumen yang tersedia di sistem."""
+
+    Requirement = "Requirement"
     PropTek = "PropTek"
     BOQ = "BOQ"
     Mandays = "Mandays"
@@ -23,6 +25,7 @@ class DocTypeEnum(str, Enum):
 
 class FolderTypeEnum(str, Enum):
     """Tipe folder penyimpanan dokumen di Google Drive."""
+
     Inventory = "Inventory"
     Diagram = "Diagram"
     Solutions = "Solutions"
@@ -30,6 +33,7 @@ class FolderTypeEnum(str, Enum):
 
 class DocStatusEnum(str, Enum):
     """Status dokumen dalam state machine."""
+
     Draft = "Draft"
     Reviewed = "Reviewed"
     Final = "Final"
@@ -40,7 +44,7 @@ class DocumentCreate(BaseModel):
 
     doc_type: DocTypeEnum = Field(
         ...,
-        description="Tipe dokumen: PropTek, BOQ, Mandays, MoM, RFP, HLD",
+        description="Tipe dokumen: Requirement, PropTek, BOQ, Mandays, MoM, RFP, HLD",
     )
     gdrive_link: str = Field(
         ...,

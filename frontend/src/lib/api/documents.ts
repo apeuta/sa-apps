@@ -16,7 +16,7 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 /** Tipe dokumen yang didukung */
-export type DocType = "PropTek" | "BOQ" | "Mandays" | "MoM" | "RFP" | "HLD";
+export type DocType = "Requirement" | "PropTek" | "BOQ" | "Mandays" | "MoM" | "RFP" | "HLD";
 
 /** Tipe folder GDrive */
 export type FolderType = "Inventory" | "Diagram" | "Solutions";
