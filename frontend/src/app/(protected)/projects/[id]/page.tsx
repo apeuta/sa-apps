@@ -165,13 +165,28 @@ export default function ProjectDetailPage() {
                   Reassign SA
                 </button>
               )}
-              {/* Tombol Edit */}
+              {/* Tombol Edit — ikon pensil (ikon-only, tetap aksesibel) */}
               <button
                 onClick={() => router.push(`/projects/${projectId}/edit`)}
-                className="px-3 py-1.5 text-sm font-medium text-neutral-700 border border-neutral-300
+                aria-label="Edit proyek"
+                title="Edit proyek"
+                className="inline-flex items-center justify-center px-3 py-1.5 text-neutral-700 border border-neutral-300
                            rounded-lg hover:bg-neutral-50 transition-colors min-h-[36px]"
               >
-                Edit
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                  />
+                </svg>
               </button>
               {/* Tombol Hapus — hanya Lead_SA/Admin */}
               {canDelete && (
@@ -236,7 +251,7 @@ export default function ProjectDetailPage() {
           <div className="flex gap-4">
             <a
               href={`/projects/${projectId}/documents`}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700 
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700
                          border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors min-h-[44px]"
             >
               <svg className="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -246,7 +261,7 @@ export default function ProjectDetailPage() {
             </a>
             <a
               href="/activity-logs"
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700 
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700
                          border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors min-h-[44px]"
             >
               <svg className="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">

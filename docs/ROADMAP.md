@@ -76,8 +76,8 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 **Tujuan:** menyelesaikan fitur yang sudah 80% jadi dengan perubahan kecil dan berisiko rendah.
 
 - [x] 1.1 **Fitur 2:** persist `estimasi_nilai` — tambah column + migration ke `Project`, simpan saat create, tampilkan di detail/edit. (fix **B4**)
-- [ ] 1.2 **Fitur 7:** tambahkan `Requirement` ke `DocTypeEnum` dan constraint `CHECK` di DB; perbarui dropdown tipe dokumen di frontend. (`backend/app/schemas/document.py`, `backend/app/models/document.py`, migration, `frontend/src/components/DocumentForm.tsx`)
-- [ ] 1.3 **Fitur 9:** ganti tombol teks "Edit" dengan ikon pensil/edit di halaman detail proyek, mempertahankan alur edit yang ada. (`frontend/src/app/(protected)/projects/[id]/page.tsx`)
+- [x] 1.2 **Fitur 7:** tambahkan `Requirement` ke `DocTypeEnum` dan constraint `CHECK` di DB; perbarui dropdown tipe dokumen di frontend. (`backend/app/schemas/document.py`, `backend/app/models/document.py`, migration, `frontend/src/components/DocumentForm.tsx`)
+- [x] 1.3 **Fitur 9:** ganti tombol teks "Edit" dengan ikon pensil/edit di halaman detail proyek, mempertahankan alur edit yang ada. (`frontend/src/app/(protected)/projects/[id]/page.tsx`)
 
 **Kriteria selesai:** nilai opportunity tersimpan dan tampil; Requirement bisa dipilih sebagai tipe dokumen; entry point edit proyek berupa ikon pensil.
 
