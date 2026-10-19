@@ -8,7 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.dependencies import get_current_user
 from app.models.project import Project
+from app.models.user import User
 from app.schemas.response import success_response
 from app.schemas.scoring import ManualBANTInput
 from app.services.scoring_engine import scoring_engine
@@ -24,6 +26,7 @@ router = APIRouter(prefix="/projects", tags=["Scoring"])
 async def score_manual(
     project_id: str,
     body: ManualBANTInput,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -34,15 +37,26 @@ async def score_manual(
     Threshold: >= 60 → Pending Assignment, < 60 → Need Clarification.
     """
     # Validasi proyek ada
-    result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = result.scalar_one_or_none()
 
     if not project:
         raise HTTPException(
             status_code=404,
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
+        )
+
+    # Authorization write-set: Sales PIC, assigned SA, atau privileged.
+    # Collaborator TIDAK diizinkan menjalankan scoring manual, jadi kita cek
+    # eksplisit di sini (bukan via ensure_project_access yang mengizinkan collaborator).
+    is_privileged = current_user.role in ("Lead_SA", "Admin")
+    is_sales_pic = project.sales_pic == current_user.id
+    is_assigned_sa = project.assigned_sa == current_user.id
+
+    if not (is_privileged or is_sales_pic or is_assigned_sa):
+        raise HTTPException(
+            status_code=403,
+            detail="Anda tidak memiliki akses untuk melakukan scoring manual pada proyek ini.",
         )
 
     # Lakukan scoring manual
@@ -92,6 +106,7 @@ async def score_manual(
 )
 async def get_bant_result(
     project_id: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -99,9 +114,7 @@ async def get_bant_result(
     Mengembalikan total skor, sub-skor per kriteria, use case tags, dan status.
     """
     # Ambil proyek dari database
-    result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = result.scalar_one_or_none()
 
     if not project:
@@ -156,6 +169,7 @@ async def get_bant_result(
 )
 async def get_recommendations(
     project_id: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -165,9 +179,7 @@ async def get_recommendations(
     Menyertakan info dokumen (tipe, link GDrive) dari proyek referensi.
     """
     # Ambil proyek saat ini
-    result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = result.scalar_one_or_none()
 
     if not project:

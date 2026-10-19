@@ -22,11 +22,11 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, func, desc, asc, or_
+from sqlalchemy import asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import ensure_project_access, get_current_user
 from app.models.project import Project
 from app.models.project_collaborator import ProjectCollaborator
 from app.models.user import User
@@ -144,16 +144,14 @@ async def _trigger_scoring_engine(
     from app.services.scoring_engine import scoring_engine
 
     logger.info(
-        f"[ScoringEngine] Trigger scoring untuk proyek {project_id} "
-        f"dengan {len(valid_files)} file."
+        f"[ScoringEngine] Trigger scoring untuk proyek {project_id} dengan {len(valid_files)} file."
     )
     try:
         # Buat session baru untuk background task (request session sudah ditutup)
         async with AsyncSessionLocal() as db:
             # Konversi format: (filename, content, mime_type) → (content, mime_type, filename)
             files_for_scoring = [
-                (content, mime_type, filename)
-                for filename, content, mime_type in valid_files
+                (content, mime_type, filename) for filename, content, mime_type in valid_files
             ]
             result = await scoring_engine.score_documents(
                 project_id=project_id,
@@ -178,10 +176,18 @@ async def _trigger_scoring_engine(
     ),
 )
 async def list_projects(
-    sales_pic: Optional[str] = Query(None, description="Filter: 'me' untuk proyek milik user login"),
-    assigned_to: Optional[str] = Query(None, description="Filter: 'me' untuk proyek yang ditugaskan ke user login"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter berdasarkan status proyek"),
-    sort: Optional[str] = Query("-updated_at", description="Sort: field name, prefix '-' untuk desc"),
+    sales_pic: Optional[str] = Query(
+        None, description="Filter: 'me' untuk proyek milik user login"
+    ),
+    assigned_to: Optional[str] = Query(
+        None, description="Filter: 'me' untuk proyek yang ditugaskan ke user login"
+    ),
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="Filter berdasarkan status proyek"
+    ),
+    sort: Optional[str] = Query(
+        "-updated_at", description="Sort: field name, prefix '-' untuk desc"
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -250,20 +256,22 @@ async def list_projects(
     # Format response
     projects_data = []
     for p in projects:
-        projects_data.append({
-            "id_project": p.id_project,
-            "project_name": p.project_name,
-            "customer_name": p.customer_name,
-            "status": p.status,
-            "dq_number": p.dq_number,
-            "bant_score": p.bant_score,
-            "use_case_tags": p.use_case_tags or [],
-            "target_submit": p.target_submit.isoformat() if p.target_submit else None,
-            "assigned_sa": str(p.assigned_sa) if p.assigned_sa else None,
-            "gdrive_folder_id": p.gdrive_folder_id,
-            "created_at": p.created_at.isoformat() if p.created_at else None,
-            "updated_at": p.updated_at.isoformat() if p.updated_at else None,
-        })
+        projects_data.append(
+            {
+                "id_project": p.id_project,
+                "project_name": p.project_name,
+                "customer_name": p.customer_name,
+                "status": p.status,
+                "dq_number": p.dq_number,
+                "bant_score": p.bant_score,
+                "use_case_tags": p.use_case_tags or [],
+                "target_submit": p.target_submit.isoformat() if p.target_submit else None,
+                "assigned_sa": str(p.assigned_sa) if p.assigned_sa else None,
+                "gdrive_folder_id": p.gdrive_folder_id,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+                "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+            }
+        )
 
     return success_response(
         data=projects_data,
@@ -277,8 +285,12 @@ async def list_projects(
     description="Mengembalikan count proyek per status untuk overview dashboard.",
 )
 async def get_status_summary(
-    sales_pic: Optional[str] = Query(None, description="Filter: 'me' untuk proyek milik user login"),
-    assigned_to: Optional[str] = Query(None, description="Filter: 'me' untuk proyek yang ditugaskan ke user login"),
+    sales_pic: Optional[str] = Query(
+        None, description="Filter: 'me' untuk proyek milik user login"
+    ),
+    assigned_to: Optional[str] = Query(
+        None, description="Filter: 'me' untuk proyek yang ditugaskan ke user login"
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -306,8 +318,7 @@ async def get_status_summary(
         query = query.where(Project.assigned_sa == current_user.id)
 
     result = await db.execute(
-        query.group_by(Project.status)
-        .order_by(func.count(Project.id_project).desc())
+        query.group_by(Project.status).order_by(func.count(Project.id_project).desc())
     )
     rows = result.all()
 
@@ -330,9 +341,7 @@ async def get_project_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """Ambil detail proyek berdasarkan project_id, enriched dengan nama PIC."""
-    result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = result.scalar_one_or_none()
 
     if not project:
@@ -366,9 +375,7 @@ async def get_project_detail(
     sales_name = None
     sales_email = None
     if project.sales_pic:
-        sales_result = await db.execute(
-            select(User).where(User.id == project.sales_pic)
-        )
+        sales_result = await db.execute(select(User).where(User.id == project.sales_pic))
         sales_user = sales_result.scalar_one_or_none()
         if sales_user:
             sales_name = sales_user.name
@@ -378,9 +385,7 @@ async def get_project_detail(
     sa_name = None
     sa_email = None
     if project.assigned_sa:
-        sa_result = await db.execute(
-            select(User).where(User.id == project.assigned_sa)
-        )
+        sa_result = await db.execute(select(User).where(User.id == project.assigned_sa))
         sa_user = sa_result.scalar_one_or_none()
         if sa_user:
             sa_name = sa_user.name
@@ -400,16 +405,18 @@ async def get_project_detail(
         c_user = c_user_result.scalar_one_or_none()
         c_adder_result = await db.execute(select(User).where(User.id == c.added_by))
         c_adder = c_adder_result.scalar_one_or_none()
-        collab_list.append({
-            "id": str(c.id),
-            "user_id": str(c.user_id),
-            "user_name": c_user.name if c_user else "Unknown",
-            "user_email": c_user.email if c_user else "unknown",
-            "user_role": c_user.role if c_user else "Unknown",
-            "role": c.role,
-            "added_by_name": c_adder.name if c_adder else "Unknown",
-            "created_at": c.created_at.isoformat() if c.created_at else None,
-        })
+        collab_list.append(
+            {
+                "id": str(c.id),
+                "user_id": str(c.user_id),
+                "user_name": c_user.name if c_user else "Unknown",
+                "user_email": c_user.email if c_user else "unknown",
+                "user_role": c_user.role if c_user else "Unknown",
+                "role": c.role,
+                "added_by_name": c_adder.name if c_adder else "Unknown",
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            }
+        )
 
     data = {
         "id_project": project.id_project,
@@ -430,7 +437,9 @@ async def get_project_detail(
             "id": str(project.assigned_sa) if project.assigned_sa else None,
             "name": sa_name,
             "email": sa_email,
-        } if project.assigned_sa else None,
+        }
+        if project.assigned_sa
+        else None,
         "collaborators": collab_list,
         "gdrive_folder_id": project.gdrive_folder_id,
         "created_at": project.created_at.isoformat() if project.created_at else None,
@@ -461,9 +470,7 @@ async def delete_project(
             detail="Hanya Lead SA dan Admin yang dapat menghapus proyek.",
         )
 
-    result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = result.scalar_one_or_none()
 
     if not project:
@@ -497,13 +504,15 @@ async def update_project(
     db: AsyncSession = Depends(get_db),
 ):
     """Update field-field proyek yang diizinkan."""
-    result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = result.scalar_one_or_none()
 
     if not project:
         raise HTTPException(status_code=404, detail="Proyek tidak ditemukan.")
+
+    # Validasi akses general sebelum mutasi field apapun:
+    # privileged (Lead_SA/Admin), Sales PIC, assigned SA, atau collaborator.
+    await ensure_project_access(db, project, current_user)
 
     # Update fields yang dikirim
     if "project_name" in body and body["project_name"]:
@@ -514,6 +523,7 @@ async def update_project(
         project.dq_number = body["dq_number"] if body["dq_number"] else None
     if "target_submit" in body and body["target_submit"]:
         from datetime import date as date_cls
+
         try:
             project.target_submit = date_cls.fromisoformat(body["target_submit"])
         except (ValueError, TypeError):
@@ -604,50 +614,63 @@ async def create_project(
 
     # Validasi target_submit tidak boleh masa lalu
     if target_submit < date.today():
-        validation_errors.append({
-            "field": "target_submit",
-            "reason": "Target submit tidak boleh tanggal di masa lalu.",
-        })
+        validation_errors.append(
+            {
+                "field": "target_submit",
+                "reason": "Target submit tidak boleh tanggal di masa lalu.",
+            }
+        )
 
     # Validasi estimasi_nilai — parse Decimal dari string
     estimasi_decimal: Optional[Decimal] = None
     try:
         estimasi_decimal = Decimal(estimasi_nilai)
         if estimasi_decimal < Decimal("0.01"):
-            validation_errors.append({
-                "field": "estimasi_nilai",
-                "reason": "Estimasi nilai minimum adalah 0.01.",
-            })
+            validation_errors.append(
+                {
+                    "field": "estimasi_nilai",
+                    "reason": "Estimasi nilai minimum adalah 0.01.",
+                }
+            )
         elif estimasi_decimal > Decimal("999999999999.00"):
-            validation_errors.append({
-                "field": "estimasi_nilai",
-                "reason": "Estimasi nilai maksimum adalah 999,999,999,999.00.",
-            })
+            validation_errors.append(
+                {
+                    "field": "estimasi_nilai",
+                    "reason": "Estimasi nilai maksimum adalah 999,999,999,999.00.",
+                }
+            )
     except (InvalidOperation, ValueError):
-        validation_errors.append({
-            "field": "estimasi_nilai",
-            "reason": "Format estimasi nilai tidak valid. Gunakan angka desimal.",
-        })
+        validation_errors.append(
+            {
+                "field": "estimasi_nilai",
+                "reason": "Format estimasi nilai tidak valid. Gunakan angka desimal.",
+            }
+        )
 
     # Validasi DQ Number (opsional — jika diisi, harus valid)
     import re
+
     validated_dq: Optional[str] = None
     if dq_number and dq_number.strip():
         dq_clean = dq_number.strip()
-        if not re.match(r'^[A-Za-z0-9\-]{5,20}$', dq_clean):
-            validation_errors.append({
-                "field": "dq_number",
-                "reason": "Format DQ Number tidak valid (alfanumerik + hyphen, 5-20 karakter).",
-            })
+        if not re.match(r"^[A-Za-z0-9\-]{5,20}$", dq_clean):
+            validation_errors.append(
+                {
+                    "field": "dq_number",
+                    "reason": "Format DQ Number tidak valid (alfanumerik + hyphen, 5-20 karakter).",
+                }
+            )
         else:
             validated_dq = dq_clean
 
     # Validasi jumlah file
     if len(files) > MAX_FILES:
-        validation_errors.append({
-            "field": "files",
-            "reason": f"Maksimal {MAX_FILES} file per request.",
-        })
+        validation_errors.append(
+            {
+                "field": "files",
+                "reason": f"Maksimal {MAX_FILES} file per request.",
+            }
+        )
 
     # Return 422 jika ada error validasi
     if validation_errors:

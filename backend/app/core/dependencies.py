@@ -5,12 +5,14 @@ Berisi auth middleware (JWT validation) dan dependencies lainnya.
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt, ExpiredSignatureError
+from jose import ExpiredSignatureError, JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.models.project import Project
+from app.models.project_collaborator import ProjectCollaborator
 from app.models.user import User
 
 # Security scheme — mengambil Bearer token dari header Authorization
@@ -79,3 +81,63 @@ async def get_current_user(
     request.state.user_id = str(user.id)
 
     return user
+
+
+def require_role(*allowed_roles: str):
+    """
+    Dependency factory untuk flat role gate.
+
+    Mengembalikan dependency FastAPI yang depends pada `get_current_user` dan
+    raise HTTP 403 jika `role` user saat ini tidak termasuk `allowed_roles`.
+    Jika role diizinkan, user dikembalikan apa adanya.
+
+    Contoh:
+        @router.delete("/{id}", dependencies=[Depends(require_role("Lead_SA", "Admin"))])
+    """
+
+    async def _role_checker(
+        current_user: User = Depends(get_current_user),
+    ) -> User:
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Anda tidak memiliki akses untuk melakukan aksi ini.",
+            )
+        return current_user
+
+    return _role_checker
+
+
+async def ensure_project_access(
+    db: AsyncSession,
+    project: Project,
+    user: User,
+) -> None:
+    """
+    Pastikan `user` boleh mengakses `project` di bawah general access set.
+
+    Bukan dependency FastAPI — fungsi helper biasa yang menerima Project yang
+    sudah di-load dan User. Mengizinkan akses jika user privileged
+    (role Lead_SA/Admin), Sales PIC project, assigned SA, atau collaborator.
+    Raise HTTP 403 (detail Indonesia) jika tidak satupun terpenuhi.
+
+    Return None saat sukses.
+    """
+    is_privileged = user.role in ("Lead_SA", "Admin")
+    is_sales_pic = project.sales_pic == user.id
+    is_assigned_sa = project.assigned_sa == user.id
+
+    # Cek keanggotaan collaborator (cocokkan cara get_project_detail query)
+    collab_result = await db.execute(
+        select(ProjectCollaborator).where(
+            ProjectCollaborator.id_project == project.id_project,
+            ProjectCollaborator.user_id == user.id,
+        )
+    )
+    is_collaborator = collab_result.scalar_one_or_none() is not None
+
+    if not (is_privileged or is_sales_pic or is_assigned_sa or is_collaborator):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki akses ke proyek ini.",
+        )
