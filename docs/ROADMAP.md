@@ -34,7 +34,7 @@ Dokumen pelacakan untuk 11 fitur yang dibutuhkan agar mencapai MVP yang layak. S
 | 7 | Input dokumen (Requirement, BoQ, Mandays, PropTek, HLD) | 🟡 Partial | Tipe "Requirement" belum ada (hanya RFP/PropTek/BOQ/Mandays/MoM/HLD) |
 | 8 | Due date + integrasi calendar | 🟡 Partial | `target_submit` ada; calendar read-only, tidak ada push due date |
 | 9 | Edit due date / ikon pensil edit | 🟡 Partial | Alur edit berfungsi; masih tombol teks, bukan ikon pensil |
-| 10 | BoQ compare vs Requirement | 🔴 Belum ada | Tidak ada fitur perbandingan; tipe "Requirement" belum ada |
+| 10 | BoQ compare vs Requirement | 🔴 Belum ada | Tidak ada fitur perbandingan; dokumen Requirement (summary turunan AI) belum di-generate — tipe `Requirement` sudah ada di enum (Fase 1.2), tapi kontennya belum disintesis |
 | 11 | Guardrails | ✅ Selesai | Guardrail LLM terpusat (size clamp, PII flag-and-log, mitigasi prompt-injection, validasi output) di tiga Call_Site; hardening default auth dilacak di fitur 1 / Fase 0 |
 
 ---
@@ -131,20 +131,21 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 - [ ] 5.2 Definisikan schema pertanyaan; simpan jawaban sebagai structured data di proyek (JSONB) atau tabel khusus.
 - [ ] 5.3 Frontend: render kuesioner sebagai step dalam flow "opportunity baru" Sales (`projects/new`).
 - [ ] 5.4 (Opsional AI) kirim jawaban + dokumen upload ke Gemini untuk men-generate pertanyaan klarifikasi area BANT yang lemah, ditampilkan ke Sales (terhubung dengan status "Need Clarification" yang sudah ada).
+- [ ] 5.5 **Generate dokumen Requirement (summary turunan AI).** Dokumen `Requirement` BUKAN file yang di-upload user, melainkan **konten turunan**: ringkasan terstruktur kebutuhan customer yang di-generate Gemini dari **source of truth = dokumen MoM/RFP yang di-upload + penjelasan Sales di field form** (kuesioner 5.x + estimasi/kebutuhan yang diisi saat buat opportunity). Hasilnya **disimpan sebagai `Document` dengan `doc_type="Requirement"`** (reuse tabel dokumen; `gdrive_link` boleh null / konten disimpan sebagai teks ter-generate), sehingga muncul di daftar dokumen proyek dan menjadi baseline perbandingan Fase 6. **Keputusan diambil (2026-10-19, product owner):** derived content, bukan upload; di-generate dari MoM/RFP + field Sales; **di-resummarize** saat source berubah (bukan snapshot sekali jadi); hidup di tabel `Document`. Pertimbangkan apakah SA boleh meng-edit/override hasil generate sebelum dipakai Fase 6 (default usulan: boleh, dengan menandai bahwa konten sudah di-override agar re-summarize tidak menimpa tanpa konfirmasi).
 
-**Kriteria selesai:** Sales menjawab kuesioner terstruktur saat membuat opportunity; jawaban tersimpan dan terlihat di proyek.
+**Kriteria selesai:** Sales menjawab kuesioner terstruktur saat membuat opportunity; jawaban tersimpan dan terlihat di proyek; sistem men-generate dokumen `Requirement` turunan dari MoM/RFP + field Sales dan menyimpannya sebagai `Document` proyek, yang di-resummarize saat source berubah.
 
 ---
 
 ## Fase 6 — BoQ Compare vs Requirement (fitur 10)
 
-**Tujuan:** analisis gap bertenaga AI antara dokumen Requirement dan dokumen BoQ. **Fitur baru dengan kompleksitas tertinggi** — bergantung pada Fase 1.2 (tipe dokumen Requirement) dan guardrails dari Fase 7.
+**Tujuan:** analisis gap bertenaga AI antara dokumen Requirement dan dokumen BoQ. **Fitur baru dengan kompleksitas tertinggi** — bergantung pada Fase 1.2 (tipe dokumen `Requirement` di enum), **Fase 5.5 (konten Requirement turunan AI di-generate dari MoM/RFP + field Sales)**, dan guardrails dari Fase 7. Catatan model: dokumen Requirement adalah summary turunan (lihat 5.5), bukan upload customer — jadi perbandingan selalu punya baseline terstruktur untuk dibandingkan, meski customer tidak memberi file requirement formal.
 
-- [ ] 6.1 Service: diberi dokumen Requirement dan dokumen BoQ sebuah proyek (link Drive atau upload), kirim keduanya ke Gemini via path multimodal `parse_document` / `structure_text` yang sudah ada.
+- [ ] 6.1 Service: diberi dokumen `Requirement` (summary turunan dari Fase 5.5) dan dokumen BoQ sebuah proyek, kirim keduanya ke Gemini via path multimodal `parse_document` / `structure_text` yang sudah ada.
 - [ ] 6.2 Definisikan schema output terstruktur: `covered[]`, `missing[]`, `extra[]`, dan `coverage_percentage`.
 - [ ] 6.3 Endpoint `GET/POST /projects/{id}/boq-compare`; persist hasil comparison terbaru untuk proyek.
 - [ ] 6.4 Frontend: tampilan comparison yang menunjukkan item covered/missing/extra dan skor coverage, dengan tombol run ulang.
-- [ ] 6.5 Handle edge case: Requirement atau BoQ tidak ada, LLM gagal (pakai ulang pola retry scoring engine).
+- [ ] 6.5 Handle edge case: Requirement belum di-generate (belum ada MoM/RFP/field Sales), BoQ tidak ada, atau LLM gagal (pakai ulang pola retry scoring engine).
 
 **Kriteria selesai:** memilih Requirement + BoQ untuk sebuah proyek mengembalikan analisis gap terstruktur dengan skor coverage, dirender di UI.
 
@@ -178,8 +179,10 @@ Fase 5 (form pertanyaan awal)──┘
       │
 Fase 7 (guardrails LLM)          ← sebelum Fase 6 (penggunaan LLM yang berat dokumen)
       │
-Fase 6 (BoQ vs Requirement)      ← terakhir; bergantung pada tipe Requirement + guardrails
+Fase 6 (BoQ vs Requirement)      ← terakhir; butuh tipe Requirement (1.2) + konten Requirement turunan (5.5) + guardrails (7)
 ```
+
+> Catatan dependensi: dokumen Requirement adalah **konten turunan AI** (di-generate di Fase 5.5 dari MoM/RFP + field Sales), bukan upload customer. Karena itu Fase 6 kini bergantung pada Fase 5, bukan hanya pada penambahan tipe enum di Fase 1.2.
 
 ---
 
@@ -206,3 +209,4 @@ Asumsi default berikut menggerakkan roadmap; konfirmasi atau koreksi:
 5. **Step qualify (2.3):** step qualify Lead SA terpisah vs BANT sebagai gate? _(diasumsikan: BANT sebagai gate)_
 6. **Calendar (3.1):** push due date satu arah vs sync dua arah? _(diasumsikan: push satu arah)_
 7. **PII (7.3):** flag vs redact? _(diasumsikan: flag untuk MVP)_
+8. **Dokumen Requirement (Fase 5.5 / 6):** upload file vs konten turunan AI? **✅ Diputuskan 2026-10-19:** konten turunan — summary AI dari MoM/RFP + field Sales, disimpan sebagai `Document` (`doc_type="Requirement"`), di-resummarize saat source berubah. Terbuka: apakah SA boleh override hasil generate (usulan: boleh, dengan flag agar re-summarize tidak menimpa override tanpa konfirmasi).
