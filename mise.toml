@@ -6,8 +6,6 @@
 #
 # Semua tool yang dibutuhkan untuk mengembangkan repo ini di-track di sini —
 # tambahkan tool baru ke blok [tools] agar seluruh contributor memakai versi sama.
-#
-# Tasks dan env management akan ditambahkan kemudian.
 
 [tools]
 python = "3.11"
@@ -16,3 +14,15 @@ node = "20"
 # via pyproject.toml + uv.lock). Di-pin ke minor 0.13 selaras dengan Dockerfile
 # (ghcr.io/astral-sh/uv:0.13) dan build backend uv_build (>=0.13,<0.14).
 uv = "0.13"
+
+# Arahkan git ke hook yang di-version di .githooks/ secara otomatis saat masuk
+# direktori repo (bagi contributor yang memakai mise). Hook pre-push menolak
+# push langsung ke main/master — lihat .githooks/pre-push.
+[hooks]
+enter = "git config core.hooksPath .githooks"
+
+# Fallback manual bagi yang tidak memakai mise: `mise run setup-hooks`
+# (atau langsung `git config core.hooksPath .githooks`).
+[tasks.setup-hooks]
+description = "Pasang git hooks repo (core.hooksPath -> .githooks)"
+run = "git config core.hooksPath .githooks"
