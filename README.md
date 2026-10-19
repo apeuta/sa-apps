@@ -69,7 +69,7 @@ sa-apps/                        # Root repository (= root di VM)
 │   ├── Dockerfile             # Multi-stage build
 │   └── package.json
 ├── .kiro/specs/sa-portal-mvp/ # Spec documents (requirements, design, tasks)
-├── docker-compose.yml          # Orchestration (3 services)
+├── compose.yaml                # Orchestration (3 services)
 ├── deploy.sh                   # Script deployment otomatis
 ├── .env.example                # Template environment variables
 └── README.md

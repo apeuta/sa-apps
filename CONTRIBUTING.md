@@ -33,7 +33,7 @@ PostgreSQL (versi 15) dijalankan via Docker Compose, bukan mise.
 
 mise **tidak** mengelola environment variables di repo ini — hanya runtime. Env di-handle sesuai konteks:
 
-- **Docker Compose** membaca `.env` di root (dari `.env.example`) untuk mengisi variable service di `docker-compose.yml`. Ini jalur development utama (`docker compose up`).
+- **Docker Compose** membaca `.env` di root (dari `.env.example`) untuk mengisi variable service di `compose.yaml`. Ini jalur development utama (`docker compose up`).
 - **Frontend lokal** memakai `frontend/.env.local` (dari `frontend/.env.local.example`) untuk `NEXT_PUBLIC_*`.
 
 Pemisahan ini disengaja: secret backend (DB password, API key, OAuth secret) tidak boleh bocor ke environment build frontend, dan beberapa nilai (`DATABASE_URL`, `BACKEND_URL`) memakai hostname internal jaringan Docker yang tidak valid di shell lokal. Jangan inject `.env` root ke seluruh repo via mise. `.env` dan `.env.local` di-ignore git — jangan commit; perbarui file `*.example` saat menambah variable.

@@ -385,7 +385,7 @@ FRONTEND_URL=http://YOUR-VM-IP:3000
 CORS_ORIGINS=*
 ```
 
-> **Catatan:** Dengan `DEMO_MODE=true`, Anda bisa langsung login tanpa Google OAuth.  
+> **Catatan:** Dengan `DEMO_MODE=true`, Anda bisa langsung login tanpa Google OAuth.
 > Google credentials, LLM API key, dll. bisa dikonfigurasi NANTI melalui Admin Settings di UI.
 
 #### (Opsional) Credentials untuk Fitur Penuh:
@@ -923,7 +923,7 @@ docker system df
 ## Catatan Penting
 
 1. **File `.env` ada di root repo** (`~/sa-portal/.env`), bukan di subfolder
-2. **docker-compose.yml ada di root repo** — semua command Docker dijalankan dari `~/sa-portal/`
+2. **compose.yaml ada di root repo** — semua command Docker dijalankan dari `~/sa-portal/`
 3. **Seed data bersifat idempotent** — aman dijalankan berkali-kali (skip jika data sudah ada)
 4. **Backend otomatis membuat tabel** saat startup — tidak perlu `alembic upgrade head` manual untuk deployment baru
 5. **Volume `sa-portal-pgdata`** menyimpan data database — jangan hapus kecuali mau reset total
