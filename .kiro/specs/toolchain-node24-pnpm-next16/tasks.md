@@ -50,36 +50,36 @@ Dikerjakan dalam dua fase/branch berurutan (lihat design.md). Fase B di-branch d
 
 ## Fase B — Next.js 16 + React 19 — branch `chore/next16-react19` (dari main setelah Fase A merge)
 
-- [ ] 8. Bump Next 16 + React 19 di package.json
+- [x] 8. Bump Next 16 + React 19 di package.json
   - `next` → 16 stable terbaru (pin exact); `react`/`react-dom` → 19; `@types/react(-dom)` menyesuaikan
   - Cek kompatibilitas `swr` & `zustand` dengan React 19; naikkan + pin exact bila perlu
   - Opsional: jalankan `npx @next/codemod@latest upgrade latest` sebagai titik awal, lalu review manual
   - `pnpm install` dan regenerasi `pnpm-lock.yaml`
   - _Requirements: 4.1, 6.4_
 
-- [ ] 9. Adaptasi async request API (params/searchParams/cookies/headers)
+- [x] 9. Adaptasi async request API (params/searchParams/cookies/headers)
   - `projects/[id]/page.tsx`, `projects/[id]/edit/page.tsx`, `projects/[id]/documents/page.tsx`
   - `api/v1/[...path]/route.ts` (params async pada handler)
   - `auth/callback/page.tsx` dan page lain yang membaca `searchParams`
   - Ubah akses sync `cookies()`/`headers()` menjadi `await`
   - _Requirements: 4.4, 4.6_
 
-- [ ] 10. Tinjau perubahan default caching Next 15+
+- [x] 10. Tinjau perubahan default caching Next 15+
   - Audit `lib/fetcher.ts`, `lib/api/*.ts`, `api/v1/[...path]/route.ts`
   - Pulihkan caching eksplisit hanya di titik yang mengandalkan perilaku lama
   - _Requirements: 4.5_
 
-- [ ] 11. Perbaiki breaking React 19 & next.config.js
+- [x] 11. Perbaiki breaking React 19 & next.config.js
   - Periksa `forwardRef`/`ref`, `AppProviders.tsx`, `AuthGuard.tsx`, hook kustom
   - Sesuaikan `next.config.js` untuk opsi yang berubah; pastikan `output: 'standalone'` tetap ada
   - Konfirmasi konfigurasi PWA/standalone tetap menghasilkan `server.js`
   - _Requirements: 4.6, 4.8, 4.9_
 
-- [ ] 12. Verifikasi statis Fase B
+- [x] 12. Verifikasi statis Fase B
   - `pnpm run lint` lolos; type-check lolos; `pnpm run build` hijau menghasilkan `.next/standalone`
   - _Requirements: 4.2, 4.3, 5.1_
 
-- [ ] 13. Verifikasi runtime nyata Fase B (full stack)
+- [x] 13. Verifikasi runtime nyata Fase B (full stack)
   - `docker compose up` → `/health` healthy
   - Telusuri nyata: login + `auth/callback`, dashboard (sa/lead-sa/sales), daftar→detail `projects/[id]`→edit→documents, buat project, activity log + calendar, proxy `api/v1/[...path]`
   - Pastikan tidak ada runtime error di console browser
