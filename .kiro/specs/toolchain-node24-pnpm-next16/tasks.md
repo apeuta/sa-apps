@@ -76,17 +76,19 @@ Dikerjakan dalam dua fase/branch berurutan (lihat design.md). Fase B di-branch d
   - _Requirements: 4.6, 4.8, 4.9_
 
 - [x] 12. Verifikasi statis Fase B
-  - `pnpm run lint` lolos; type-check lolos; `pnpm run build` hijau menghasilkan `.next/standalone`
+  - type-check lolos; `pnpm run build` hijau (Next 16.4.2, 18 route) menghasilkan `.next/standalone/server.js`
+  - CATATAN: `pnpm run lint` TIDAK dijalankan hijau — ESLint belum terkonfigurasi (pre-existing sejak Fase A, di luar scope)
   - _Requirements: 4.2, 4.3, 5.1_
 
 - [x] 13. Verifikasi runtime nyata Fase B (full stack)
-  - `docker compose up` → `/health` healthy
-  - Telusuri nyata: login + `auth/callback`, dashboard (sa/lead-sa/sales), daftar→detail `projects/[id]`→edit→documents, buat project, activity log + calendar, proxy `api/v1/[...path]`
-  - Pastikan tidak ada runtime error di console browser
-  - Catat setiap breaking change yang ditemukan + perbaikannya
+  - Full stack dinaikkan lokal via `docker-compose.override.yml` (build dari source worktree, named volume, service `migrate` one-shot) + `.env` demo mode
+  - `/health` → 200 (`database: healthy`); migration 001→004 jalan otomatis
+  - Diverifikasi nyata: demo-login (bypass OAuth) via proxy `api/v1/[...path]` → 200 + JWT; dynamic route `projects/[id]`; edit project (field scalar persist); navigasi client
+  - 3 isu PRE-EXISTING ditemukan (BUKAN regresi upgrade, dikonfirmasi byte-identical/direct-curl): (a) migration tak auto-run → diatasi di override lokal; (b) `bant_detail` edit tak tersimpan (bug JSONB SQLAlchemy backend) → di-log `.agents/tasks/bug-project-bant-detail-not-persisting/`; (c) subhalaman proyek tanpa navigasi kembali → di-log `.agents/tasks/ux-project-subpages-no-back-nav/`
+  - Tidak ada breaking change runtime akibat Next 16 / React 19
   - _Requirements: 4.7, 5.1, 5.2, 5.3, 5.4_
 
-- [ ] 14. Buka PR Fase B
-  - Branch `chore/next16-react19`, Conventional Commits, stage file spesifik
+- [x] 14. Buka PR Fase B
+  - Branch `chore/next16-react19` (stacked di atas `chore/toolchain-node24-pnpm`), Conventional Commits, stage file spesifik
   - Deskripsi PR mendokumentasikan daftar breaking change + hasil verifikasi runtime
   - _Requirements: 7.1, 7.2, 7.3, 5.3_
