@@ -30,7 +30,8 @@ Dikerjakan dalam dua fase/branch berurutan (lihat design.md). Fase B di-branch d
   - _Requirements: 3.6, 3.7, 5.1_
 
 - [x] 5. Verifikasi build lokal Fase A (masih Next 14)
-  - `pnpm run build` di `frontend/` hijau; `pnpm run lint` lolos
+  - `pnpm run build` di `frontend/` hijau (16 route, Next 14 bersih)
+  - CATATAN: `pnpm run lint` TIDAK hijau — ESLint belum terpasang/terkonfigurasi di repo (pre-existing, di luar scope Fase A). Ditangani sebagai pekerjaan terpisah, bukan di sini.
   - Konfirmasi perintah frontend lain (jika ada script) jalan di bawah pnpm
   - _Requirements: 2.6, 2.7, 5.1, 5.2_
 
