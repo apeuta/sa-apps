@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { fetcher } from "@/lib/fetcher";
+import { fetcher, apiRequest } from "@/lib/fetcher";
 import { useAuthStore } from "@/store/auth";
 import { useToastStore } from "@/store/toast";
 
@@ -576,23 +576,19 @@ function UserRoleManager() {
   const handleChangeRole = async () => {
     if (!editingUser || !newRole) return;
     try {
-      await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "/api/v1"}/admin/users/${editingUser.id}/role`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-          },
-          body: JSON.stringify({ role: newRole }),
-        }
-      );
+      await apiRequest(`/admin/users/${editingUser.id}/role`, {
+        method: "PATCH",
+        body: { role: newRole },
+      });
       showToast("success", `Role ${editingUser.name} diubah ke ${newRole}.`);
       setEditingUser(null);
       setNewRole("");
       mutate();
-    } catch {
-      showToast("error", "Gagal mengubah role.");
+    } catch (err: unknown) {
+      // Tampilkan pesan dari backend (mis. 409 Admin terakhir tidak dapat
+      // di-demote) agar user paham alasan perubahan role ditolak.
+      const message = err instanceof Error ? err.message : "Gagal mengubah role.";
+      showToast("error", message);
     }
   };
 
