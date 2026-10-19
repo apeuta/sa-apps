@@ -4,7 +4,7 @@ API endpoints untuk Admin — User management dan konfigurasi.
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -28,6 +28,7 @@ def _require_admin(current_user: User) -> None:
 
 class ChangeRoleRequest(BaseModel):
     """Request body untuk mengubah role user."""
+
     role: str
 
 
@@ -81,6 +82,7 @@ async def change_user_role(
 
     # Cari user
     import uuid as uuid_mod
+
     try:
         uid = uuid_mod.UUID(user_id)
     except ValueError:
@@ -93,10 +95,33 @@ async def change_user_role(
         raise HTTPException(status_code=404, detail="User tidak ditemukan.")
 
     old_role = user.role
+
+    # Failsafe: cegah demosi Admin terakhir. Jika user ini seorang Admin dan
+    # role barunya bukan Admin, pastikan masih ada Admin lain yang tersisa.
+    # Sistem harus selalu punya minimal satu Admin agar akses admin tidak hilang.
+    if old_role == "Admin" and body.role != "Admin":
+        admin_count = await db.scalar(
+            select(func.count()).select_from(User).where(User.role == "Admin")
+        )
+        if admin_count is not None and admin_count <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Admin terakhir tidak dapat di-demote. "
+                    "Sistem harus selalu memiliki minimal satu Admin."
+                ),
+            )
+
     user.role = body.role
     await db.commit()
 
     return success_response(
-        data={"id": str(user.id), "name": user.name, "email": user.email, "role": user.role, "old_role": old_role},
+        data={
+            "id": str(user.id),
+            "name": user.name,
+            "email": user.email,
+            "role": user.role,
+            "old_role": old_role,
+        },
         message=f"Role {user.name} diubah dari {old_role} ke {body.role}.",
     )
