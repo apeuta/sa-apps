@@ -6,19 +6,22 @@ Catatan: kolom sales_pic menyimpan requester (bisa Sales, SA, atau Lead_SA).
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
-    String,
-    Integer,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
-    CheckConstraint,
     Index,
+    Integer,
+    Numeric,
+    String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -79,9 +82,14 @@ class Project(Base):
         comment="Skor BANT (0-100)",
     )
     bant_detail: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+        MutableDict.as_mutable(JSONB),
         nullable=True,
         comment="Detail breakdown skor BANT per kriteria",
+    )
+    estimasi_nilai: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+        comment="Estimasi nilai proyek dalam IDR (0.01 - 999,999,999,999.00)",
     )
     use_case_tags: Mapped[Optional[list]] = mapped_column(
         JSONB,

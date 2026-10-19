@@ -265,6 +265,7 @@ async def list_projects(
                 "dq_number": p.dq_number,
                 "bant_score": p.bant_score,
                 "use_case_tags": p.use_case_tags or [],
+                "estimasi_nilai": str(p.estimasi_nilai) if p.estimasi_nilai is not None else None,
                 "target_submit": p.target_submit.isoformat() if p.target_submit else None,
                 "assigned_sa": str(p.assigned_sa) if p.assigned_sa else None,
                 "gdrive_folder_id": p.gdrive_folder_id,
@@ -427,6 +428,9 @@ async def get_project_detail(
         "bant_score": project.bant_score,
         "bant_detail": project.bant_detail,
         "use_case_tags": project.use_case_tags or [],
+        "estimasi_nilai": str(project.estimasi_nilai)
+        if project.estimasi_nilai is not None
+        else None,
         "target_submit": project.target_submit.isoformat() if project.target_submit else None,
         "sales_pic": {
             "id": str(project.sales_pic) if project.sales_pic else None,
@@ -495,7 +499,9 @@ async def delete_project(
 @router.patch(
     "/{project_id}",
     summary="Update proyek",
-    description="Update informasi proyek (nama, customer, DQ, BANT detail, target submit).",
+    description=(
+        "Update informasi proyek (nama, customer, DQ, estimasi nilai, BANT detail, target submit)."
+    ),
 )
 async def update_project(
     project_id: str,
@@ -528,8 +534,31 @@ async def update_project(
             project.target_submit = date_cls.fromisoformat(body["target_submit"])
         except (ValueError, TypeError):
             pass
+    if "estimasi_nilai" in body and body["estimasi_nilai"] is not None:
+        # Validasi range sama dengan create_project (0.01 - 999,999,999,999.00)
+        try:
+            estimasi_decimal = Decimal(str(body["estimasi_nilai"]))
+        except (InvalidOperation, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Format estimasi nilai tidak valid. Gunakan angka desimal.",
+            )
+        if estimasi_decimal < Decimal("0.01"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Estimasi nilai minimum adalah 0.01.",
+            )
+        if estimasi_decimal > Decimal("999999999999.00"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Estimasi nilai maksimum adalah 999,999,999,999.00.",
+            )
+        # Kolom skalar Numeric — reassign langsung aman (bukan mutasi in-place)
+        project.estimasi_nilai = estimasi_decimal
     if "bant_detail" in body and body["bant_detail"]:
-        # Merge dengan existing bant_detail
+        # Merge dengan existing bant_detail.
+        # Kolom di-map dengan MutableDict sehingga mutasi in-place terdeteksi
+        # oleh SQLAlchemy dan ikut ter-commit.
         existing = project.bant_detail or {}
         existing.update(body["bant_detail"])
         project.bant_detail = existing
@@ -702,6 +731,7 @@ async def create_project(
         project_name=project_name,
         customer_name=customer_name,
         target_submit=target_submit,
+        estimasi_nilai=estimasi_decimal,
         dq_number=validated_dq,
         status="New",
         sales_pic=current_user.id,

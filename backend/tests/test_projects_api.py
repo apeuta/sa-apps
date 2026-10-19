@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
-
 # =============================================================================
 # Fixtures & Helpers
 # =============================================================================
@@ -31,7 +30,9 @@ def _mock_user():
     return user
 
 
-def _create_fake_file(filename: str, content: bytes = b"fake content", content_type: str = "application/pdf"):
+def _create_fake_file(
+    filename: str, content: bytes = b"fake content", content_type: str = "application/pdf"
+):
     """Buat tuple file upload untuk TestClient."""
     return ("files", (filename, BytesIO(content), content_type))
 
@@ -444,3 +445,174 @@ class TestResponseFormat:
         assert "status" in body
         assert body["status"] == "error"
         assert "message" in body
+
+
+# =============================================================================
+# Test: Persistensi estimasi_nilai (regresi B4)
+# =============================================================================
+
+
+class TestEstimasiNilaiPersist:
+    """
+    Test regresi: estimasi_nilai harus ikut dipersist ke record Project saat
+    create, bukan sekadar muncul di response (fix B4).
+    """
+
+    def test_create_mempersist_estimasi_nilai_ke_record(self, mock_auth_and_db):
+        """
+        Nilai estimasi_nilai yang dikirim harus di-set pada object Project yang
+        di-add ke session (yang akan di-commit ke DB), bukan hanya di response.
+        """
+        mock_user, mock_session = mock_auth_and_db
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/projects",
+            data={
+                "project_name": "Proyek Estimasi",
+                "customer_name": "PT Estimasi",
+                "target_submit": str(date.today() + timedelta(days=7)),
+                "estimasi_nilai": "750000000.50",
+            },
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+
+        # Ambil object Project yang di-add ke session (akan di-commit ke DB)
+        assert mock_session.add.call_count == 1
+        added_project = mock_session.add.call_args.args[0]
+        assert added_project.estimasi_nilai == Decimal("750000000.50")
+
+        # Nilai juga tercermin di response
+        body = response.json()
+        assert Decimal(str(body["data"]["estimasi_nilai"])) == Decimal("750000000.50")
+
+
+# =============================================================================
+# Test: PATCH /projects/{id} benar-benar mempersist (regresi bant_detail & estimasi_nilai)
+# =============================================================================
+
+
+def _real_project(**overrides):
+    """Buat object Project nyata (bukan mock) untuk test readback persistensi."""
+    from app.models.project import Project
+
+    defaults = dict(
+        id_project="PRJ-20250101-ABC123",
+        project_name="Proyek Lama",
+        customer_name="PT Lama",
+        status="New",
+        target_submit=date.today() + timedelta(days=7),
+        sales_pic=uuid.uuid4(),
+        bant_detail=None,
+        estimasi_nilai=None,
+    )
+    defaults.update(overrides)
+    return Project(**defaults)
+
+
+@pytest.fixture
+def mock_patch_db():
+    """
+    Patch auth (role Lead_SA agar lolos ensure_project_access) + session untuk
+    endpoint PATCH /projects/{id}. db.execute mengembalikan project pada panggilan
+    pertama (lookup), lalu None (cek collaborator di ensure_project_access).
+    """
+    mock_user = _mock_user()
+    mock_user.role = "Lead_SA"
+
+    project = _real_project()
+
+    mock_session = AsyncMock()
+    mock_session.commit = AsyncMock()
+
+    def _make_result(value):
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=value)
+        return result
+
+    # Panggilan 1: lookup Project. Panggilan 2: cek collaborator (None).
+    mock_session.execute = AsyncMock(side_effect=[_make_result(project), _make_result(None)])
+
+    async def override_get_db():
+        yield mock_session
+
+    import app.core.database as database_module
+    import app.core.dependencies as dependencies_module
+
+    app.dependency_overrides[database_module.get_db] = override_get_db
+    app.dependency_overrides[dependencies_module.get_current_user] = lambda: mock_user
+
+    yield mock_user, mock_session, project
+
+    app.dependency_overrides.clear()
+
+
+class TestUpdateProjectPersist:
+    """
+    Test regresi: PATCH harus benar-benar mengubah object yang di-commit
+    (bukan sekadar mengembalikan 200). bant_detail sebelumnya gagal persist
+    karena JSONB tanpa MutableDict.
+    """
+
+    def test_patch_bant_detail_tersimpan(self, mock_patch_db):
+        """
+        PATCH bant_detail harus ter-set pada object Project (readback), bukan
+        hanya 200. Ini test yang gagal sebelum fix MutableDict.
+        """
+        mock_user, mock_session, project = mock_patch_db
+        client = TestClient(app)
+        response = client.patch(
+            "/api/v1/projects/PRJ-20250101-ABC123",
+            json={"bant_detail": {"budget": 8, "authority": 5}},
+        )
+        assert response.status_code == status.HTTP_200_OK
+        # commit dipanggil
+        mock_session.commit.assert_awaited()
+        # Readback dari object yang di-commit
+        assert project.bant_detail == {"budget": 8, "authority": 5}
+
+    def test_patch_bant_detail_merge_dengan_existing(self, mock_patch_db):
+        """PATCH bant_detail melakukan merge terhadap nilai existing."""
+        mock_user, mock_session, project = mock_patch_db
+        project.bant_detail = {"budget": 2}
+        client = TestClient(app)
+        response = client.patch(
+            "/api/v1/projects/PRJ-20250101-ABC123",
+            json={"bant_detail": {"authority": 9}},
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert project.bant_detail == {"budget": 2, "authority": 9}
+
+    def test_patch_estimasi_nilai_valid_tersimpan(self, mock_patch_db):
+        """PATCH estimasi_nilai valid ter-set pada object (readback)."""
+        mock_user, mock_session, project = mock_patch_db
+        client = TestClient(app)
+        response = client.patch(
+            "/api/v1/projects/PRJ-20250101-ABC123",
+            json={"estimasi_nilai": "123456.78"},
+        )
+        assert response.status_code == status.HTTP_200_OK
+        mock_session.commit.assert_awaited()
+        assert project.estimasi_nilai == Decimal("123456.78")
+
+    def test_patch_estimasi_nilai_di_luar_range_ditolak(self, mock_patch_db):
+        """PATCH estimasi_nilai di luar range (terlalu besar) ditolak 422."""
+        mock_user, mock_session, project = mock_patch_db
+        client = TestClient(app)
+        response = client.patch(
+            "/api/v1/projects/PRJ-20250101-ABC123",
+            json={"estimasi_nilai": "9999999999999.00"},
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        # Nilai tidak berubah
+        assert project.estimasi_nilai is None
+
+    def test_patch_estimasi_nilai_terlalu_kecil_ditolak(self, mock_patch_db):
+        """PATCH estimasi_nilai < 0.01 ditolak 422."""
+        mock_user, mock_session, project = mock_patch_db
+        client = TestClient(app)
+        response = client.patch(
+            "/api/v1/projects/PRJ-20250101-ABC123",
+            json={"estimasi_nilai": "0.001"},
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert project.estimasi_nilai is None
