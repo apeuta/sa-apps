@@ -46,8 +46,10 @@ WORKDIR /app
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-# Copy hanya file yang diperlukan untuk production
-COPY --from=builder /app/public ./public
+# Copy hanya file yang diperlukan untuk production.
+# --chown wajib: runtime berjalan sebagai user non-root `nextjs`; tanpa ini
+# public/ ter-copy sebagai root dan Next standalone server gagal baca (EACCES).
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 

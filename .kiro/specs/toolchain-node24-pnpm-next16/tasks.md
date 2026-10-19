@@ -26,7 +26,8 @@ Dikerjakan dalam dua fase/branch berurutan (lihat design.md). Fase B di-branch d
 
 - [x] 4. Perbarui `.dockerignore` dan verifikasi build image (Fase A)
   - Selaraskan komentar `frontend/.dockerignore` ke install path pnpm
-  - `docker compose build frontend` sukses; `docker compose up` → `/health` healthy; frontend tersaji di :3000
+  - `docker build frontend/` sukses di Node 24 + pnpm 12 (image Next standalone, Node v24.22.0 di runtime); container start bersih (`✓ Ready`), `/manifest.json` → 200
+  - FIX ditemukan saat verifikasi: `COPY /app/public` kehilangan `--chown=nextjs:nodejs` → runtime non-root gagal baca `public/icons` (EACCES). Pre-existing bug, diperbaiki di branch ini.
   - _Requirements: 3.6, 3.7, 5.1_
 
 - [x] 5. Verifikasi build lokal Fase A (masih Next 14)
