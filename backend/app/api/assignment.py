@@ -720,7 +720,7 @@ async def reassign_sa_to_project(
     # === 4. Insert notifikasi ke SA baru ===
     notification = NotificationLog(
         id=_generate_notification_id(),
-        event_type="reassignment",
+        event_type="assignment",
         recipient_user_id=body.sa_id,
         channel="in-app",
         status="sent",
