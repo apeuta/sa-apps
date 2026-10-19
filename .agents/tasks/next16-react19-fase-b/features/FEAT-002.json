@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-002",
+  "type": "chore",
+  "description": "Verifikasi runtime nyata via Docker (build image frontend + start container + HTTP checks) dan update checkbox tasks.md Fase B (8-13 -> [x], 14 tetap [ ]). Bergantung pada FEAT-001 (butuh codebase yang sudah di-upgrade dan lolos build).",
+  "status": "completed",
+  "steps": [
+    "Pastikan FEAT-001 selesai (build hijau, standalone server.js ada). Build image frontend: `cd /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19/frontend && docker build -t sa-portal-frontend:fase-b-test .` (Dockerfile sudah Node 24 + pnpm dari Fase A). Jika Docker daemon tidak tersedia, JANGAN klaim selesai — set status blocked dengan blocked_reason {retryable:true, detail:'Docker daemon tidak tersedia'} dan laporkan via send_message severity warning.",
+    "Jalankan container: `docker run -d --name fe-faseb -p 3999:3000 sa-portal-frontend:fase-b-test`, tunggu sampai log `✓ Ready` (cek `docker logs fe-faseb`).",
+    "HTTP checks (static server, tanpa backend): `curl -sf http://localhost:3999/manifest.json` harus 200 + JSON; `curl -sf -o /dev/null -w '%{http_code}' http://localhost:3999/login` harus 200 (route server-rendered). Catat hasil.",
+    "Cleanup container: `docker rm -f fe-faseb`.",
+    "Opsional full stack (hanya jika .env + backend image sa-portal-backend:latest tersedia): `cd /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19 && docker compose up -d`, cek /health backend healthy dan proxy api/v1 meneruskan dengan benar; telusuri alur inti bila memungkinkan; `docker compose down` setelah selesai. Jika tidak tersedia, nyatakan keterbatasan eksplisit.",
+    "Edit .kiro/specs/toolchain-node24-pnpm-next16/tasks.md: ubah checkbox tugas 8, 9, 10, 11, 12, 13 dari `[ ]` menjadi `[x]`. BIARKAN tugas 14 (buka PR) sebagai `[ ]` — di luar scope run ini.",
+    "Commit lokal di branch chore/next16-react19 dengan Conventional Commits (mis. `chore: verifikasi runtime Fase B dan update checkbox tasks`). Stage file spesifik (tasks.md). JANGAN push.",
+    "Set status FEAT-002 ke completed dan catat di findings: hasil docker build (sukses/gagal), status container (✓ Ready), kode HTTP /manifest.json dan /login, apakah full stack dijalankan atau di-skip (dan alasannya), serta setiap breaking change runtime yang ditemukan + perbaikannya."
+  ],
+  "acceptance_criteria": [
+    "`docker build -t sa-portal-frontend:fase-b-test .` dari frontend/ sukses (ATAU keterbatasan Docker dinyatakan eksplisit dan status blocked, bukan diklaim selesai).",
+    "Container start dan log menunjukkan `✓ Ready`.",
+    "`curl http://localhost:3999/manifest.json` mengembalikan 200 + JSON.",
+    "`curl http://localhost:3999/login` mengembalikan HTTP 200.",
+    "tasks.md: tugas 8-13 tercentang `[x]`, tugas 14 tetap `[ ]`.",
+    "Perubahan tasks.md ter-commit lokal (bukan push) dengan Conventional Commits.",
+    "Temuan runtime (jika ada breaking change) terdokumentasi di findings."
+  ],
+  "verification": [
+    "cd /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19/frontend && docker build -t sa-portal-frontend:fase-b-test . (sukses)",
+    "docker run -d --name fe-faseb -p 3999:3000 sa-portal-frontend:fase-b-test && sleep 5 && docker logs fe-faseb | grep -q 'Ready'",
+    "curl -sf -o /dev/null -w '%{http_code}' http://localhost:3999/manifest.json (200)",
+    "curl -sf -o /dev/null -w '%{http_code}' http://localhost:3999/login (200)",
+    "docker rm -f fe-faseb",
+    "grep -n '^- \\[' /Users/nikki/workspace/berca/projects/internal/sa-apps/.worktrees/next16-react19/.kiro/specs/toolchain-node24-pnpm-next16/tasks.md (8-13 = [x], 14 = [ ])"
+  ],
+  "blocked_reason": null,
+  "findings": "Docker daemon TERSEDIA (Docker server v29.8.2). docker build `sa-portal-frontend:fase-b-test` dari frontend/ SUKSES (exit 0, image sha256:b2402aa4...). Dockerfile Fase A (Node 24 Alpine + pnpm@12) tetap valid di Next 16: build menghasilkan 18 route standalone, FIX --chown=nextjs:nodejs pada COPY public dari Fase A tetap efektif (tidak ada regresi EACCES). Container `fe-faseb` start bersih dan log menampilkan `▲ Next.js 16.4.2` + `✓ Ready in 0ms` + `✓ Running next.config took 1.2ms` (zero runtime error, tidak ada warning deprecation). HTTP checks (static server, tanpa backend): GET /manifest.json → 200, content-type application/json, body JSON valid (name 'Portal SA — Manajemen Proyek Pre-Sales'); GET /login → 200, content-type text/html. CATATAN runtime: /login di Next 16 build sebagai Static (○ prerendered), bukan server-rendered on demand seperti deskripsi task — tetap mengembalikan 200 HTML, jadi acceptance criteria terpenuhi; tidak ada perubahan kode diperlukan. Tidak ada log error container setelah request. Container uji dibersihkan (`docker rm -f fe-faseb` sukses). Full stack via docker compose DI-SKIP: file .env TIDAK ADA di worktree root (prasyarat step opsional tidak terpenuhi); backend image ghcr.io/apeuta/sa-portal-backend:latest tersedia tapi tanpa .env stack tidak bisa dinaikkan dengan konfigurasi valid, dan .env tidak dibuat untuk menghindari fabrikasi secret. Verifikasi proxy api/v1 + alur login/dashboard/projects penuh karenanya belum dijalankan runtime — merupakan keterbatasan eksplisit run ini (tugas 14 / verifikasi end-to-end lanjutan di luar scope). TIDAK ada breaking change runtime ditemukan pada frontend standalone. tasks.md: checkbox 8-13 di-set [x] (13 dicentang atas dasar verifikasi runtime frontend container; keterbatasan full-stack dicatat), 14 tetap [ ]."
+}

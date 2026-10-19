@@ -1,0 +1,7 @@
+{
+  "task_id": "task-next16-react19-fase-b",
+  "task_description": "Fase B toolchain upgrade: Next.js 14.2.3 -> latest stable 16.x dan React 18.3.1 -> 19.x di frontend Portal SA. Adaptasi async request API (route handler params), bump dependency (termasuk zustand 4->5 dan swr untuk kompatibilitas React 19), review perubahan default caching (tidak ada yang perlu dipulihkan — semua fetch client-side), tinjau next.config.js (pertahankan output standalone), verifikasi statis (type-check + build standalone) dan runtime (Docker image build + container + HTTP checks), lalu centang tasks.md 8-13. Tugas 14 (buka PR) di luar scope.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}
