@@ -27,9 +27,11 @@ from app.schemas.auth import (
 from app.services.auth_service import (
     AuthServiceError,
     DomainNotAllowedError,
-    OAuthError as ServiceOAuthError,
     TokenError,
     auth_service,
+)
+from app.services.auth_service import (
+    OAuthError as ServiceOAuthError,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,12 +48,14 @@ async def get_auth_config():
     Tidak memerlukan autentikasi.
     """
     oauth_configured = bool(
-        settings.GOOGLE_CLIENT_ID and
-        settings.GOOGLE_CLIENT_SECRET and
-        len(settings.GOOGLE_CLIENT_ID) > 10
+        settings.GOOGLE_CLIENT_ID
+        and settings.GOOGLE_CLIENT_SECRET
+        and len(settings.GOOGLE_CLIENT_ID) > 10
     )
     return {
-        "demo_mode": settings.DEMO_MODE,
+        # Pakai demo_mode_enabled agar indikator yang dilihat frontend konsisten
+        # dengan perilaku runtime (hard block produksi).
+        "demo_mode": settings.demo_mode_enabled,
         "oauth_configured": oauth_configured,
     }
 
@@ -84,6 +88,7 @@ DEMO_USERS = {
 
 class DemoLoginRequest(BaseModel):
     """Request body untuk demo login."""
+
     role: Literal["Sales", "SA", "Lead_SA", "Admin"]
 
 
@@ -94,12 +99,13 @@ async def demo_login(
 ):
     """
     Login tanpa Google OAuth untuk development/demo.
-    Hanya aktif jika DEMO_MODE=true di environment.
+    Hanya aktif jika DEMO_MODE=true DAN ENVIRONMENT bukan production.
     Membuat demo user di database jika belum ada (INSERT IF NOT EXISTS).
     Mengembalikan JWT token yang identik formatnya dengan OAuth flow.
     """
-    # Cek apakah demo mode aktif
-    if not settings.DEMO_MODE:
+    # Cek apakah demo mode aktif. demo_mode_enabled hard-block produksi:
+    # di ENVIRONMENT=production selalu False meski DEMO_MODE=true.
+    if not settings.demo_mode_enabled:
         raise HTTPException(
             status_code=403,
             detail="Demo mode tidak aktif. Gunakan Google OAuth untuk login.",
@@ -116,6 +122,7 @@ async def demo_login(
     if not user:
         # Buat demo user baru di database — gunakan deterministic UUID berdasarkan email
         import hashlib
+
         user_id = uuid.UUID(hashlib.md5(demo_config["email"].encode()).hexdigest())
         user = User(
             id=user_id,
