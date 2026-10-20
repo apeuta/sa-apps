@@ -40,6 +40,18 @@ Pemisahan ini disengaja: secret backend (DB password, API key, OAuth secret) tid
 
 > mise tasks (mis. `mise run test`/`lint`) belum dikonfigurasi — akan ditambahkan kemudian.
 
+### Full stack lokal (Docker Compose)
+
+`compose.yaml` adalah file produksi/VM: ia memakai prebuilt remote image dan host bind mount ke path VM (`/opt/docker_srv/...`) yang tidak ada di mesin development. Untuk menjalankan full stack di mesin lokal, pakai override `compose.local.yaml` yang di-track git. Override ini build dari source lokal dan mengganti bind mount VM dengan named volume, jadi stack naik di mana pun Docker tersedia (Linux, Windows/WSL, macOS).
+
+Override ini **opt-in**: namanya sengaja bukan `compose.override.yaml` agar Docker Compose tidak meng-auto-merge-nya. Panggil eksplisit dengan `-f` dari root repo:
+
+```bash
+docker compose -f compose.yaml -f compose.local.yaml up -d --build
+```
+
+`docker compose up` polos (tanpa `-f`) tetap memakai `compose.yaml` saja — inilah yang dipakai host produksi/VM, sehingga override lokal tidak pernah bocor ke sana. Nama `compose.override.yaml` di-ignore git dan dicadangkan untuk override personal auto-merge per developer.
+
 ---
 
 ## Model Branching

@@ -4,6 +4,12 @@
 # Docker Compose untuk Portainer (berisi credentials)
 docker-compose.portainer.yml
 
+# Personal override lokal yang di-auto-merge Docker Compose.
+# Override lokal yang di-share pakai compose.local.yaml (opt-in via `-f`)
+# yang DI-TRACK git; file auto-merge ini dibiarkan personal & tak di-commit.
+compose.override.yaml
+compose.override.yml
+
 # Dependencies
 node_modules/
 __pycache__/
