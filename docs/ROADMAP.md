@@ -25,7 +25,7 @@ Dokumen pelacakan untuk 11 fitur yang dibutuhkan agar mencapai MVP yang layak. S
 
 | # | Fitur | Status | Gap utama |
 |---|-------|--------|-----------|
-| 1 | Halaman login | 🟡 Partial | Demo bypass aktif secara default; token OAuth lewat URL; default produksi tidak aman; `scoring.py` tanpa auth & `PATCH /projects/{id}` tanpa cek akses (B8/B9) |
+| 1 | Halaman login | ✅ Selesai | Demo mode opt-in + hard block produksi; token OAuth di URL hash (bukan query); default produksi aman (JWT secret fail-fast, CORS allow-list); authz `scoring.py` & `PATCH /projects/{id}` beres (B8/B9, Fase 0.6) |
 | 2 | Request Sales / buat opportunity | ✅ Selesai | — |
 | 3 | Form pertanyaan awal | 🔴 Belum ada | Tidak ada konsep kuesioner intake |
 | 4 | BANT scoring | ✅ Selesai | AI + manual keduanya berfungsi |
@@ -60,10 +60,10 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 
 **Tujuan:** membuat app aman untuk di-deploy secara nyata dan memperbaiki bug yang merusak fungsionalitas. Ini adalah interpretasi "guardrails auth" dan menjadi prasyarat untuk MVP produksi mana pun.
 
-- [ ] 0.1 Default `DEMO_MODE` menjadi `False`; cegah `/auth/demo-login` agar tidak mungkin aktif di build produksi. (`backend/app/core/config.py`, `backend/app/api/auth.py`)
-- [ ] 0.2 Hapus default `JWT_SECRET_KEY` yang tidak aman; fail fast saat startup jika belum di-set. Selaraskan penamaan `SECRET_KEY` (README) vs `JWT_SECRET_KEY` (kode). (`config.py`, `README.md`)
-- [ ] 0.3 Berhenti mengirim JWT access/refresh token sebagai query param URL di redirect OAuth callback; pindah ke URL hash (seperti flow calendar yang sudah ada) atau httpOnly cookie. (`frontend/src/app/api/v1/[...path]/route.ts`)
-- [ ] 0.4 Kunci default CORS dari `*` menjadi allow-list yang digerakkan env. (`config.py`, `main.py`)
+- [x] 0.1 Default `DEMO_MODE` menjadi `False`; cegah `/auth/demo-login` agar tidak mungkin aktif di build produksi. (`backend/app/core/config.py`, `backend/app/api/auth.py`)
+- [x] 0.2 Hapus default `JWT_SECRET_KEY` yang tidak aman; fail fast saat startup jika belum di-set. Selaraskan penamaan `SECRET_KEY` (README) vs `JWT_SECRET_KEY` (kode). (`config.py`, `README.md`)
+- [x] 0.3 Berhenti mengirim JWT access/refresh token sebagai query param URL di redirect OAuth callback; pindah ke URL hash (seperti flow calendar yang sudah ada) atau httpOnly cookie. (`frontend/src/app/api/v1/[...path]/route.ts`)
+- [x] 0.4 Kunci default CORS dari `*` menjadi allow-list yang digerakkan env. (`config.py`, `main.py`)
 - [x] 0.5 Fix bug **B1** (notifikasi `metadata=`), **B3** (health check DB sungguhan — daftarkan `app/api/health.py` yang sudah benar, atau panggil `check_database_health()` di `main.py`), **B5** (putuskan Alembic vs `create_all`), **B6** (migration `project_collaborators`), **B7** (`event_type` reassign melanggar constraint).
 - [x] 0.6 **Tutup authz yang hilang.** Pasang `get_current_user` + cek akses proyek ke semua endpoint `scoring.py` (fix **B8**); tambahkan cek role/akses ke `PATCH /projects/{id}` (fix **B9**). Pertimbangkan ekstraksi dependency `require_role(...)` yang reusable, karena cek role saat ini di-copy-paste di tiap handler sebagai `if current_user.role not in (...)`.
 
