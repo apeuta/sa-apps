@@ -124,12 +124,17 @@ async function proxyRequest(
         try {
           const data = JSON.parse(body);
           if (data.tokens && data.user) {
-            const frontendCallbackUrl = new URL("/auth/callback", FRONTEND_URL);
-            frontendCallbackUrl.searchParams.set("access_token", data.tokens.access_token);
-            frontendCallbackUrl.searchParams.set("refresh_token", data.tokens.refresh_token);
-            frontendCallbackUrl.searchParams.set("user", encodeURIComponent(JSON.stringify(data.user)));
+            // Taruh token di URL hash (fragment), bukan query string. Fragment
+            // tidak dikirim ke server sehingga token tidak bocor ke access log
+            // proxy/backend. Pola ini konsisten dengan calendar flow (#gcal_token).
+            const params = new URLSearchParams({
+              access_token: data.tokens.access_token,
+              refresh_token: data.tokens.refresh_token,
+              user: encodeURIComponent(JSON.stringify(data.user)),
+            });
+            const redirectUrl = `${FRONTEND_URL}/auth/callback#${params.toString()}`;
             console.log(`[API Proxy] ← auth/callback sukses, redirect ke /auth/callback`);
-            return NextResponse.redirect(frontendCallbackUrl);
+            return NextResponse.redirect(redirectUrl);
           }
         } catch (e) {
           console.error(`[API Proxy] ERROR parsing auth/callback response:`, e);

@@ -31,9 +31,17 @@ function CallbackContent() {
     const processCallback = async () => {
       setLoading(true);
 
-      const accessToken = searchParams.get("access_token");
-      const refreshToken = searchParams.get("refresh_token");
-      const userParam = searchParams.get("user");
+      // Token OAuth datang di URL hash (fragment), bukan query string, agar
+      // tidak bocor ke server/log. Hash hanya tersedia di client.
+      const hashParams =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.hash.slice(1))
+          : new URLSearchParams();
+
+      const accessToken = hashParams.get("access_token");
+      const refreshToken = hashParams.get("refresh_token");
+      const userParam = hashParams.get("user");
+      // code & error tetap dibaca dari query string (jalur fallback OAuth lama).
       const code = searchParams.get("code");
       const error = searchParams.get("error");
 
@@ -52,6 +60,15 @@ function CallbackContent() {
           localStorage.setItem("access_token", accessToken);
           if (refreshToken) {
             localStorage.setItem("refresh_token", refreshToken);
+          }
+
+          // Bersihkan hash agar token tidak tertinggal di URL (pola CalendarSync).
+          if (typeof window !== "undefined") {
+            window.history.replaceState(
+              null,
+              "",
+              window.location.pathname + window.location.search
+            );
           }
 
           // Update auth store dengan data user
