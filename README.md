@@ -86,7 +86,7 @@ cd sa-apps
 
 # 2. Konfigurasi environment
 cp .env.example .env
-# Edit .env — isi minimal: POSTGRES_PASSWORD, SECRET_KEY, GOOGLE_CLIENT_ID/SECRET, GEMINI_API_KEY
+# Edit .env — isi minimal: POSTGRES_PASSWORD, JWT_SECRET_KEY, GOOGLE_CLIENT_ID/SECRET, GEMINI_API_KEY
 
 # 3. Build dan jalankan
 docker compose up -d --build
@@ -283,7 +283,7 @@ Lihat `.env.example` untuk daftar lengkap. Yang **wajib** dikonfigurasi:
 | Variable | Deskripsi |
 |----------|-----------|
 | `POSTGRES_PASSWORD` | Password database PostgreSQL |
-| `SECRET_KEY` | JWT signing key (random string 32+ karakter) |
+| `JWT_SECRET_KEY` | JWT signing key (random string 32+ karakter) |
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `GOOGLE_REDIRECT_URI` | OAuth callback URL |
