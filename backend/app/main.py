@@ -80,6 +80,16 @@ async def startup_register_adapters():
     Pembuatan skema tabel ditangani sepenuhnya oleh Alembic migration,
     bukan oleh aplikasi saat startup.
     """
+    # Hard guard: refuse-to-start jika demo mode diaktifkan di produksi.
+    # Guard ditaruh di startup (bukan Pydantic validator) agar Settings() tetap
+    # bisa di-import — mis. untuk tooling/test — tanpa gagal; blokir hanya saat
+    # app benar-benar naik.
+    if settings.ENVIRONMENT == "production" and settings.DEMO_MODE:
+        raise RuntimeError(
+            "DEMO_MODE tidak boleh aktif saat ENVIRONMENT=production. "
+            "Matikan DEMO_MODE (set false) sebelum menjalankan app di produksi."
+        )
+
     # Register LLM adapter agar scoring engine dan summarize bisa berfungsi
     try:
         llm_factory.register_adapter("gemini", GeminiAdapter)
