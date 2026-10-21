@@ -2,6 +2,8 @@
 
 Dokumen ini merangkum spesifikasi teknis, alur kerja (workflow), struktur basis data, serta integrasi layanan eksternal untuk Portal SA (pengganti Redmine) yang diakses dalam bentuk *Progressive Web App* (PWA).
 
+> **Visualisasi alur bisnis:** lihat [`Alur_Bisnis_Portal_SA.md`](Alur_Bisnis_Portal_SA.md) untuk diagram Mermaid keempat alur kerja, aktor/peran, integrasi, dan ER entitas inti.
+
 ---
 
 ## 1. Konsep Utama Aplikasi
