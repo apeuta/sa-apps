@@ -91,7 +91,11 @@ class Settings(BaseSettings):
     GCAL_WEBHOOK_ENDPOINT: str = ""
 
     # Gmail
+    # Service account JSON key (sama formatnya dengan GDRIVE_SERVICE_ACCOUNT_KEY).
     GMAIL_CREDENTIALS: str = ""
+    # Alamat pengirim email. Untuk service account dengan domain-wide delegation,
+    # ini adalah user yang di-impersonate (From). Kosong → pakai service account apa adanya.
+    GMAIL_SENDER: str = ""
 
     @field_validator("ENVIRONMENT")
     @classmethod
