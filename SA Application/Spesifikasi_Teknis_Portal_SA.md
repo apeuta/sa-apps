@@ -16,7 +16,9 @@ Portal ini menggabungkan manajemen proyek (request Sales ke SA) dan manajemen ut
 ### Flow 1: Pre-Sales Request & AI Scoring
 1. **Input Sales:** Sales masuk ke portal, mengisi form data customer, estimasi awal, dan mengunggah dokumen referensi (MoM / RFP).
 2. **AI Processing:** File dianalisis oleh Gemini AI (Multimodal) untuk mengekstrak spesifikasi, memvalidasi matriks BANT (Budget, Authority, Need, Timeline), menentukan *Priority*, *Use Case Tagging*, serta menyusun *Pre-filled OLA/Mandays* internal untuk SA.
-3. **Threshold Gatekeeper:** 
+
+   > **Catatan scope (keputusan grill 2026-10-21):** penyusunan *Pre-filled OLA/Mandays* **ditunda keluar dari MVP** (backlog pasca-MVP). Deskripsi fitur ini sengaja dipertahankan di spec sebagai *intent*; implementasinya di luar scope MVP.
+3. **Threshold Gatekeeper:**
    - Jika *BANT Score* < 60%: Sistem meminta Sales merevisi/melengkapi data (Status: `Need Clarification`).
    - Jika *BANT Score* >= 60%: Lolos. Notifikasi *New Opportunity* dikirim ke Lead SA untuk penugasan (*Assignment*).
 
@@ -28,9 +30,11 @@ Portal ini menggabungkan manajemen proyek (request Sales ke SA) dan manajemen ut
 
 ### Flow 3: Activity Mapping & Project Story (Aplikasi 2)
 1. **GCalendar Sync:** Sistem menarik data acara (*events*) dari Google Calendar SA secara *real-time*.
-2. **Mapping oleh SA:** Melalui Portal, SA memetakan kalender ke dalam *Subtask Permanen* (misal: "Meeting Pre-Implementation", "Create HLD").
+2. **Mapping oleh SA:** Melalui Portal, SA memetakan kalender ke dalam work item *Subtask* (misal: "Meeting Pre-Implementation", "Create HLD"). *Subtask* adalah work item yang bisa ditugaskan, berbeda dari `ActivityCategory` (taksonomi pengelompokan log) — lihat catatan pada struktur `ActivityLogs`.
 3. **AI Activity Polish:** Saat SA mengetik catatan rapat (*notes*) secara kasual di Portal, Gemini AI merapikan teks tersebut menjadi **Poin Diskusi & Action Items** terstruktur.
 4. **Project Story:** Log aktivitas ini dimasukkan ke dalam *Project Story* global yang dapat diakses oleh Manager dan *Backup SA* (untuk *handover* saat SA cuti).
+
+   > **Catatan pemetaan (keputusan grill 2026-10-21):** *Backup SA* **bukan** peran atau entity baru — ia dipenuhi oleh fitur **Project Collaboration**, yaitu *collaborator* dengan akses baca *Project Story*. Lihat [`docs/adr/0002-backup-sa-via-project-collaboration.md`](../docs/adr/0002-backup-sa-via-project-collaboration.md).
 
 ### Flow 4: Post-Sales & PMO Handover
 1. **Closed-Win Trigger:** Saat proyek berstatus *PO Rilis / Win*, SA menerima notifikasi wajib membuat **HLD (High Level Document)**.
@@ -50,11 +54,13 @@ Portal ini menggabungkan manajemen proyek (request Sales ke SA) dan manajemen ut
 | `dq_number` | String | Input belakangan, syarat rilis dokumen |
 | `sales_pic` | UUID | Relasi ke tabel `Users` |
 | `assigned_sa` | UUID | Relasi ke tabel `Users` |
-| `status` | Enum | New, Assigned, Pending DQ, Ready, Closed-Win, Lost |
+| `status` | Enum | New, Pending Assignment, Assigned, Pending DQ, Ready, Closed-Win, Handover Complete, Lost, Need Clarification, Scoring Pending, Manual Review Required |
 | `target_submit` | Date | Tanggal batas pengajuan proposal |
 | `bant_score` | Integer | 0-100% didapat dari Gemini API |
 | `use_case_tags` | JSON | Misal: ["App Mod", "DB Migration"] |
 | `gdrive_folder_id` | String | ID Master Folder proyek di GDrive |
+
+> **Catatan enum `status` (keputusan grill 2026-10-21):** set status operasional di atas mengikuti **kode sebagai ground truth** untuk status operasional — `Pending Assignment, Scoring Pending, Need Clarification, Manual Review Required, Handover Complete` lahir dari Flow 1 (AI scoring) dan Flow 4 (handover) yang sudah berjalan. `Pending DQ` **dipertahankan** karena milik Flow 2 (SLA DQ gating). Lihat [`docs/adr/0001-status-enum-code-is-ground-truth-keep-pending-dq.md`](../docs/adr/0001-status-enum-code-is-ground-truth-keep-pending-dq.md).
 
 ### B. Tabel `Documents` (Deliverables Tracker)
 | Field Name | Type | Description |
@@ -72,12 +78,17 @@ Portal ini menggabungkan manajemen proyek (request Sales ke SA) dan manajemen ut
 | `id_log` | String | PK |
 | `id_project` | String | FK ke tabel `Projects` |
 | `sa_id` | UUID | Relasi ke tabel `Users` (Pembuat log) |
-| `subtask_category`| Enum | Referensi Subtask (Create HLD, Peer Review, dll) |
+| `activity_category`| Enum | `ActivityCategory` — taksonomi untuk mengelompokkan log aktivitas (lihat catatan di bawah). **Bukan** referensi ke work item `Subtask`. |
+| `id_subtask` | String | FK opsional ke work item `Subtask` yang dituju log ini (mis. "Create HLD", "Peer Review") |
 | `gcal_event_id` | String | ID event dari Google Calendar |
 | `duration_hours` | Decimal | Durasi aktivitas dalam jam |
 | `raw_notes` | Text | Catatan mentah dari SA |
 | `ai_polished_notes`| JSON | Hasil AI (Summary & Action Items) |
 | `created_at` | Timestamp| Waktu log dibuat |
+
+> **Catatan `Subtask` vs `ActivityCategory` (keputusan grill 2026-10-21):** dua konsep yang sebelumnya tercampur dipisahkan eksplisit. Lihat [`GLOSSARY.md`](../GLOSSARY.md).
+> - **`Subtask`** = *work item* yang bisa ditugaskan dalam sebuah proyek, punya status `open → in_progress → done` (contoh: "Create HLD", "Peer Review"). Ini yang dimaksud "Subtask Permanen" di Flow 3. Sebuah `ActivityLog` boleh menunjuk ke satu `Subtask` lewat FK opsional `id_subtask`.
+> - **`ActivityCategory`** = *taksonomi* untuk mengelompokkan `ActivityLog`, bukan work item yang ditugaskan. Enum kode (ground truth): `Assessment, Internal Meeting, Customer Meeting, Principal Meeting, Commercial Document, Technical Document, Document Review, Training, Self-Lab, Self-Learning, Exam, Internal Presentation, External Presentation`.
 
 ---
 
@@ -85,7 +96,7 @@ Portal ini menggabungkan manajemen proyek (request Sales ke SA) dan manajemen ut
 
 ### A. Google Drive API
 * **Fungsi:** Auto-provisioning struktur folder saat proyek dibuat (Format: `[Nama Customer] > [Nama Proyek] > Inventory / Diagram / Solutions`).
-* **Permission Logic:** 
+* **Permission Logic:**
   * *Sales* disembunyikan (*No Access*) dari folder `Solutions` sampai field `dq_number` terisi.
   * *SA/Lead SA* mendapatkan hak akses *Editor*.
   * *PMO/Delivery Lead* ditambahkan akses *Viewer* otomatis saat status berubah menjadi *Closed-Win*.
