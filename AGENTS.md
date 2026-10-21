@@ -82,3 +82,18 @@ Belum ada CI otomatis. Sebelum menandai pekerjaan selesai atau membuka PR, verif
 ## Pengerjaan overhaul MVP saat ini
 
 Overhaul MVP yang sedang berjalan dikerjakan **satu fase roadmap per branch** (`feat/phase-<N>-<slug>`), satu fase per waktu, diverifikasi terhadap kriteria selesai di `docs/ROADMAP.md`. Update checkbox roadmap di branch yang sama dengan pekerjaannya. Detail di bagian "Workflow Overhaul Saat Ini" pada `CONTRIBUTING.md`.
+---
+
+## Agent skills
+
+### Issue tracker
+
+Issue di-track di GitHub Issues pada `apeuta/sa-apps` (via `gh` CLI). Lihat `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Label kanonik default: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. Lihat `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` di root + `docs/adr/`. Lihat `docs/agents/domain.md`.
