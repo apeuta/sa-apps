@@ -4,6 +4,7 @@ Instruksi untuk AI coding agent yang bekerja di repository ini. Dirancang portab
 
 File ini melengkapi, bukan menggandakan, dokumen lain. Sumber kebenaran:
 
+- **[`SA Application/Spesifikasi_Teknis_Portal_SA.md`](SA%20Application/Spesifikasi_Teknis_Portal_SA.md)** — **ground truth produk**: alur kerja bisnis (workflow), struktur data, dan integrasi layanan yang app ini maksudkan. Ini menentukan apa yang *seharusnya* dibangun.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — workflow lengkap: branching, commit, pull request, verification gate, migration, keamanan. **Baca dan ikuti ini.**
 - **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — apa yang sedang dibangun, dalam urutan apa, dengan kriteria selesai per fase.
 - **[`README.md`](README.md)** — gambaran produk dan setup untuk manusia.
@@ -17,6 +18,17 @@ Bagian di bawah hanya memuat aturan khusus agen yang tidak bisa Anda simpulkan d
 - Proyek ini berbahasa Indonesia, ditujukan untuk user berbahasa Indonesia.
 - Tulis semua output dalam **bahasa Indonesia**: balasan chat, dokumen markdown, komentar, docstring, commit message, deskripsi PR, dan pesan yang menghadap user.
 - **Istilah teknis tetap bahasa Inggris** — nama di dalam kode (field, class, enum, path), istilah engineering (build, deploy, stub, schema, migration, endpoint, state machine), istilah proses (branch, commit, merge, pull request, review), dan istilah keamanan (secret, credential, guardrail, prompt-injection). Jangan terjemahkan istilah ini ke bahasa Indonesia.
+
+---
+
+## Ground truth produk (wajib)
+
+Spesifikasi di **[`SA Application/Spesifikasi_Teknis_Portal_SA.md`](SA%20Application/Spesifikasi_Teknis_Portal_SA.md)** adalah sumber kebenaran untuk *perilaku produk yang dimaksudkan* — alur kerja bisnis (4 flow: Pre-Sales Request & AI Scoring, Dokumen/DQ Gating, Activity Mapping & Project Story, Post-Sales & PMO Handover), struktur data, dan integrasi Google Workspace + Gemini AI.
+
+- Saat ragu tentang **apa** yang seharusnya app lakukan (bukan **bagaimana** kode sekarang bekerja), spec ini menang atas kode, README, dan asumsi Anda.
+- `docs/ROADMAP.md` mengukur **realita implementasi terhadap spec ini**: apa yang sudah ✅, partial 🟡, atau belum 🔴. Roadmap tidak boleh mendefinisikan ulang perilaku produk — kalau roadmap dan spec berbeda soal *apa* yang dibangun, spec yang benar dan roadmap harus dikoreksi.
+- Saat mengimplementasikan atau mengubah fitur, periksa spec untuk flow/field/integrasi yang relevan sebelum mendesain. Kalau spec dan kode berbeda, laporkan divergensi itu — jangan diam-diam ikut salah satunya.
+- Catatan: ada juga `SA Application/Portal Activity Mapping & Report.pdf` sebagai referensi tambahan. File `.md` adalah ground truth tertulis utama; PDF melengkapi.
 
 ---
 
