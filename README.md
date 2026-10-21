@@ -17,7 +17,7 @@ Portal SA adalah Progressive Web App (PWA) untuk manajemen proyek pre-sales dan 
 | **SLA Timer** | Countdown 5 hari untuk DQ Number dengan auto-lock folder dan eskalasi |
 | **Activity Logger** | Pencatatan aktivitas harian + AI note polishing (discussion points & action items) |
 | **Calendar Sync** | Sinkronisasi Google Calendar untuk mapping aktivitas ke proyek |
-| **Notification** | In-app notification + email (Gmail API) untuk semua event penting |
+| **Notification** | In-app notification (selalu aktif) untuk semua event penting. Email via Gmail API aktif bila `GMAIL_CREDENTIALS` dikonfigurasi; tanpa kredensial, email di-skip rapi (graceful fallback) dan in-app tetap jalan. |
 | **RAG Recommendation** | Rekomendasi template dari proyek Closed-Win serupa |
 | **PMO Handover** | Automasi handover folder + notifikasi ke PMO/Delivery setelah Closed-Win |
 | **Dashboard per Role** | Tampilan berbeda untuk Sales, SA, dan Lead SA (termasuk utilisasi SA per bulan) |

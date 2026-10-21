@@ -12,17 +12,22 @@ Sesuai requirement 14.1–14.6.
 """
 
 import asyncio
+import base64
+import json
 import logging
 import random
 import string
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from enum import Enum
+from functools import partial
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import select, func, and_, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from sqlalchemy import and_, func, select, update
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
@@ -34,6 +39,15 @@ logger = logging.getLogger(__name__)
 # Interval retry email dalam detik
 EMAIL_RETRY_INTERVAL = 30
 EMAIL_MAX_RETRIES = 3
+
+# Scope minimal untuk mengirim email via Gmail API.
+GMAIL_SEND_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
+
+
+class GmailConfigError(Exception):
+    """Kredensial Gmail belum dikonfigurasi atau formatnya tidak valid."""
+
+    pass
 
 
 class NotificationEventType(str, Enum):
@@ -89,12 +103,53 @@ class NotificationService:
     Requirement: 14.1, 14.2, 14.3, 14.4, 14.5, 14.6
     """
 
+    def __init__(self) -> None:
+        """Inisialisasi service. Gmail service dibangun lazy saat pertama dipakai."""
+        self._gmail_service = None
+
     def _is_gmail_configured(self) -> bool:
         """
         Cek apakah Gmail credentials sudah dikonfigurasi.
         Return False jika belum — email akan di-skip (graceful fallback).
         """
         return bool(settings.GMAIL_CREDENTIALS and settings.GMAIL_CREDENTIALS.strip())
+
+    def _get_gmail_service(self):
+        """
+        Lazy initialization Gmail service memakai service account credentials.
+
+        Kredensial dibaca dari settings.GMAIL_CREDENTIALS (JSON service account,
+        format sama dengan GDRIVE_SERVICE_ACCOUNT_KEY). Jika GMAIL_SENDER di-set,
+        kredensial di-delegate (impersonate) ke alamat tersebut — diperlukan untuk
+        service account dengan domain-wide delegation.
+
+        Raises:
+            GmailConfigError: Jika kredensial kosong atau formatnya tidak valid.
+        """
+        if self._gmail_service is not None:
+            return self._gmail_service
+
+        if not self._is_gmail_configured():
+            raise GmailConfigError(
+                "Gmail credentials belum dikonfigurasi. "
+                "Set GMAIL_CREDENTIALS di environment variables."
+            )
+
+        try:
+            key_data = json.loads(settings.GMAIL_CREDENTIALS)
+            credentials = service_account.Credentials.from_service_account_info(
+                key_data,
+                scopes=GMAIL_SEND_SCOPES,
+            )
+            # Domain-wide delegation: impersonate alamat pengirim bila di-set.
+            sender = (settings.GMAIL_SENDER or "").strip()
+            if sender:
+                credentials = credentials.with_subject(sender)
+            self._gmail_service = build("gmail", "v1", credentials=credentials)
+            return self._gmail_service
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Gagal parse Gmail credentials: {e}")
+            raise GmailConfigError(f"Format GMAIL_CREDENTIALS tidak valid: {e}")
 
     async def send_notification(self, event: NotificationEvent) -> None:
         """
@@ -135,13 +190,9 @@ class NotificationService:
                 # 2. Kirim email jika Gmail dikonfigurasi (requirement 14.4)
                 if self._is_gmail_configured():
                     # Email dikirim async — tidak memblokir flow utama
-                    asyncio.create_task(
-                        self._send_email_with_retry(event)
-                    )
+                    asyncio.create_task(self._send_email_with_retry(event))
                 else:
-                    logger.info(
-                        "Gmail tidak dikonfigurasi — email dilewati (graceful fallback)."
-                    )
+                    logger.info("Gmail tidak dikonfigurasi — email dilewati (graceful fallback).")
 
             except Exception as e:
                 logger.error(f"Gagal mengirim notifikasi: {e}")
@@ -196,8 +247,7 @@ class NotificationService:
                     )
                     await db.commit()
                     logger.info(
-                        f"Email terkirim: {email_id} ke {event.recipient_email} "
-                        f"(attempt {attempt})"
+                        f"Email terkirim: {email_id} ke {event.recipient_email} (attempt {attempt})"
                     )
                     return
 
@@ -248,24 +298,74 @@ class NotificationService:
             return False
 
         try:
-            # TODO: Implementasi Gmail API integration
-            # Untuk MVP, log saja bahwa email akan dikirim
-            # Integrasi Gmail API penuh akan ditambahkan setelah
-            # credentials terverifikasi di environment deployment
-            logger.info(
-                f"[Gmail API] Mengirim email ke {to} | "
-                f"Subject: {subject} | Template: {template}"
+            # Panggilan Gmail API bersifat synchronous (blocking); jalankan di
+            # executor agar tidak memblokir event loop async.
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                partial(self._send_email_sync, to, subject, template, context),
             )
-
-            # Placeholder — akan diganti dengan actual Gmail API call
-            # Untuk saat ini, return True agar flow berjalan
-            # Saat credentials belum valid, _is_gmail_configured() akan return False
-            # sehingga method ini tidak terpanggil
+            logger.info(
+                f"[Gmail API] Email terkirim ke {to} | Subject: {subject} | Template: {template}"
+            )
             return True
 
         except Exception as e:
+            # Graceful fallback: jangan raise. Retry ditangani oleh caller
+            # (_send_email_with_retry) sesuai kontrak 3x interval 30s.
             logger.error(f"Gagal mengirim email ke {to}: {e}")
             return False
+
+    def _build_email_body(self, template: str, context: dict) -> str:
+        """
+        Susun body email plain-text dari template dan context.
+
+        Untuk MVP body cukup informatif: menyebut reference_id bila ada.
+        Template HTML penuh bisa ditambahkan belakangan tanpa mengubah kontrak.
+        """
+        reference_id = context.get("reference_id")
+        lines = [
+            "Halo,",
+            "",
+            "Anda menerima notifikasi dari Portal SA.",
+        ]
+        if reference_id:
+            lines.append(f"Referensi: {reference_id}")
+        lines += [
+            "",
+            "Silakan buka Portal SA untuk detail lebih lanjut.",
+            "",
+            "Email ini dikirim otomatis, mohon tidak membalas.",
+        ]
+        return "\n".join(lines)
+
+    def _send_email_sync(
+        self,
+        to: str,
+        subject: str,
+        template: str,
+        context: dict,
+    ) -> None:
+        """
+        Kirim email via Gmail API (synchronous — dipanggil dari executor).
+
+        Menyusun MIME message, meng-encode base64url, lalu memanggil
+        users().messages().send(). Raise exception bila gagal (ditangkap caller).
+        """
+        service = self._get_gmail_service()
+
+        message = MIMEText(self._build_email_body(template, context), "plain", "utf-8")
+        message["To"] = to
+        message["Subject"] = subject
+        sender = (settings.GMAIL_SENDER or "").strip()
+        if sender:
+            message["From"] = sender
+
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+        service.users().messages().send(
+            userId="me",
+            body={"raw": raw},
+        ).execute()
 
     async def get_user_notifications(
         self,
@@ -298,11 +398,7 @@ class NotificationService:
             where_clause = and_(*conditions)
 
             # Hitung total
-            count_query = (
-                select(func.count())
-                .select_from(NotificationLog)
-                .where(where_clause)
-            )
+            count_query = select(func.count()).select_from(NotificationLog).where(where_clause)
             total_result = await db.execute(count_query)
             total = total_result.scalar() or 0
 
@@ -346,9 +442,7 @@ class NotificationService:
             notification = result.scalar_one_or_none()
 
             if notification is None:
-                raise ValueError(
-                    f"Notifikasi '{notification_id}' tidak ditemukan."
-                )
+                raise ValueError(f"Notifikasi '{notification_id}' tidak ditemukan.")
 
             # Validasi ownership
             if notification.recipient_user_id != user_id:
