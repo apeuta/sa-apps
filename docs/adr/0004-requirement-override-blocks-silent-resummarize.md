@@ -1,0 +1,3 @@
+# Override dokumen Requirement memblokir re-summarize diam-diam
+
+Dokumen Requirement adalah konten turunan AI dari MoM/RFP + field Sales, di-resummarize saat source berubah. SA boleh meng-edit/override hasil generate. Keputusan: override ditandai flag `is_overridden`; saat source berubah dan konten sudah di-override, re-summarize **tidak** menimpa otomatis — sistem memberi tahu dan minta konfirmasi dulu. Alternatif (selalu re-summarize) ditolak karena akan menghapus koreksi manual SA tanpa jejak. Dicatat sebagai ADR karena perilaku "regenerasi otomatis berhenti setelah override" mengejutkan tanpa konteks: pembaca masa depan akan mengira re-summarize selalu jalan, lalu "memperbaiki" gating ini dan diam-diam menghapus edit SA.
