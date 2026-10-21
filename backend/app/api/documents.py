@@ -10,6 +10,7 @@ State Machine:
 - Draft → Final (loncat): DITOLAK untuk semua role
 """
 
+import logging
 import random
 import string
 from datetime import datetime, timezone
@@ -28,7 +29,15 @@ from app.schemas.document import (
     DocumentResponse,
     DocumentStatusUpdate,
 )
-from app.schemas.response import error_response, success_response
+from app.schemas.response import success_response
+from app.services.folder_provisioner import folder_provisioner
+from app.services.notification_service import (
+    NotificationEvent,
+    NotificationEventType,
+    notification_service,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Documents"])
 
@@ -42,17 +51,111 @@ def _generate_doc_id() -> str:
 
 # Definisi transisi yang valid dalam state machine
 VALID_TRANSITIONS = {
-    "Draft": ["Reviewed"],       # Draft hanya bisa maju ke Reviewed
-    "Reviewed": ["Final"],       # Reviewed hanya bisa maju ke Final
-    "Final": [],                 # Final tidak bisa maju (terminal state untuk forward)
+    "Draft": ["Reviewed"],  # Draft hanya bisa maju ke Reviewed
+    "Reviewed": ["Final"],  # Reviewed hanya bisa maju ke Final
+    "Final": [],  # Final tidak bisa maju (terminal state untuk forward)
 }
 
 # Transisi mundur — hanya bisa dilakukan oleh Lead_SA
 BACKWARD_TRANSITIONS = {
-    "Final": ["Reviewed"],       # Final bisa mundur ke Reviewed (Lead_SA only)
-    "Reviewed": ["Draft"],       # Reviewed bisa mundur ke Draft (Lead_SA only)
-    "Draft": [],                 # Draft tidak bisa mundur
+    "Final": ["Reviewed"],  # Final bisa mundur ke Reviewed (Lead_SA only)
+    "Reviewed": ["Draft"],  # Reviewed bisa mundur ke Draft (Lead_SA only)
+    "Draft": [],  # Draft tidak bisa mundur
 }
+
+
+async def _handle_doc_ready(document: Document, db: AsyncSession) -> None:
+    """
+    Emit notifikasi `doc_ready` ke Sales DAN buka permission Drive Solutions
+    saat dokumen berpindah ke status `Reviewed` dengan DQ Number sudah terisi.
+
+    Sesuai spec Flow 2 (cabang "< 5 hari"): jika Sales sudah input DQ, saat
+    dokumen SA berstatus `Reviewed`, link Google Drive Solutions terbuka
+    otomatis untuk Sales disertai notifikasi (fix B13 / Fase 2A.3).
+
+    Prasyarat agar side-effect dijalankan:
+    - Proyek pemilik dokumen ada dan `dq_number` sudah terisi.
+    Jika DQ belum terisi, tidak ada aksi (gating SLA/lock di luar scope ini).
+
+    Side-effect ini TIDAK boleh menggagalkan transisi status dokumen; semua
+    error hanya di-log (graceful degradation, konsisten dengan SLA timer).
+
+    Args:
+        document: Dokumen yang baru berpindah ke status `Reviewed`.
+        db: Database session aktif.
+    """
+    # Ambil proyek pemilik dokumen untuk cek DQ + data Sales/folder
+    project_result = await db.execute(
+        select(Project).where(Project.id_project == document.id_project)
+    )
+    project = project_result.scalar_one_or_none()
+
+    if project is None:
+        logger.warning(
+            f"Proyek '{document.id_project}' tidak ditemukan saat memproses "
+            f"doc_ready untuk dokumen {document.id_doc}; skip."
+        )
+        return
+
+    # Gating: tanpa DQ Number, doc_ready tidak di-emit (cabang "< 5 hari" belum terpenuhi)
+    if project.dq_number is None:
+        logger.info(
+            f"Dokumen {document.id_doc} menjadi Reviewed tapi DQ Number proyek "
+            f"'{project.id_project}' belum terisi; doc_ready tidak di-emit."
+        )
+        return
+
+    # Ambil user Sales (requester/sales_pic) untuk notifikasi + akses Drive
+    sales_result = await db.execute(select(User).where(User.id == project.sales_pic))
+    sales_user = sales_result.scalar_one_or_none()
+
+    if sales_user is None:
+        logger.warning(
+            f"User Sales ({project.sales_pic}) untuk proyek "
+            f"'{project.id_project}' tidak ditemukan; skip doc_ready."
+        )
+        return
+
+    # 1. Emit notifikasi doc_ready (in-app; email mengikuti T1 jika Gmail aktif)
+    try:
+        await notification_service.send_notification(
+            NotificationEvent(
+                event_type=NotificationEventType.DOC_READY,
+                recipient_user_id=sales_user.id,
+                recipient_email=sales_user.email,
+                reference_id=project.id_project,
+                metadata={
+                    "project_name": project.project_name,
+                    "customer_name": project.customer_name,
+                    "doc_id": document.id_doc,
+                    "doc_type": document.doc_type,
+                    "message": (
+                        f"Dokumen '{document.doc_type}' untuk proyek "
+                        f"'{project.project_name}' sudah Reviewed dan siap diakses."
+                    ),
+                },
+            )
+        )
+    except Exception as e:  # noqa: BLE001 - side-effect tidak boleh menggagalkan transisi
+        logger.error(f"Gagal emit doc_ready untuk dokumen {document.id_doc}: {e}")
+
+    # 2. Buka permission Drive Solutions untuk Sales (Viewer)
+    if not project.gdrive_folder_id:
+        logger.info(
+            f"Proyek '{project.id_project}' belum punya gdrive_folder_id; "
+            f"skip buka akses Solutions (notifikasi doc_ready tetap terkirim)."
+        )
+        return
+
+    try:
+        await folder_provisioner.unlock_solutions_folder(
+            solutions_folder_id=project.gdrive_folder_id,
+            sales_email=sales_user.email,
+        )
+    except Exception as e:  # noqa: BLE001 - side-effect tidak boleh menggagalkan transisi
+        logger.error(
+            f"Gagal membuka akses Solutions untuk Sales pada proyek '{project.id_project}': {e}"
+        )
 
 
 @router.post(
@@ -80,9 +183,7 @@ async def create_document(
     4. Simpan ke database
     """
     # Validasi proyek ada
-    project_result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    project_result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = project_result.scalar_one_or_none()
 
     if project is None:
@@ -149,9 +250,7 @@ async def list_project_documents(
     Diurutkan berdasarkan waktu pembuatan (terbaru di atas).
     """
     # Validasi proyek ada
-    project_result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
+    project_result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = project_result.scalar_one_or_none()
 
     if project is None:
@@ -219,9 +318,7 @@ async def update_document_status(
     - Catat timestamp dan user pada setiap transisi
     """
     # Cari dokumen
-    doc_result = await db.execute(
-        select(Document).where(Document.id_doc == doc_id)
-    )
+    doc_result = await db.execute(select(Document).where(Document.id_doc == doc_id))
     document = doc_result.scalar_one_or_none()
 
     if document is None:
@@ -244,9 +341,7 @@ async def update_document_status(
     if current_status == "Final" and current_user.role != "Lead_SA":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "Hanya Lead_SA yang dapat mengubah status dokumen yang sudah 'Final'."
-            ),
+            detail=("Hanya Lead_SA yang dapat mengubah status dokumen yang sudah 'Final'."),
         )
 
     # Cek apakah transisi maju yang valid
@@ -292,6 +387,11 @@ async def update_document_status(
     await db.commit()
     await db.refresh(document)
 
+    # Side-effect doc_ready: HANYA saat transisi ke `Reviewed` dengan DQ terisi.
+    # Transisi lain (ke Final, mundur, dll) tidak memicu ini (fix B13 / Fase 2A.3).
+    if new_status == "Reviewed":
+        await _handle_doc_ready(document, db)
+
     # Format response
     response_data = DocumentResponse(
         id_doc=document.id_doc,
@@ -310,7 +410,6 @@ async def update_document_status(
     return success_response(
         data=response_data,
         message=(
-            f"Status dokumen '{doc_id}' berhasil diubah: "
-            f"'{current_status}' → '{new_status}'."
+            f"Status dokumen '{doc_id}' berhasil diubah: '{current_status}' → '{new_status}'."
         ),
     )
