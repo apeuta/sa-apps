@@ -26,6 +26,7 @@ from app.schemas.assignment import (
     SAAvailability,
 )
 from app.schemas.response import error_response, success_response
+from app.services.sla_timer import sla_timer
 
 logger = logging.getLogger(__name__)
 
@@ -608,7 +609,20 @@ async def assign_sa_to_project(
 
     logger.info(f"Proyek {project_id} di-assign ke SA {sa_user.email} oleh {current_user.email}")
 
-    # === 5. Trigger Folder_Provisioner async ===
+    # === 5. Start SLA timer (Flow 2 DQ Number) ===
+    # Buat row SLATracking agar GET /projects/{id}/sla-status aktif sejak H+0.
+    # Service start_timer idempoten: skip bila tracker sudah ada (mis. re-assign),
+    # jadi tidak akan membuat duplikat atau error pada assignment ulang.
+    try:
+        await sla_timer.start_timer(
+            project_id=project_id,
+            assigned_at=project.assigned_at,
+            db=db,
+        )
+    except Exception as e:
+        logger.warning(f"Gagal memulai SLA timer untuk proyek {project_id}: {e}")
+
+    # === 6. Trigger Folder_Provisioner async ===
     background_tasks.add_task(
         _trigger_folder_provisioner,
         project_id,
@@ -617,7 +631,7 @@ async def assign_sa_to_project(
         str(project.sales_pic),
     )
 
-    # === 6. Build response ===
+    # === 7. Build response ===
     response_data = AssignmentResponse(
         project=ProjectBrief(
             id_project=project.id_project,
