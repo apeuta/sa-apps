@@ -25,7 +25,7 @@ from app.schemas.assignment import (
     ProjectBrief,
     SAAvailability,
 )
-from app.schemas.response import error_response, success_response
+from app.schemas.response import success_response
 from app.services.sla_timer import sla_timer
 
 logger = logging.getLogger(__name__)
@@ -344,8 +344,6 @@ async def get_project_utilization(
     _require_lead_sa(current_user)
 
     # Query: total jam per proyek
-    from sqlalchemy import text as sa_text
-
     # Subquery: jam per SA per proyek
     sa_hours_query = select(
         ActivityLog.id_project,
@@ -697,7 +695,8 @@ async def reassign_sa_to_project(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Proyek tidak bisa di-reassign karena statusnya '{project.status}'. "
-                f"Hanya proyek berstatus 'Assigned', 'Ready', atau 'Pending Assignment' yang bisa di-reassign."
+                f"Hanya proyek berstatus 'Assigned', 'Ready', atau 'Pending Assignment' "
+                f"yang bisa di-reassign."
             ),
         )
 
