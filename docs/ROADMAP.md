@@ -1,6 +1,6 @@
 # Portal SA — Roadmap Fitur MVP
 
-Dokumen pelacakan untuk 11 fitur yang dibutuhkan agar mencapai MVP yang layak. Status dinilai berdasarkan kode aktual (bukan klaim spec) pada **2026-10-12**.
+Dokumen pelacakan untuk fitur yang dibutuhkan agar mencapai MVP yang layak. Status dinilai berdasarkan kode aktual (bukan klaim spec) pada **2026-10-12**. Coverage roadmap direkonsiliasi terhadap ground truth produk (`SA Application/Spesifikasi_Teknis_Portal_SA.md`) pada **2026-10-20**; audit rekonsiliasi: `.agents/tasks/roadmap-spec-reconcile-2026-10-20/findings.md`.
 
 > **Asumsi yang dipakai menyusun roadmap ini** (dipilih sebagai default; ubah fase terkait jika ada yang keliru):
 > - **Form pertanyaan awal** = hybrid: kuesioner kualifikasi statis yang diisi Sales saat membuat opportunity, dengan opsi pertanyaan klarifikasi yang di-generate AI untuk area BANT yang lemah.
@@ -36,6 +36,9 @@ Dokumen pelacakan untuk 11 fitur yang dibutuhkan agar mencapai MVP yang layak. S
 | 9 | Edit due date / ikon pensil edit | 🟡 Partial | Alur edit berfungsi; masih tombol teks, bukan ikon pensil |
 | 10 | BoQ compare vs Requirement | 🔴 Belum ada | Tidak ada fitur perbandingan; dokumen Requirement (summary turunan AI) belum di-generate — tipe `Requirement` sudah ada di enum (Fase 1.2), tapi kontennya belum disintesis |
 | 11 | Guardrails | ✅ Selesai | Guardrail LLM terpusat (size clamp, PII flag-and-log, mitigasi prompt-injection, validasi output) di tiga Call_Site; hardening default auth dilacak di fitur 1 / Fase 0 |
+| 12 | SLA DQ Number & gating (Flow 2) | 🟡 Partial | **Baru ditambahkan 2026-10-20** (rekonsiliasi spec). Kode SLA ada (`backend/app/services/sla_timer.py`, `backend/app/api/sla.py`) dan read-gating DQ ada (`backend/app/api/dq_number.py`), **tapi tidak di-wire end-to-end**: SLA timer tidak pernah di-start (B11), tidak ada scheduler (B12), sehingga auto-lock folder Solutions / reminder H+3 / eskalasi H+5 mati end-to-end. Dilacak di Fase 2A. |
+
+> **Catatan penomoran:** fitur 1–11 dipertahankan apa adanya. Fitur **12 (SLA DQ Number & gating)** ditambahkan pada 2026-10-20 setelah audit rekonsiliasi menemukan Flow 2 (salah satu dari 4 flow inti spec) tidak punya "rumah" di daftar fitur, sehingga bug wiring SLA tidak punya tempat tercatat.
 
 ---
 
@@ -53,6 +56,10 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 - [x] **B7. `event_type="reassignment"` melanggar CheckConstraint** — `backend/app/api/assignment.py` `reassign_sa_to_project` membuat `NotificationLog(event_type="reassignment", ...)`, padahal nilai itu tidak termasuk dalam `chk_notification_logs_event_type` (`assignment`, `status_change`, `sla_reminder`, `sla_escalation`, `handover`, `doc_ready`). Bahkan setelah B1 diperbaiki, INSERT reassign tetap ditolak DB. _Fix: ganti ke `assignment`, atau tambahkan `reassignment` ke enum + migration._
 - [x] **B8. Router `scoring.py` tanpa autentikasi** — seluruh endpoint di `backend/app/api/scoring.py` (`POST /projects/{id}/score-manual`, `GET /projects/{id}/bant-result`, `GET /projects/{id}/recommendations`) tidak memasang dependency `get_current_user`. Siapa pun yang bisa menjangkau API dapat menulis skor BANT dan mengubah status proyek (lewat `apply_threshold`). Risiko authz nyata. _Fix: pasang `get_current_user` + cek akses proyek di semua endpoint scoring._
 - [x] **B9. `PATCH /projects/{id}` tanpa cek role/akses** — `backend/app/api/projects.py` `update_project` tidak melakukan cek role atau akses proyek, sehingga user terautentikasi mana pun bisa mengedit `project_name`/`customer_name`/`dq_number`/`bant_detail` proyek apa pun. _Fix: tambahkan cek akses proyek berbasis role, konsisten dengan endpoint project lainnya._
+- [ ] **B11. `sla_timer.start_timer` tidak pernah dipanggil** — `start_timer` hanya terdefinisi di `backend/app/services/sla_timer.py` (~line 91) dan tidak dipanggil dari mana pun. `assign_sa_to_project` (`backend/app/api/assignment.py`) men-set `project.assigned_at` (~line 583) lalu insert notifikasi + menjadwalkan folder provisioner, **tapi tidak memanggil `sla_timer.start_timer()`**. Akibatnya tidak ada row `SLATracking` yang pernah dibuat lewat jalur normal, sehingga seluruh Flow 2 SLA (reminder H+3, eskalasi H+5, auto-lock folder Solutions) **mati total end-to-end** walau kodenya lengkap. _Fix: wire `start_timer(...)` di `assign_sa_to_project` setelah `assigned_at` di-set._ (Dilacak di Fase 2A / fitur 12.)
+- [ ] **B12. Tidak ada scheduler untuk `process_sla_actions()`** — `process_sla_actions()` hanya terpanggil via endpoint manual `POST /sla/process` (`backend/app/api/sla.py`, `process_sla` ~line 77, memanggil `sla_timer.process_sla_actions()` ~line 101), yang butuh trigger manual Admin/Lead_SA. Spec Flow 2 menyiratkan otomasi berbasis waktu (H+3 reminder, H+5 eskalasi). Tidak ada background scheduler/cron di `backend/app/main.py`. _Opsi: tambah background scheduler, atau dokumentasikan secara eksplisit bahwa cron eksternal memanggil `POST /sla/process` secara periodik._ (Dilacak di Fase 2A / fitur 12.)
+- [ ] **B13. Event `doc_ready` tidak pernah di-emit (Flow 2, cabang "<5 hari")** — spec: saat dokumen menjadi `Reviewed`, link Drive terbuka otomatis untuk Sales + email pemberitahuan. Realita: `update_document_status` (`backend/app/api/documents.py`) menjalankan transisi Draft→Reviewed→Final dengan benar **tapi tidak meng-emit notifikasi `doc_ready` ke Sales dan tidak membuka permission Drive Solutions** saat `Reviewed`. `NotificationEventType.DOC_READY` terdefinisi di `backend/app/services/notification_service.py` (~line 47, dipakai hanya di map subject ~line 405) tetapi tidak pernah di-emit. _Fix: emit `DOC_READY` + buka permission Solutions untuk Sales pada transisi ke `Reviewed` (saat DQ sudah terisi)._ (Dilacak di Fase 2A / fitur 12.)
+- [ ] **B14. Closed-Win tidak memicu notifikasi wajib HLD (Flow 4 langkah 1)** — spec: saat proyek menjadi `Closed-Win`, SA menerima notifikasi wajib "create HLD". Realita: `update_project_status` (`backend/app/api/workflow.py`, ~line 125 — bukan `backend/app/workflow.py`) hanya menulis audit log `status_change` pada transisi ke `Closed-Win`; tidak ada emit notifikasi mandatory-HLD ke SA. _Fix: emit notifikasi "wajib buat HLD" dari `update_project_status` saat masuk status `Closed-Win`._ (Dilacak di Fase 4 / fitur 6 — berkaitan dengan post-sales handover.)
 
 ---
 
@@ -89,10 +96,24 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 
 - [ ] 2.1 Ganti stub `_trigger_folder_provisioner` dengan pemanggilan nyata ke `FolderProvisioner.provision_project_folder`, termasuk handling retry/`Provisioning Failed` yang sudah didukung service. (fix **B2**)
 - [ ] 2.2 Hanya laporkan `folder_provisioning_triggered=True` saat provisioning benar-benar di-schedule; ekspos status provisioning di proyek agar badge "Folder Pending" berfungsi.
-- [ ] 2.3 **Perlu keputusan:** konfirmasi apakah Lead SA butuh step "qualify" terpisah sebelum assignment, atau BANT ≥ 60 sebagai gate kualifikasi (perilaku saat ini). Asumsi default: BANT adalah gate-nya, tanpa step terpisah. Jika step qualify manual diinginkan, tambah status + endpoint.
+- [ ] 2.3 **Fakta spec (bukan asumsi terbuka):** BANT ≥ 60% adalah gatekeeper kualifikasi — spec Flow 1 langkah 3 menetapkannya eksplisit, dan kode sudah mengimplementasikannya (`scoring_engine.apply_threshold()`: `score >= 60` → `Pending Assignment` + notifikasi Lead_SA; `< 60` → `Need Clarification`). Threshold ini **tidak** perlu dikonfirmasi lagi. **Sub-pertanyaan operasional yang masih terbuka:** apakah Lead SA tetap menginginkan step "qualify" manual terpisah *di atas* gate otomatis ini (mis. review manual sebelum assignment)? Jika ya, tambah status + endpoint; jika tidak, BANT gate otomatis sudah memenuhi spec.
 - [ ] 2.4 Verifikasi end-to-end: assign → folder Drive dibuat dengan permission yang benar (Editor SA/Lead, Viewer Sales di Inventory) → `gdrive_folder_id` tersimpan.
 
 **Kriteria selesai:** meng-assign SA benar-benar membuat tree folder Drive dengan permission yang benar, dengan state pending/failed yang terlihat.
+
+---
+
+## Fase 2A — SLA DQ Number & Gating end-to-end (fitur 12)
+
+**Tujuan:** menyalakan Flow 2 (Dokumen, DQ Number & Gating) dari spec. Kode SLA (`backend/app/services/sla_timer.py`, `backend/app/api/sla.py`) dan read-gating DQ (`backend/app/api/dq_number.py`) sudah ada tapi tidak pernah berjalan karena tidak di-wire. **Ini wiring, bukan fitur baru dari nol** — effort rendah-menengah, tapi dampaknya besar (salah satu dari 4 flow inti). Bergantung pada Fase 2 (folder provisioning, B2) karena auto-lock folder Solutions butuh `gdrive_folder_id` yang terisi.
+
+- [ ] 2A.1 Wire `sla_timer.start_timer(...)` di `assign_sa_to_project` (`backend/app/api/assignment.py`) setelah `assigned_at` di-set. (fix **B11**) Tanpa ini tidak ada row `SLATracking`, seluruh SLA mati.
+- [ ] 2A.2 Jalankan `process_sla_actions()` secara otomatis berbasis waktu. (fix **B12**) **Perlu keputusan:** background scheduler internal vs cron eksternal yang memanggil `POST /sla/process`. Asumsi default: scheduler internal ringan saat startup; bila ditolak, dokumentasikan kontrak cron eksternal.
+- [ ] 2A.3 Emit `doc_ready` + buka permission Drive Solutions untuk Sales saat dokumen menjadi `Reviewed` (cabang "<5 hari"). (fix **B13**) Sitasi: `backend/app/api/documents.py`, `backend/app/services/notification_service.py`.
+- [ ] 2A.4 Verifikasi end-to-end: assign → timer start → (DQ belum diinput >5 hari) reminder H+3 + eskalasi H+5 + auto-lock Solutions; (dokumen Reviewed <5 hari) link Solutions terbuka untuk Sales + email.
+- [ ] 2A.5 **Email/Gmail sebagai trigger (gap requirement, spec §4.C).** `notification_service.send_email()` masih stub (`# TODO: Implementasi Gmail API integration`, `return True` tanpa mengirim). Spec menjadikan email trigger di **keempat flow** (penugasan, update dokumen parsial/`doc_ready`, eskalasi SLA, handover), jadi ini gap requirement yang dilacak — bukan sekadar catatan opsional. Implementasikan Gmail API agar email benar-benar terkirim (prasyarat agar cabang email di 2A.3/2A.4 nyata). **Catatan:** README mengklaim email sudah berfungsi (menyesatkan); koreksi README dilacak sebagai follow-up terpisah di "Rekomendasi Lintas-Fitur" — **tidak** dikerjakan di sini.
+
+**Kriteria selesai:** assignment benar-benar memulai SLA timer; reminder/eskalasi/auto-lock berjalan otomatis berbasis waktu (atau via cron terdokumentasi); dokumen `Reviewed` membuka akses Solutions untuk Sales dan memicu `doc_ready`; email trigger benar-benar terkirim via Gmail API (bukan stub).
 
 ---
 
@@ -173,6 +194,8 @@ Fase 1 (partial mudah)           ← quick win, termasuk tipe dokumen Requiremen
       │
 Fase 2 (folder provisioning)     ← men-wire kode yang sudah ada
       │
+Fase 2A (SLA DQ gating e2e)      ← wire SLA/doc_ready/email; butuh Fase 2 (gdrive_folder_id untuk auto-lock)
+      │
 Fase 3 (due date calendar)   ──┐
 Fase 4 (subtask assignable)  ──┤  ← independen, bisa diparalelkan
 Fase 5 (form pertanyaan awal)──┘
@@ -191,7 +214,8 @@ Fase 6 (BoQ vs Requirement)      ← terakhir; butuh tipe Requirement (1.2) + ko
 - [ ] Tambah CI (lint + test backend) — belum ada hari ini.
 - [ ] Tambah test frontend — belum ada hari ini.
 - [ ] Perluas coverage test backend ke auth, state machine dokumen, handover, notifikasi (saat ini condong ke AI/provisioning/SLA/scoring).
-- [ ] Implementasikan stub email Gmail (`notification_service.send_email`) atau hapus klaim "email" dari README sampai benar-benar nyata.
+- [ ] **Email/Gmail sebagai trigger (spec §4.C)** — dilacak sebagai gap requirement nyata di Fase 2A.5 (lihat bawah), bukan sekadar catatan lintas-fitur. Butir ini tetap sebagai pengingat untuk menyinkronkan README setelah implementasi.
+- [ ] **Follow-up README (TIDAK dikerjakan di PR rekonsiliasi ini):** README mengklaim email Gmail berfungsi ("in-app notification + email (Gmail API) untuk semua event penting"), padahal `send_email` masih stub. Koreksi README ditunda sebagai follow-up terpisah; jangan diam-diam membiarkan klaim menyesatkan ini.
 - [ ] Selaraskan gap README-vs-realita (email Gmail, httpOnly cookie, penamaan `SECRET_KEY`, status DB `/health`).
 - [ ] Pecah router besar (`projects.py` ~702 line, `assignment.py` ~681 line).
 - [ ] Ekstrak helper generator ID yang terduplikasi ke package `utils/` yang kosong.
@@ -206,7 +230,18 @@ Asumsi default berikut menggerakkan roadmap; konfirmasi atau koreksi:
 2. **Subtask (Fase 4):** subtask yang benar-benar bisa ditugaskan vs tetap model kategori? _(diasumsikan: subtask nyata)_
 3. **Seeding subtask (4.4):** auto-seed checklist default saat assignment? _(diasumsikan: ya)_
 4. **BoQ compare (Fase 6):** analisis gap AI dengan skor coverage vs side-by-side biasa? _(diasumsikan: AI + skor)_
-5. **Step qualify (2.3):** step qualify Lead SA terpisah vs BANT sebagai gate? _(diasumsikan: BANT sebagai gate)_
+5. **Step qualify (2.3):** threshold BANT ≥ 60% sebagai gate **sudah ditetapkan spec Flow 1 langkah 3 (fakta spec, bukan asumsi)** dan sudah terimplementasi. Yang masih terbuka hanya: apakah tetap perlu step "qualify" manual Lead SA terpisah *di atas* gate otomatis itu? _(tidak ada default; keputusan operasional, bukan keputusan threshold)_
 6. **Calendar (3.1):** push due date satu arah vs sync dua arah? _(diasumsikan: push satu arah)_
 7. **PII (7.3):** flag vs redact? _(diasumsikan: flag untuk MVP)_
 8. **Dokumen Requirement (Fase 5.5 / 6):** upload file vs konten turunan AI? **✅ Diputuskan 2026-10-19:** konten turunan — summary AI dari MoM/RFP + field Sales, disimpan sebagai `Document` (`doc_type="Requirement"`), di-resummarize saat source berubah. Terbuka: apakah SA boleh override hasil generate (usulan: boleh, dengan flag agar re-summarize tidak menimpa override tanpa konfirmasi).
+
+---
+
+## Divergensi Spec vs Kode yang Perlu Diputuskan
+
+Ditemukan saat rekonsiliasi 2026-10-20. Per aturan ground truth (`spec = intent`, `code = reality`, `roadmap = jarak`), divergensi ini **harus diputuskan secara eksplisit** — bukan dibiarkan diam-diam mengikuti salah satu. Untuk setiap item: apakah **spec dikoreksi** (ground truth memang diperbarui sengaja) atau **kode yang diverge** (dan harus diselaraskan ke spec)?
+
+- [ ] **D1. Enum `Projects.status` kode ≠ spec.** Spec = `New, Assigned, Pending DQ, Ready, Closed-Win, Lost`. Kode (`backend/app/models/project.py`, CheckConstraint `chk_projects_status` ~line 141–143) = `New, Pending Assignment, Assigned, Ready, Closed-Win, Handover Complete, Lost, Need Clarification, Scoring Pending, Manual Review Required`. Kode **menghilangkan `Pending DQ`** dari spec dan menambah banyak status operasional. _Keputusan: apakah `Pending DQ` memang tidak diperlukan (koreksi spec), atau hilang karena kelalaian (kode diverge)? Dan apakah status operasional tambahan diadopsi resmi ke spec?_
+- [ ] **D2. Taksonomi `ActivityLogs.subtask_category` kode ≠ contoh spec.** Spec mencontohkan subtask seperti `"Create HLD"`, `"Peer Review"`, `"Meeting Pre-Implementation"`. Kode memakai enum berbeda total (`Assessment, Internal Meeting, Customer Meeting, Principal Meeting, Commercial Document, Technical Document, Document Review, Training, Self-Lab, Self-Learning, Exam, Internal Presentation, External Presentation`). _Keputusan taksonomi: mana yang jadi ground truth?_ Kaitkan dengan Fase 4 (subtask yang bisa di-assign) — begitu subtask jadi entity nyata, taksonomi ini harus diselaraskan ke spec atau spec dikoreksi.
+- [ ] **D3. Pre-filled OLA/Mandays (Flow 1 langkah 2) — belum diimplementasi, belum dilacak.** Spec menyebut AI juga menyusun pre-filled OLA/Mandays internal untuk SA dari hasil parsing. Tidak ada implementasi dan sebelumnya tidak ada item roadmap. _Keputusan: masuk scope MVP atau ditunda? Jika masuk, kaitkan dengan Flow 1 / scoring._
+- [ ] **D4. Akses Backup SA ke Project Story (Flow 3 langkah 4) — belum dipetakan eksplisit.** Spec: Project Story harus dapat diakses Backup SA untuk handover saat SA cuti. Ada fitur "Project Collaboration" yang mungkin menutupi ini, tapi pemetaan "Backup SA" tidak eksplisit di kode/roadmap. _Keputusan: apakah Project Collaboration memenuhi requirement ini, atau perlu konsep Backup SA tersendiri?_
