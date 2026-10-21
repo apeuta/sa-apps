@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 100
 
+    # SLA Scheduler — background scheduler internal ringan (ADR 0003).
+    # Menjalankan process_sla_actions() secara periodik saat backend naik.
+    # Default interval 1 jam. Toggle enabled disediakan agar test/tooling bisa
+    # mematikan scheduler tanpa mengubah kode. CATATAN: scheduler ini hanya aman
+    # untuk MVP single-instance (lihat app/services/sla_scheduler.py).
+    SLA_SCHEDULER_ENABLED: bool = True
+    SLA_SCHEDULER_INTERVAL_SECONDS: int = 3600
+
     # Demo Mode — bypass OAuth, login tanpa Google credentials.
     # Opt-in: default False. Hanya aktif saat ENVIRONMENT bukan production
     # (lihat property demo_mode_enabled untuk hard block).

@@ -30,8 +30,20 @@ from app.core.rate_limiter import RateLimiterMiddleware
 from app.schemas.response import error_response, success_response
 from app.services.gemini_adapter import GeminiAdapter
 from app.services.llm_provider import llm_factory
+from app.services.sla_scheduler import SLAScheduler
 
 logger = logging.getLogger(__name__)
+
+# Background scheduler internal untuk Flow 2 (SLA DQ Number & gating).
+# Memanggil process_sla_actions() secara periodik (reminder H+3, eskalasi H+5,
+# auto-lock folder Solutions). Lihat ADR 0003.
+#
+# CATATAN MULTI-INSTANCE: scheduler ini hanya aman untuk MVP single-instance.
+# Saat backend di-scale ke banyak instance, setiap instance akan menjalankan
+# scheduler-nya sendiri dan menduplikasi aksi SLA. Saat scale-out, pindah ke
+# cron eksternal (panggil POST /sla/process) atau tambahkan leader-election.
+# Endpoint manual POST /sla/process tetap tersedia berdampingan.
+sla_scheduler = SLAScheduler(interval_seconds=settings.SLA_SCHEDULER_INTERVAL_SECONDS)
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -96,6 +108,20 @@ async def startup_register_adapters():
         logger.info("GeminiAdapter registered in LLM factory.")
     except Exception as e:
         logger.error(f"Failed to register GeminiAdapter: {e}", exc_info=True)
+
+    # Jalankan background scheduler SLA (Flow 2). Toggle lewat SLA_SCHEDULER_ENABLED
+    # agar bisa dimatikan di tooling/test. Lihat ADR 0003 + catatan multi-instance
+    # pada definisi sla_scheduler di atas.
+    if settings.SLA_SCHEDULER_ENABLED:
+        sla_scheduler.start()
+    else:
+        logger.info("SLA scheduler dinonaktifkan (SLA_SCHEDULER_ENABLED=false).")
+
+
+@app.on_event("shutdown")
+async def shutdown_stop_scheduler():
+    """Hentikan background scheduler SLA dengan rapi saat backend dimatikan."""
+    await sla_scheduler.stop()
 
 
 @app.get("/health")
