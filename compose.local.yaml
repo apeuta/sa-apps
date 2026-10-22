@@ -31,7 +31,7 @@ services:
   #   docker compose exec backend alembic upgrade head
   #   docker compose exec backend python -m scripts.seed_demo_data
   backend-init:
-    image: sa-portal-backend:local
+    image: localhost/sa-portal/backend:local
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -48,7 +48,7 @@ services:
 
   backend:
     # Build dari source lokal alih-alih prebuilt image `sa-portal-backend:latest`.
-    image: sa-portal-backend:local
+    image: localhost/sa-portal/backend:local
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -67,7 +67,7 @@ services:
 
   frontend:
     # Build dari source lokal alih-alih image GHCR.
-    image: sa-portal-frontend:local
+    image: localhost/sa-portal/frontend:local
     build:
       context: ./frontend
       dockerfile: Dockerfile
