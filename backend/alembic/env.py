@@ -6,23 +6,24 @@ Mendukung async migrations dengan SQLAlchemy 2.0+.
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
 from app.core.config import settings
 from app.core.database import Base
 
 # Import semua model agar terdaftar di metadata Base
 from app.models import (  # noqa: F401
-    User,
-    Project,
-    Document,
     ActivityLog,
-    NotificationLog,
     AuditLog,
+    Document,
+    NotificationLog,
+    Project,
     SLATracking,
+    Subtask,
+    User,
 )
 
 # Konfigurasi Alembic dari .ini file
