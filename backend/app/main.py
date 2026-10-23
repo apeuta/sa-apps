@@ -22,6 +22,7 @@ from app.api.notifications import router as notifications_router
 from app.api.projects import router as projects_router
 from app.api.scoring import router as scoring_router
 from app.api.sla import router as sla_router
+from app.api.subtasks import router as subtasks_router
 from app.api.workflow import router as workflow_router
 from app.core.config import settings
 from app.core.database import check_database_health
@@ -83,6 +84,7 @@ app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(handover_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(collaborators_router, prefix="/api/v1")
+app.include_router(subtasks_router, prefix="/api/v1")
 
 
 @app.on_event("startup")

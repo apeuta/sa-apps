@@ -9,16 +9,16 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
     String,
     Text,
-    Numeric,
-    ForeignKey,
-    CheckConstraint,
-    Index,
-    DateTime,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -62,6 +62,12 @@ class ActivityLog(Base):
         String(50),
         nullable=False,
         comment="Sub-kategori aktivitas (tergantung work_type)",
+    )
+    id_subtask: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        ForeignKey("subtasks.id_subtask", ondelete="SET NULL"),
+        nullable=True,
+        comment="FK opsional ke subtask terkait (informasional)",
     )
     gcal_event_id: Mapped[Optional[str]] = mapped_column(
         String(255),

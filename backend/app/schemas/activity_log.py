@@ -10,7 +10,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
 # Work type aktivitas
 VALID_WORK_TYPES = ["Project", "Non-Project"]
 
@@ -116,6 +115,10 @@ class ActivityLogCreate(BaseModel):
         ...,
         description="Sub-kategori aktivitas (tergantung work_type)",
     )
+    id_subtask: Optional[str] = Field(
+        default=None,
+        description="ID subtask terkait (opsional, tautan informasional)",
+    )
     duration_hours: Decimal = Field(
         ...,
         ge=Decimal("0.25"),
@@ -143,9 +146,7 @@ class ActivityLogCreate(BaseModel):
         - Non-Project: id_project & project_phase harus kosong; subtask dari set Non-Project.
         """
         if self.work_type not in VALID_WORK_TYPES:
-            raise ValueError(
-                f"work_type tidak valid. Pilihan: {', '.join(VALID_WORK_TYPES)}"
-            )
+            raise ValueError(f"work_type tidak valid. Pilihan: {', '.join(VALID_WORK_TYPES)}")
 
         if self.work_type == "Project":
             if not self.id_project:
@@ -196,6 +197,7 @@ class ActivityLogResponse(BaseModel):
     project_phase: Optional[str] = None
     sa_id: UUID
     subtask_category: str
+    id_subtask: Optional[str] = None
     duration_hours: Decimal
     raw_notes: str
     ai_polished_notes: Optional[dict] = None

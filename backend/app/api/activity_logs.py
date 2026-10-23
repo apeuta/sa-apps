@@ -45,6 +45,7 @@ def _build_log_response(log) -> dict:
         "project_phase": log.project_phase,
         "sa_id": str(log.sa_id),
         "subtask_category": log.subtask_category,
+        "id_subtask": log.id_subtask,
         "duration_hours": float(log.duration_hours),
         "raw_notes": log.raw_notes,
         "ai_polished_notes": log.ai_polished_notes,
@@ -94,6 +95,7 @@ async def create_activity_log(
             duration_hours=payload.duration_hours,
             raw_notes=payload.raw_notes,
             gcal_event_id=payload.gcal_event_id,
+            id_subtask=payload.id_subtask,
         )
 
         # Build response
@@ -317,9 +319,7 @@ async def summarize_project(
         for log in items:
             polished = log.ai_polished_notes or {}
             notes_text = polished.get("structured_notes", log.raw_notes)
-            lines.append(
-                f"- [{log.subtask_category}] {float(log.duration_hours)}h | {notes_text}"
-            )
+            lines.append(f"- [{log.subtask_category}] {float(log.duration_hours)}h | {notes_text}")
         activity_data = "\n".join(lines)
 
         # Guardrail teks: sanitize data aktivitas sebelum dikirim ke LLM (Req 8.3).
@@ -328,9 +328,7 @@ async def summarize_project(
         # Kirim ke LLM
         prompt = SUMMARIZE_PROMPT.format(activity_data=guard.safe_value)
         provider = llm_factory.get_provider()
-        llm_response = await provider.complete_text(
-            prompt, temperature=0.3, max_output_tokens=1024
-        )
+        llm_response = await provider.complete_text(prompt, temperature=0.3, max_output_tokens=1024)
 
         if (
             llm_response.status == "success"
@@ -354,7 +352,8 @@ async def summarize_project(
                 cat = log.subtask_category
                 categories[cat] = categories.get(cat, 0.0) + float(log.duration_hours)
             cat_summary = ", ".join(
-                f"{cat}: {hours:.1f} jam" for cat, hours in sorted(categories.items(), key=lambda x: -x[1])
+                f"{cat}: {hours:.1f} jam"
+                for cat, hours in sorted(categories.items(), key=lambda x: -x[1])
             )
             latest_date = items[0].created_at.strftime("%d %B %Y")
             summary_text = (
@@ -364,7 +363,11 @@ async def summarize_project(
             )
 
         return success_response(
-            data={"summary": summary_text, "total_activities": len(items), "total_hours": total_hours},
+            data={
+                "summary": summary_text,
+                "total_activities": len(items),
+                "total_hours": total_hours,
+            },
             message="Ringkasan proyek berhasil dihasilkan.",
         )
 

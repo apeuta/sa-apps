@@ -71,6 +71,7 @@ def _make_sa():
 def _execute_result_scalar(value):
     result = MagicMock()
     result.scalar_one_or_none = MagicMock(return_value=value)
+    result.scalar = MagicMock(return_value=value)
     return result
 
 
@@ -144,9 +145,7 @@ class TestStartTimerEndToEnd:
         db = _FakeSLASession()
         now = datetime.now(timezone.utc)
 
-        created = await timer.start_timer(
-            project_id="PRJ-20250101-ABC123", assigned_at=now, db=db
-        )
+        created = await timer.start_timer(project_id="PRJ-20250101-ABC123", assigned_at=now, db=db)
 
         assert created.project_id == "PRJ-20250101-ABC123"
         assert created.current_status == SLAStatus.GREEN.value
@@ -161,9 +160,7 @@ class TestStartTimerEndToEnd:
         db = _FakeSLASession()
         now = datetime.now(timezone.utc)
 
-        await timer.start_timer(
-            project_id="PRJ-20250101-ABC123", assigned_at=now, db=db
-        )
+        await timer.start_timer(project_id="PRJ-20250101-ABC123", assigned_at=now, db=db)
         sla_status = await timer.check_sla_status("PRJ-20250101-ABC123", db)
 
         assert sla_status is not None
@@ -178,12 +175,8 @@ class TestStartTimerEndToEnd:
         db = _FakeSLASession()
         now = datetime.now(timezone.utc)
 
-        first = await timer.start_timer(
-            project_id="PRJ-20250101-ABC123", assigned_at=now, db=db
-        )
-        second = await timer.start_timer(
-            project_id="PRJ-20250101-ABC123", assigned_at=now, db=db
-        )
+        first = await timer.start_timer(project_id="PRJ-20250101-ABC123", assigned_at=now, db=db)
+        second = await timer.start_timer(project_id="PRJ-20250101-ABC123", assigned_at=now, db=db)
 
         # Hanya satu row, dan pemanggilan kedua mengembalikan row yang sama.
         assert len(db._rows) == 1
@@ -213,6 +206,8 @@ class TestAssignmentWiresStartTimer:
             side_effect=[
                 _execute_result_scalar(project),
                 _execute_result_scalar(sa),
+                # count subtask untuk auto-seed checklist (0 → seeding jalan)
+                _execute_result_scalar(0),
             ]
         )
         mock_session.commit = AsyncMock()
@@ -236,9 +231,7 @@ class TestAssignmentWiresStartTimer:
         assert kwargs["db"] is mock_session
 
     @patch("app.api.assignment.sla_timer")
-    def test_assign_gagal_start_timer_tidak_menggagalkan_assignment(
-        self, mock_sla_timer
-    ):
+    def test_assign_gagal_start_timer_tidak_menggagalkan_assignment(self, mock_sla_timer):
         """Error saat start_timer tidak menggagalkan response assignment."""
         mock_sla_timer.start_timer = AsyncMock(side_effect=RuntimeError("boom"))
 
@@ -251,6 +244,8 @@ class TestAssignmentWiresStartTimer:
             side_effect=[
                 _execute_result_scalar(project),
                 _execute_result_scalar(sa),
+                # count subtask untuk auto-seed checklist (0 → seeding jalan)
+                _execute_result_scalar(0),
             ]
         )
         mock_session.commit = AsyncMock()
