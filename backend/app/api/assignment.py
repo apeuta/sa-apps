@@ -18,6 +18,7 @@ from app.core.dependencies import get_current_user
 from app.models.activity_log import ActivityLog
 from app.models.notification_log import NotificationLog
 from app.models.project import Project
+from app.models.subtask import Subtask
 from app.models.user import User
 from app.schemas.assignment import (
     AssignmentResponse,
@@ -31,6 +32,42 @@ from app.services.sla_timer import sla_timer
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Assignment"])
+
+# Checklist default yang di-seed otomatis saat proyek di-assign ke SA.
+DEFAULT_SUBTASK_TEMPLATE = ["Requirement", "BoQ", "PropTek", "HLD"]
+
+
+def _generate_subtask_id() -> str:
+    """Generate ID subtask unik dengan format SUB-{YYYYMMDD}-{random 6 chars}."""
+    date_part = datetime.now(timezone.utc).strftime("%Y%m%d")
+    random_part = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    return f"SUB-{date_part}-{random_part}"
+
+
+async def _seed_default_subtasks(db: AsyncSession, project_id: str) -> None:
+    """
+    Seed checklist subtask default untuk proyek bila belum ada subtask apa pun.
+
+    Idempoten: jika proyek sudah punya minimal satu subtask (mis. re-assign),
+    seeding dilewati sehingga tidak terjadi duplikasi.
+    """
+    count_result = await db.execute(
+        select(func.count()).select_from(Subtask).where(Subtask.id_project == project_id)
+    )
+    existing = count_result.scalar() or 0
+    if existing > 0:
+        return
+
+    for title in DEFAULT_SUBTASK_TEMPLATE:
+        db.add(
+            Subtask(
+                id_subtask=_generate_subtask_id(),
+                id_project=project_id,
+                title=title,
+                status="open",
+                assigned_sa=None,
+            )
+        )
 
 
 def _generate_notification_id() -> str:
@@ -601,6 +638,9 @@ async def assign_sa_to_project(
     )
     db.add(notification)
 
+    # === Auto-seed checklist subtask default (idempoten) ===
+    await _seed_default_subtasks(db, project_id)
+
     # Commit perubahan
     await db.commit()
     await db.refresh(project)
@@ -747,6 +787,9 @@ async def reassign_sa_to_project(
         created_at=now,
     )
     db.add(notification)
+
+    # === Auto-seed checklist subtask default (idempoten) ===
+    await _seed_default_subtasks(db, project_id)
 
     await db.commit()
     await db.refresh(project)

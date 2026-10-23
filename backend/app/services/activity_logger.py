@@ -97,6 +97,7 @@ class ActivityLogger:
         id_project: Optional[str] = None,
         project_phase: Optional[str] = None,
         gcal_event_id: Optional[str] = None,
+        id_subtask: Optional[str] = None,
     ) -> ActivityLog:
         """
         Buat activity log baru.
@@ -116,6 +117,8 @@ class ActivityLogger:
             id_project: ID proyek (wajib untuk Project, None untuk Non-Project).
             project_phase: Fase proyek (wajib untuk Project, None untuk Non-Project).
             gcal_event_id: ID event Google Calendar (opsional).
+            id_subtask: ID subtask terkait (opsional, tautan informasional;
+                TIDAK meng-advance status subtask).
 
         Returns:
             Instance ActivityLog yang sudah tersimpan.
@@ -145,6 +148,7 @@ class ActivityLogger:
             project_phase=project_phase,
             sa_id=sa_id,
             subtask_category=subtask_category,
+            id_subtask=id_subtask,
             duration_hours=duration_hours,
             raw_notes=raw_notes,
             ai_polished_notes=ai_polished_notes,
@@ -204,15 +208,12 @@ class ActivityLogger:
                     return content
                 else:
                     # Output tidak valid → None agar entry ditandai needs_repolish (Req 8.5).
-                    logger.warning(
-                        "AI polishing: output gagal validasi schema PolishResult."
-                    )
+                    logger.warning("AI polishing: output gagal validasi schema PolishResult.")
                     return None
             else:
                 # LLM gagal — log error dan return None (requirement 8.6)
                 logger.warning(
-                    f"AI polishing gagal: {response.error_type} - "
-                    f"{response.error_message}"
+                    f"AI polishing gagal: {response.error_type} - {response.error_message}"
                 )
                 return None
 
@@ -238,9 +239,7 @@ class ActivityLogger:
             ValueError: Jika log tidak ditemukan atau bukan milik SA.
         """
         # Cari activity log berdasarkan ID
-        result = await self.db.execute(
-            select(ActivityLog).where(ActivityLog.id_log == id_log)
-        )
+        result = await self.db.execute(select(ActivityLog).where(ActivityLog.id_log == id_log))
         activity_log = result.scalar_one_or_none()
 
         if activity_log is None:
@@ -259,8 +258,7 @@ class ActivityLogger:
         await self.db.refresh(activity_log)
 
         logger.info(
-            f"Retry polish untuk log {id_log}: "
-            f"{'berhasil' if ai_polished_notes else 'gagal lagi'}"
+            f"Retry polish untuk log {id_log}: {'berhasil' if ai_polished_notes else 'gagal lagi'}"
         )
 
         return activity_log
@@ -388,9 +386,7 @@ class ActivityLogger:
             select(ActivityLog).where(ActivityLog.gcal_event_id == gcal_event_id)
         )
         if existing.scalar_one_or_none() is not None:
-            raise ValueError(
-                f"Event '{gcal_event_id}' sudah dipetakan ke proyek lain."
-            )
+            raise ValueError(f"Event '{gcal_event_id}' sudah dipetakan ke proyek lain.")
 
         # Buat log dari event calendar
         return await self.create_log(
@@ -415,9 +411,7 @@ class ActivityLogger:
         Raises:
             ValueError: Jika proyek tidak ditemukan.
         """
-        result = await self.db.execute(
-            select(Project).where(Project.id_project == id_project)
-        )
+        result = await self.db.execute(select(Project).where(Project.id_project == id_project))
         project = result.scalar_one_or_none()
 
         if project is None:
