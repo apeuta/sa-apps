@@ -66,3 +66,17 @@ _Avoid_: Spec customer, dokumen kebutuhan upload
 **BoQ** (Bill of Quantity):
 Dokumen daftar item/kuantitas yang dibandingkan terhadap dokumen Requirement untuk analisis gap coverage.
 _Avoid_: Quote, penawaran
+
+## Folder & provisioning
+
+**Folder proyek** (Google Drive):
+Struktur folder Drive yang dibuat otomatis saat SA di-assign: satu folder master `[Customer] - [Project]` berisi subfolder `Inventory` (Viewer Sales), `Diagram` (tanpa akses Sales), dan `Solutions` (tanpa akses Sales sampai DQ terisi). `Final_Deliverables` dibuat di dalam `Solutions` saat handover.
+_Avoid_: Drive folder, workspace folder
+
+**Solutions folder**:
+Subfolder tempat deliverable teknis proyek disimpan. Satu-satunya folder yang akses Sales-nya berubah sepanjang lifecycle: dikunci (lock) oleh SLA saat DQ telat, dibuka (unlock) saat DQ terisi atau dokumen `Reviewed`. Operasi lock/unlock/handover SELALU menyasar id folder Solutions — bukan id folder master. Disimpan di `gdrive_solutions_folder_id`, terpisah dari `gdrive_folder_id` (master).
+_Avoid_: Folder deliverable, folder solusi
+
+**Provisioning status**:
+Keadaan pembuatan folder proyek sebuah proyek: `pending` (sedang dibuat), `provisioned` (selesai, id tersimpan), atau `failed` (gagal setelah retry; bisa di-provision ulang oleh Lead_SA/Admin). Disimpan di kolom `folder_provisioning_status` dan menggerakkan badge di dashboard.
+_Avoid_: Folder status, status folder

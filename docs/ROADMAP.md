@@ -117,16 +117,18 @@ Ditemukan saat asesmen dan sebaiknya diperbaiki lebih awal — ini merusak fungs
 
 ---
 
-## Fase 3 — Integrasi Due Date dengan Calendar (fitur 8)
+## Fase 3 — Integrasi Due Date dengan Calendar (fitur 8) — ⏸️ DITUNDA (pasca-MVP)
 
-**Tujuan:** menghubungkan `target_submit` dengan Google Calendar (saat ini calendar read-only, hanya untuk pull event ke logging).
+**Status:** **Ditunda keluar dari MVP (keputusan sesi grill, 2026-10-26).** Calendar tetap **read-only** untuk MVP (fitur sync/map event yang sudah ada). Push due date → Calendar tidak diimplementasikan sekarang karena push yang benar ("event di calendar SA yang di-assign") menuntut penyimpanan refresh token OAuth per-user server-side — permukaan keamanan baru yang signifikan dan bertentangan dengan arah Fase 0. Lihat [`docs/adr/0007-defer-calendar-push-to-post-mvp.md`](adr/0007-defer-calendar-push-to-post-mvp.md). Dilacak sebagai spec deferral di issue tracker.
 
-- [ ] 3.1 **✅ Diputuskan (sesi grill, 2026-10-21):** push **SATU ARAH** — due date proyek (`target_submit`) → event calendar SA yang di-assign. Edit due date meng-update event tertaut; proyek close/lost menghapus event. Bukan sync dua arah.
-- [ ] 3.2 Perluas `CalendarService` dengan create/update event memakai OAuth token user; simpan event id hasilnya di proyek.
-- [ ] 3.3 Saat due date di-edit (fitur 9), update event Calendar yang tertaut; saat proyek close/lost, hapus atau tandai.
-- [ ] 3.4 Handle kasus tanpa token calendar dengan baik (fitur tetap jalan tanpa Calendar terhubung).
+**Tujuan (saat dikerjakan nanti, "opsi b"):** menghubungkan `target_submit` dengan Google Calendar via push satu arah ke calendar SA yang di-assign, dengan token per-user tersimpan server-side.
 
-**Kriteria selesai:** meng-set atau meng-edit due date proyek tercermin di Google Calendar yang terhubung; ketiadaan token degrade dengan baik.
+- [ ] 3.1 **✅ Diputuskan (sesi grill, 2026-10-21):** push **SATU ARAH** — due date proyek (`target_submit`) → event calendar SA yang di-assign. Edit due date meng-update event tertaut; proyek close/lost menghapus event. Bukan sync dua arah. **(Ditunda pasca-MVP per keputusan 2026-10-26.)**
+- [ ] 3.2 Perluas `CalendarService` dengan create/update event; simpan refresh token calendar per-user server-side agar server bisa menulis ke calendar SA tanpa SA online. Tambah kolom `gcal_duedate_event_id` di `Project`.
+- [ ] 3.3 Saat due date di-edit, update event tertaut; saat proyek close/lost/selesai, **hapus event yang tanggalnya belum terlewati** (event bertanggal masa lalu dibiarkan sebagai jejak), kosongkan `gcal_duedate_event_id` hanya saat event benar-benar dihapus; penghapusan gagal degrade dengan baik (log, jangan gagalkan transisi status).
+- [ ] 3.4 Re-assignment memigrasi event antar-calendar (hapus di SA lama, buat di SA baru). Handle kasus tanpa token calendar dengan baik.
+
+**Kriteria selesai (pasca-MVP):** meng-set atau meng-edit due date proyek tercermin di Google Calendar SA yang di-assign; ketiadaan token degrade dengan baik; re-assignment memindahkan event.
 
 ---
 
@@ -196,7 +198,7 @@ Fase 2 (folder provisioning)     ← men-wire kode yang sudah ada
       │
 Fase 2A (SLA DQ gating e2e)      ← wire SLA/doc_ready/email; butuh Fase 2 (gdrive_folder_id untuk auto-lock)
       │
-Fase 3 (due date calendar)   ──┐
+Fase 3 (due date calendar)   ──┐  ← ⏸️ DITUNDA pasca-MVP (ADR 0007)
 Fase 4 (subtask assignable)  ──┤  ← independen, bisa diparalelkan
 Fase 5 (form pertanyaan awal)──┘
       │
@@ -231,7 +233,7 @@ Beberapa item di bawah sudah **diputuskan pada sesi grill 2026-10-21** (ditandai
 3. **Seeding subtask (4.4):** auto-seed checklist default saat assignment? **✅ Diputuskan (sesi grill, 2026-10-21):** YA — auto-seed checklist subtask default saat assignment (mis. Requirement → BoQ → PropTek → HLD); Lead SA tetap bisa tambah/hapus manual.
 4. **BoQ compare (Fase 6):** analisis gap AI dengan skor coverage vs side-by-side biasa? _(diasumsikan: AI + skor)_
 5. **Step qualify (2.3):** threshold BANT ≥ 60% sebagai gate **sudah ditetapkan spec Flow 1 langkah 3 (fakta spec, bukan asumsi)** dan sudah terimplementasi. **✅ Diputuskan (sesi grill, 2026-10-21):** TIDAK ada step "qualify" manual Lead SA terpisah di atas gate otomatis — gate BANT ≥ 60% otomatis sudah memenuhi spec.
-6. **Calendar (3.1):** push due date satu arah vs sync dua arah? **✅ Diputuskan (sesi grill, 2026-10-21):** push SATU ARAH — due date proyek → event calendar SA yang di-assign; edit due date meng-update event; proyek close/lost menghapus event.
+6. **Calendar (3.1):** push due date satu arah vs sync dua arah? **✅ Diputuskan (sesi grill, 2026-10-21):** push SATU ARAH — due date proyek → event calendar SA yang di-assign; edit due date meng-update event; proyek close/lost menghapus event. **✅ Diputuskan (sesi grill, 2026-10-26):** push **DITUNDA keluar dari MVP** — MVP tetap calendar read-only; push butuh token OAuth per-user tersimpan server-side (permukaan keamanan baru). Lihat [`docs/adr/0007-defer-calendar-push-to-post-mvp.md`](adr/0007-defer-calendar-push-to-post-mvp.md).
 7. **PII (7.3):** flag vs redact? _(diasumsikan: flag untuk MVP)_
 8. **Dokumen Requirement (Fase 5.5 / 6):** upload file vs konten turunan AI? **✅ Diputuskan 2026-10-19:** konten turunan — summary AI dari MoM/RFP + field Sales, disimpan sebagai `Document` (`doc_type="Requirement"`), di-resummarize saat source berubah. **✅ Diputuskan (sesi grill, 2026-10-21):** SA BOLEH override hasil generate, ditandai flag `is_overridden`; saat source berubah dan konten sudah di-override, re-summarize TIDAK menimpa diam-diam — beri notifikasi & minta konfirmasi dulu. (Bagian "terbuka" pada keputusan ini kini tertutup.) Lihat [`docs/adr/0004-requirement-override-blocks-silent-resummarize.md`](adr/0004-requirement-override-blocks-silent-resummarize.md).
 
