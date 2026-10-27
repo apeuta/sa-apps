@@ -59,7 +59,12 @@ def _make_document(status: str = "Draft", folder_type: str = "Solutions"):
     return doc
 
 
-def _make_project(dq_number=None, sales_pic=None, gdrive_folder_id="folder_123"):
+def _make_project(
+    dq_number=None,
+    sales_pic=None,
+    gdrive_folder_id="folder_123",
+    gdrive_solutions_folder_id="solutions_123",
+):
     """Buat mock Project dengan field yang relevan untuk gating."""
     project = MagicMock()
     project.id_project = "PRJ-20250101-XYZ789"
@@ -68,6 +73,7 @@ def _make_project(dq_number=None, sales_pic=None, gdrive_folder_id="folder_123")
     project.dq_number = dq_number
     project.sales_pic = sales_pic or uuid.uuid4()
     project.gdrive_folder_id = gdrive_folder_id
+    project.gdrive_solutions_folder_id = gdrive_solutions_folder_id
     return project
 
 
@@ -152,9 +158,9 @@ class TestReviewedDenganDQ:
         assert event.recipient_user_id == sales_id
         assert event.recipient_email == sales_user.email
 
-        # Permission Drive Solutions dibuka untuk Sales
+        # Permission Drive Solutions dibuka untuk Sales (ADR 0005: id Solutions)
         mock_unlock.assert_called_once_with(
-            solutions_folder_id="folder_123",
+            solutions_folder_id="solutions_123",
             sales_email=sales_user.email,
         )
 

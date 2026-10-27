@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditLog
@@ -68,9 +68,7 @@ class HandoverService:
     Requirements: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7
     """
 
-    async def check_handover_readiness(
-        self, project_id: str, db: AsyncSession
-    ) -> dict:
+    async def check_handover_readiness(self, project_id: str, db: AsyncSession) -> dict:
         """
         Cek apakah semua prasyarat handover terpenuhi.
 
@@ -92,9 +90,7 @@ class HandoverService:
         missing_items = []
 
         # Cari proyek
-        result = await db.execute(
-            select(Project).where(Project.id_project == project_id)
-        )
+        result = await db.execute(select(Project).where(Project.id_project == project_id))
         project = result.scalar_one_or_none()
 
         if project is None:
@@ -109,9 +105,7 @@ class HandoverService:
 
         # Cek status proyek
         if project.status != "Closed-Win":
-            missing_items.append(
-                f"Status proyek harus 'Closed-Win' (saat ini: '{project.status}')"
-            )
+            missing_items.append(f"Status proyek harus 'Closed-Win' (saat ini: '{project.status}')")
 
         # Cek dokumen HLD Final
         hld_result = await db.execute(
@@ -137,9 +131,7 @@ class HandoverService:
         # Cek konfigurasi PMO/Delivery
         pmo_email = project.pmo_lead_email if hasattr(project, "pmo_lead_email") else None
         delivery_email = (
-            project.delivery_lead_email
-            if hasattr(project, "delivery_lead_email")
-            else None
+            project.delivery_lead_email if hasattr(project, "delivery_lead_email") else None
         )
 
         if not pmo_email:
@@ -194,9 +186,7 @@ class HandoverService:
         now = datetime.now(timezone.utc)
 
         # === 1. Cari proyek dan validasi ===
-        result = await db.execute(
-            select(Project).where(Project.id_project == project_id)
-        )
+        result = await db.execute(select(Project).where(Project.id_project == project_id))
         project = result.scalar_one_or_none()
 
         if project is None:
@@ -249,13 +239,11 @@ class HandoverService:
         final_deliverables_id: Optional[str] = None
         try:
             final_deliverables_id = await folder_provisioner.provision_handover(
-                solutions_folder_id=project.gdrive_folder_id,
+                solutions_folder_id=project.gdrive_solutions_folder_id,
                 pmo_email=pmo_email,
                 delivery_email=delivery_email,
             )
-            logger.info(
-                f"Folder Final_Deliverables berhasil dibuat: {final_deliverables_id}"
-            )
+            logger.info(f"Folder Final_Deliverables berhasil dibuat: {final_deliverables_id}")
         except FolderProvisioningError as e:
             # GDrive gagal setelah 3x retry — tandai Handover Failed
             logger.error(f"Handover gagal (GDrive error): {e}")
@@ -332,8 +320,7 @@ class HandoverService:
             )
 
         logger.info(
-            f"Notifikasi handover terkirim ke PMO ({pmo_email}) "
-            f"dan Delivery ({delivery_email})"
+            f"Notifikasi handover terkirim ke PMO ({pmo_email}) dan Delivery ({delivery_email})"
         )
 
         # === 4. Update status → "Handover Complete" ===
@@ -411,9 +398,7 @@ class HandoverService:
 
         # Kirim ke SA yang ditugaskan (jika ada)
         if project.assigned_sa:
-            sa_result = await db.execute(
-                select(User).where(User.id == project.assigned_sa)
-            )
+            sa_result = await db.execute(select(User).where(User.id == project.assigned_sa))
             sa_user = sa_result.scalar_one_or_none()
             if sa_user:
                 await notification_service.send_notification(
@@ -431,9 +416,7 @@ class HandoverService:
                 )
 
         # Kirim ke semua Lead_SA
-        lead_result = await db.execute(
-            select(User).where(User.role == "Lead_SA")
-        )
+        lead_result = await db.execute(select(User).where(User.role == "Lead_SA"))
         lead_users = lead_result.scalars().all()
         for lead in lead_users:
             await notification_service.send_notification(
@@ -444,15 +427,12 @@ class HandoverService:
                     reference_id=project.id_project,
                     metadata=error_metadata,
                     subject=(
-                        f"[Portal SA] GAGAL: Handover proyek "
-                        f"{project.project_name} tidak berhasil"
+                        f"[Portal SA] GAGAL: Handover proyek {project.project_name} tidak berhasil"
                     ),
                 )
             )
 
-    async def _find_user_by_email(
-        self, email: str, db: AsyncSession
-    ) -> Optional[User]:
+    async def _find_user_by_email(self, email: str, db: AsyncSession) -> Optional[User]:
         """
         Cari user berdasarkan email. Return None jika tidak ditemukan.
         Digunakan untuk mengirim notifikasi in-app (perlu user_id).

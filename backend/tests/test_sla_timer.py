@@ -6,20 +6,19 @@ proses aksi harian, dan integrasi lock/unlock.
 """
 
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.services.sla_timer import (
-    SLATimer,
+    SLA_RED_THRESHOLD,
+    SLA_YELLOW_THRESHOLD,
     SLAStatus,
+    SLATimer,
     _calculate_sla_status,
     _generate_id,
-    SLA_YELLOW_THRESHOLD,
-    SLA_RED_THRESHOLD,
 )
-
 
 # =============================================================================
 # Test: _calculate_sla_status (pure function)
@@ -279,7 +278,8 @@ class TestStopTimer:
         # Mock project dan user data
         mock_project = MagicMock()
         mock_project.id_project = "PRJ-001"
-        mock_project.gdrive_folder_id = "gdrive_folder_123"
+        mock_project.gdrive_folder_id = "gdrive_master_123"
+        mock_project.gdrive_solutions_folder_id = "gdrive_solutions_123"
         mock_project.sales_pic = uuid.uuid4()
 
         mock_sales = MagicMock()
@@ -311,9 +311,9 @@ class TestStopTimer:
         ) as mock_unlock:
             result = await sla_timer.stop_timer("PRJ-001", mock_db)
 
-        # Verifikasi unlock dipanggil
+        # Verifikasi unlock dipanggil dengan id folder Solutions (ADR 0005)
         mock_unlock.assert_called_once_with(
-            solutions_folder_id="gdrive_folder_123",
+            solutions_folder_id="gdrive_solutions_123",
             sales_email="sales@company.com",
         )
 
@@ -424,6 +424,7 @@ class TestProcessSLAActions:
         mock_project.customer_name = "Customer B"
         mock_project.sales_pic = uuid.uuid4()
         mock_project.gdrive_folder_id = "folder_123"
+        mock_project.gdrive_solutions_folder_id = "solutions_123"
 
         mock_sales = MagicMock()
         mock_sales.email = "sales@company.com"
@@ -448,24 +449,27 @@ class TestProcessSLAActions:
         sales_result.scalar_one_or_none.return_value = mock_sales
 
         mock_session.execute.side_effect = [
-            sla_list_result,    # Query active SLAs
-            project_result,     # Query project
-            manager_result,     # Query managers (eskalasi)
-            sales_result,       # Query sales user (lock)
+            sla_list_result,  # Query active SLAs
+            project_result,  # Query project
+            manager_result,  # Query managers (eskalasi)
+            sales_result,  # Query sales user (lock)
         ]
         mock_session.commit = AsyncMock()
         mock_session.add = MagicMock()
 
-        with patch(
-            "app.services.sla_timer.AsyncSessionLocal",
-            return_value=AsyncMock(
-                __aenter__=AsyncMock(return_value=mock_session),
-                __aexit__=AsyncMock(return_value=False),
+        with (
+            patch(
+                "app.services.sla_timer.AsyncSessionLocal",
+                return_value=AsyncMock(
+                    __aenter__=AsyncMock(return_value=mock_session),
+                    __aexit__=AsyncMock(return_value=False),
+                ),
             ),
-        ), patch(
-            "app.services.sla_timer.folder_provisioner.lock_solutions_folder",
-            new_callable=AsyncMock,
-        ) as mock_lock:
+            patch(
+                "app.services.sla_timer.folder_provisioner.lock_solutions_folder",
+                new_callable=AsyncMock,
+            ) as mock_lock,
+        ):
             stats = await sla_timer.process_sla_actions()
 
         assert stats["total_checked"] == 1
