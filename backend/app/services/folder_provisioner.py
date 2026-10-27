@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from functools import partial
 from typing import Optional
 
@@ -35,6 +36,22 @@ class FolderProvisioningError(Exception):
     """Exception saat provisioning folder gagal setelah semua retry."""
 
     pass
+
+
+@dataclass
+class ProvisionedFolders:
+    """Kontrak id folder hasil provisioning (ADR 0005).
+
+    master: ID folder master proyek
+    inventory: ID subfolder Inventory
+    diagram: ID subfolder Diagram
+    solutions: ID subfolder Solutions
+    """
+
+    master: str
+    inventory: str
+    diagram: str
+    solutions: str
 
 
 class FolderProvisioner:
@@ -79,9 +96,7 @@ class FolderProvisioner:
             return self._drive_service
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Gagal parse service account key: {e}")
-            raise FolderProvisioningError(
-                f"Format GDRIVE_SERVICE_ACCOUNT_KEY tidak valid: {e}"
-            )
+            raise FolderProvisioningError(f"Format GDRIVE_SERVICE_ACCOUNT_KEY tidak valid: {e}")
 
     def sanitize_folder_name(self, name: str) -> str:
         """
@@ -121,15 +136,11 @@ class FolderProvisioner:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 # Jalankan operasi sync di executor agar tidak blocking event loop
-                result = await loop.run_in_executor(
-                    None, partial(func, *args, **kwargs)
-                )
+                result = await loop.run_in_executor(None, partial(func, *args, **kwargs))
                 return result
             except HttpError as e:
                 last_error = e
-                logger.warning(
-                    f"[{operation_name}] Percobaan {attempt}/{MAX_RETRIES} gagal: {e}"
-                )
+                logger.warning(f"[{operation_name}] Percobaan {attempt}/{MAX_RETRIES} gagal: {e}")
                 if attempt < MAX_RETRIES:
                     await asyncio.sleep(RETRY_INTERVAL_SECONDS)
             except Exception as e:
@@ -149,9 +160,7 @@ class FolderProvisioner:
         logger.error(error_msg)
         raise FolderProvisioningError(error_msg)
 
-    def _create_folder_sync(
-        self, name: str, parent_id: Optional[str] = None
-    ) -> str:
+    def _create_folder_sync(self, name: str, parent_id: Optional[str] = None) -> str:
         """
         Buat folder di Google Drive (synchronous).
 
@@ -170,16 +179,18 @@ class FolderProvisioner:
         if parent_id:
             file_metadata["parents"] = [parent_id]
 
-        folder = service.files().create(
-            body=file_metadata,
-            fields="id",
-        ).execute()
+        folder = (
+            service.files()
+            .create(
+                body=file_metadata,
+                fields="id",
+            )
+            .execute()
+        )
 
         return folder.get("id")
 
-    def _set_permission_sync(
-        self, file_id: str, email: str, role: str
-    ) -> str:
+    def _set_permission_sync(self, file_id: str, email: str, role: str) -> str:
         """
         Set permission pada file/folder di Google Drive (synchronous).
 
@@ -197,12 +208,16 @@ class FolderProvisioner:
             "role": role,
             "emailAddress": email,
         }
-        result = service.permissions().create(
-            fileId=file_id,
-            body=permission,
-            sendNotificationEmail=False,
-            fields="id",
-        ).execute()
+        result = (
+            service.permissions()
+            .create(
+                fileId=file_id,
+                body=permission,
+                sendNotificationEmail=False,
+                fields="id",
+            )
+            .execute()
+        )
 
         return result.get("id")
 
@@ -220,9 +235,7 @@ class FolderProvisioner:
             permissionId=permission_id,
         ).execute()
 
-    def _find_permission_sync(
-        self, file_id: str, email: str
-    ) -> Optional[str]:
+    def _find_permission_sync(self, file_id: str, email: str) -> Optional[str]:
         """
         Cari permission ID berdasarkan email pada file/folder (synchronous).
 
@@ -234,10 +247,14 @@ class FolderProvisioner:
             Permission ID jika ditemukan, None jika tidak
         """
         service = self._get_drive_service()
-        permissions = service.permissions().list(
-            fileId=file_id,
-            fields="permissions(id,emailAddress)",
-        ).execute()
+        permissions = (
+            service.permissions()
+            .list(
+                fileId=file_id,
+                fields="permissions(id,emailAddress)",
+            )
+            .execute()
+        )
 
         for perm in permissions.get("permissions", []):
             if perm.get("emailAddress", "").lower() == email.lower():
@@ -250,7 +267,7 @@ class FolderProvisioner:
         sa_email: str,
         lead_sa_email: str,
         sales_email: str,
-    ) -> str:
+    ) -> ProvisionedFolders:
         """
         Buat folder master proyek + 3 subfolder dan set permission.
 
@@ -270,7 +287,8 @@ class FolderProvisioner:
             sales_email: Email Sales PIC
 
         Returns:
-            gdrive_folder_id: ID folder master yang dibuat
+            ProvisionedFolders: id folder master + subfolder
+            (inventory/diagram/solutions)
 
         Raises:
             FolderProvisioningError: Jika gagal setelah 3x retry
@@ -349,11 +367,14 @@ class FolderProvisioner:
             f"{project.customer_name} - {project.project_name}"
         )
 
-        return master_id
+        return ProvisionedFolders(
+            master=master_id,
+            inventory=inventory_id,
+            diagram=diagram_id,
+            solutions=solutions_id,
+        )
 
-    async def lock_solutions_folder(
-        self, solutions_folder_id: str, sales_email: str
-    ) -> None:
+    async def lock_solutions_folder(self, solutions_folder_id: str, sales_email: str) -> None:
         """
         Hapus akses Sales dari folder Solutions (SLA auto-lock H+5).
 
@@ -367,9 +388,7 @@ class FolderProvisioner:
         Raises:
             FolderProvisioningError: Jika gagal setelah 3x retry
         """
-        logger.info(
-            f"Locking folder Solutions ({solutions_folder_id}) untuk {sales_email}"
-        )
+        logger.info(f"Locking folder Solutions ({solutions_folder_id}) untuk {sales_email}")
 
         # Cari permission ID Sales di folder Solutions
         permission_id = await self._execute_with_retry(
@@ -388,14 +407,9 @@ class FolderProvisioner:
             )
             logger.info(f"Akses Sales dihapus dari folder Solutions")
         else:
-            logger.info(
-                f"Sales ({sales_email}) tidak punya akses ke folder Solutions, "
-                f"skip lock."
-            )
+            logger.info(f"Sales ({sales_email}) tidak punya akses ke folder Solutions, skip lock.")
 
-    async def unlock_solutions_folder(
-        self, solutions_folder_id: str, sales_email: str
-    ) -> None:
+    async def unlock_solutions_folder(self, solutions_folder_id: str, sales_email: str) -> None:
         """
         Kembalikan akses Viewer untuk Sales ke folder Solutions.
 
@@ -409,9 +423,7 @@ class FolderProvisioner:
         Raises:
             FolderProvisioningError: Jika gagal setelah 3x retry
         """
-        logger.info(
-            f"Unlocking folder Solutions ({solutions_folder_id}) untuk {sales_email}"
-        )
+        logger.info(f"Unlocking folder Solutions ({solutions_folder_id}) untuk {sales_email}")
 
         await self._execute_with_retry(
             "restore_sales_permission",

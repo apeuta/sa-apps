@@ -7,18 +7,17 @@ panggilan jaringan nyata.
 
 import asyncio
 import json
-from unittest.mock import MagicMock, patch, AsyncMock
 from dataclasses import dataclass
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from googleapiclient.errors import HttpError
 
 from app.services.folder_provisioner import (
+    INVALID_FOLDER_CHARS,
     FolderProvisioner,
     FolderProvisioningError,
-    INVALID_FOLDER_CHARS,
 )
-
 
 # =============================================================================
 # Fixtures & Helpers
@@ -58,9 +57,7 @@ def mock_drive_service():
     # Mock permissions().list()
     perm_list_mock = MagicMock()
     perm_list_mock.execute.return_value = {
-        "permissions": [
-            {"id": "perm_sales_001", "emailAddress": "sales@company.com"}
-        ]
+        "permissions": [{"id": "perm_sales_001", "emailAddress": "sales@company.com"}]
     }
     service.permissions.return_value.list.return_value = perm_list_mock
 
@@ -168,18 +165,14 @@ class TestProvisionProjectFolder:
         self, provisioner_with_service, mock_drive_service
     ):
         """Provisioning berhasil: buat master + 3 subfolder + set permissions."""
-        folder_ids = iter(
-            ["master_001", "inv_002", "diag_003", "sol_004"]
-        )
+        folder_ids = iter(["master_001", "inv_002", "diag_003", "sol_004"])
 
         def create_side_effect(*args, **kwargs):
             mock = MagicMock()
             mock.execute.return_value = {"id": next(folder_ids)}
             return mock
 
-        mock_drive_service.files.return_value.create.side_effect = (
-            create_side_effect
-        )
+        mock_drive_service.files.return_value.create.side_effect = create_side_effect
 
         project = FakeProject()
         result = await provisioner_with_service.provision_project_folder(
@@ -189,7 +182,10 @@ class TestProvisionProjectFolder:
             sales_email="sales@company.com",
         )
 
-        assert result == "master_001"
+        assert result.master == "master_001"
+        assert result.inventory == "inv_002"
+        assert result.diagram == "diag_003"
+        assert result.solutions == "sol_004"
 
         # Verifikasi 4 folder dibuat (1 master + 3 subfolder)
         assert mock_drive_service.files.return_value.create.call_count == 4
@@ -198,9 +194,7 @@ class TestProvisionProjectFolder:
         assert mock_drive_service.permissions.return_value.create.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_folder_name_disanitasi(
-        self, provisioner_with_service, mock_drive_service
-    ):
+    async def test_folder_name_disanitasi(self, provisioner_with_service, mock_drive_service):
         """Nama folder menggunakan customer_name dan project_name yang disanitasi."""
         captured_names = []
 
@@ -211,9 +205,7 @@ class TestProvisionProjectFolder:
             mock.execute.return_value = {"id": "folder_123"}
             return mock
 
-        mock_drive_service.files.return_value.create.side_effect = (
-            create_side_effect
-        )
+        mock_drive_service.files.return_value.create.side_effect = create_side_effect
 
         project = FakeProject(
             customer_name='PT "Test"/Corp',
@@ -231,8 +223,13 @@ class TestProvisionProjectFolder:
         first_call = mock_drive_service.files.return_value.create.call_args_list[0]
         body = first_call[1].get("body") or first_call[0][0] if first_call[0] else {}
         # Karena kita mock _create_folder_sync, mari cek langsung via sanitize
-        assert provisioner_with_service.sanitize_folder_name(project.customer_name) == "PT _Test__Corp"
-        assert provisioner_with_service.sanitize_folder_name(project.project_name) == "Data_Pipeline_v2"
+        assert (
+            provisioner_with_service.sanitize_folder_name(project.customer_name) == "PT _Test__Corp"
+        )
+        assert (
+            provisioner_with_service.sanitize_folder_name(project.project_name)
+            == "Data_Pipeline_v2"
+        )
 
     @pytest.mark.asyncio
     async def test_retry_saat_gdrive_error(self, provisioner_with_service, mock_drive_service):
@@ -266,7 +263,7 @@ class TestProvisionProjectFolder:
             )
 
         # Harus berhasil (retry sukses)
-        assert result is not None
+        assert result.master is not None
 
     @pytest.mark.asyncio
     async def test_raise_error_setelah_semua_retry_gagal(
@@ -392,9 +389,7 @@ class TestProvisionHandover:
         assert mock_drive_service.permissions.return_value.create.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_handover_retry_saat_error(
-        self, provisioner_with_service, mock_drive_service
-    ):
+    async def test_handover_retry_saat_error(self, provisioner_with_service, mock_drive_service):
         """Handover retry saat GDrive error."""
         call_count = 0
 
