@@ -213,6 +213,7 @@ async def get_pending_projects(
             assigned_at=p.assigned_at,
             target_submit=p.target_submit,
             gdrive_folder_id=p.gdrive_folder_id,
+            folder_provisioning_status=p.folder_provisioning_status,
         ).model_dump(mode="json")
         for p in projects
     ]
@@ -759,6 +760,7 @@ async def assign_sa_to_project(
             assigned_at=project.assigned_at,
             target_submit=project.target_submit,
             gdrive_folder_id=project.gdrive_folder_id,
+            folder_provisioning_status=project.folder_provisioning_status,
         ),
         assigned_sa_name=sa_user.name,
         notification_sent=True,

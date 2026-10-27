@@ -21,6 +21,7 @@ export interface PendingProject {
   status: string;
   target_submit: string;
   gdrive_folder_id: string | null;
+  folder_provisioning_status: "pending" | "provisioned" | "failed" | null;
   created_at: string;
   sales_pic: {
     id: string;
@@ -103,5 +104,24 @@ export async function reassignProject(
   return apiRequest(`/projects/${projectId}/reassign`, {
     method: "POST",
     body: { sa_id: saId },
+  });
+}
+
+/**
+ * Provision ulang folder Google Drive untuk proyek yang provisioning-nya gagal
+ * Hanya bisa dilakukan oleh Lead_SA / Admin (role-guard di backend)
+ *
+ * @param projectId - ID proyek yang folder-nya akan di-provision ulang
+ * @returns Data status provisioning setelah dijadwalkan
+ */
+export async function reprovisionFolder(
+  projectId: string
+): Promise<{
+  id_project: string;
+  folder_provisioning_status: string;
+  folder_provisioning_triggered: boolean;
+}> {
+  return apiRequest(`/projects/${projectId}/provision-folder`, {
+    method: "POST",
   });
 }

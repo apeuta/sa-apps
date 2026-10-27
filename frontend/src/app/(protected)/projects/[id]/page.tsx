@@ -56,6 +56,7 @@ interface ProjectDetail {
     created_at: string;
   }[];
   gdrive_folder_id: string | null;
+  folder_provisioning_status: "pending" | "provisioned" | "failed" | null;
   created_at: string;
   updated_at: string;
 }
@@ -236,7 +237,7 @@ export default function ProjectDetailPage() {
           <div className="flex gap-4">
             <a
               href={`/projects/${projectId}/documents`}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700 
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700
                          border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors min-h-[44px]"
             >
               <svg className="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -246,7 +247,7 @@ export default function ProjectDetailPage() {
             </a>
             <a
               href="/activity-logs"
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700 
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-700
                          border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors min-h-[44px]"
             >
               <svg className="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -378,6 +379,7 @@ export default function ProjectDetailPage() {
             status: project.status,
             target_submit: project.target_submit || "",
             gdrive_folder_id: null,
+            folder_provisioning_status: project.folder_provisioning_status ?? null,
             created_at: project.created_at,
             sales_pic: { id: project.sales_pic?.id || "", name: project.sales_pic?.name || "", email: project.sales_pic?.email || "" },
           }}

@@ -546,6 +546,113 @@ def mock_patch_db():
     app.dependency_overrides.clear()
 
 
+class TestFolderProvisioningStatusInResponse:
+    """
+    Test FEAT-003/T6: folder_provisioning_status harus muncul di response list
+    dan detail proyek, tanpa merusak field gdrive_folder_id yang sudah ada.
+    """
+
+    def test_list_mengandung_folder_provisioning_status(self):
+        """Response list proyek memuat folder_provisioning_status + gdrive_folder_id."""
+        mock_user = _mock_user()
+        mock_user.role = "Lead_SA"  # akses seluruh proyek
+
+        project = _real_project(
+            gdrive_folder_id="gdrive_master_123",
+            gdrive_solutions_folder_id="gdrive_sol_123",
+            folder_provisioning_status="provisioned",
+        )
+
+        mock_session = AsyncMock()
+
+        def _make_scalars_result(items):
+            result = MagicMock()
+            scalars = MagicMock()
+            scalars.all = MagicMock(return_value=items)
+            result.scalars = MagicMock(return_value=scalars)
+            return result
+
+        mock_session.execute = AsyncMock(return_value=_make_scalars_result([project]))
+
+        async def override_get_db():
+            yield mock_session
+
+        import app.core.database as database_module
+        import app.core.dependencies as dependencies_module
+
+        app.dependency_overrides[database_module.get_db] = override_get_db
+        app.dependency_overrides[dependencies_module.get_current_user] = lambda: mock_user
+        try:
+            client = TestClient(app)
+            response = client.get("/api/v1/projects")
+            assert response.status_code == status.HTTP_200_OK
+            body = response.json()
+            item = body["data"][0]
+            assert item["folder_provisioning_status"] == "provisioned"
+            # Field lama tetap ada dan tidak rusak
+            assert item["gdrive_folder_id"] == "gdrive_master_123"
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_detail_mengandung_folder_provisioning_status(self):
+        """Response detail proyek memuat folder_provisioning_status + gdrive_folder_id."""
+        mock_user = _mock_user()
+        mock_user.role = "Lead_SA"  # privileged → lolos cek akses
+
+        project = _real_project(
+            gdrive_folder_id="gdrive_master_456",
+            gdrive_solutions_folder_id="gdrive_sol_456",
+            folder_provisioning_status="failed",
+        )
+
+        mock_session = AsyncMock()
+
+        def _make_scalar_result(value):
+            result = MagicMock()
+            result.scalar_one_or_none = MagicMock(return_value=value)
+            return result
+
+        def _make_scalars_result(items):
+            result = MagicMock()
+            scalars = MagicMock()
+            scalars.all = MagicMock(return_value=items)
+            result.scalars = MagicMock(return_value=scalars)
+            return result
+
+        # Urutan execute di get_project_detail:
+        # 1) lookup Project, 2) cek collaborator (None),
+        # 3) lookup Sales PIC (None), 4) lookup SA assigned (skip: assigned_sa None),
+        # 5) daftar collaborators (kosong).
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                _make_scalar_result(project),
+                _make_scalar_result(None),
+                _make_scalar_result(None),
+                _make_scalars_result([]),
+            ]
+        )
+
+        async def override_get_db():
+            yield mock_session
+
+        import app.core.database as database_module
+        import app.core.dependencies as dependencies_module
+
+        app.dependency_overrides[database_module.get_db] = override_get_db
+        app.dependency_overrides[dependencies_module.get_current_user] = lambda: mock_user
+        try:
+            client = TestClient(app)
+            response = client.get(f"/api/v1/projects/{project.id_project}")
+            assert response.status_code == status.HTTP_200_OK
+            body = response.json()
+            data = body["data"]
+            assert data["folder_provisioning_status"] == "failed"
+            # Field lama tetap ada dan tidak rusak
+            assert data["gdrive_folder_id"] == "gdrive_master_456"
+        finally:
+            app.dependency_overrides.clear()
+
+
 class TestUpdateProjectPersist:
     """
     Test regresi: PATCH harus benar-benar mengubah object yang di-commit

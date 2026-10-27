@@ -7,8 +7,10 @@ import { fetcher } from "@/lib/fetcher";
 import {
   PendingProject,
   AvailableSA,
+  reprovisionFolder,
 } from "@/lib/api/assignment";
 import { AssignmentModal } from "@/components/AssignmentModal";
+import { useAuthStore } from "@/store/auth";
 
 /**
  * Dashboard Lead_SA
@@ -215,6 +217,11 @@ export default function LeadSADashboard() {
                     key={project.id_project}
                     project={project}
                     onAssign={() => setAssigningProject(project)}
+                    onReprovisioned={() => mutatePending()}
+                    onToast={(message, type) => {
+                      setToast({ message, type });
+                      setTimeout(() => setToast(null), 3000);
+                    }}
                   />
                 ))}
               </div>
@@ -588,10 +595,35 @@ function MonthlyUtilizationTable({
 function ProjectCard({
   project,
   onAssign,
+  onReprovisioned,
+  onToast,
 }: {
   project: PendingProject;
   onAssign: () => void;
+  onReprovisioned: () => void;
+  onToast: (message: string, type: "success" | "error") => void;
 }) {
+  // Role user untuk gating tombol "Provision Ulang" (Lead_SA/Admin saja)
+  const role = useAuthStore((s) => s.user?.role);
+  const canReprovision = role === "Lead_SA" || role === "Admin";
+  const [isReprovisioning, setIsReprovisioning] = useState(false);
+
+  const handleReprovision = async () => {
+    setIsReprovisioning(true);
+    try {
+      await reprovisionFolder(project.id_project);
+      onToast("Provisioning folder telah dijadwalkan ulang.", "success");
+      onReprovisioned();
+    } catch (err) {
+      const message =
+        (err as { message?: string })?.message ||
+        "Gagal menjadwalkan provisioning ulang.";
+      onToast(message, "error");
+    } finally {
+      setIsReprovisioning(false);
+    }
+  };
+
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-5 hover:shadow-sm transition-shadow duration-200">
       {/* Header card */}
@@ -646,24 +678,45 @@ function ProjectCard({
         </span>
       </div>
 
-      {/* Footer: Badge Folder Pending + Tombol Assign */}
-      <div className="flex items-center justify-between">
-        {/* Badge Folder Pending — ditampilkan jika gdrive_folder_id null setelah assigned */}
-        {project.status === "Assigned" && !project.gdrive_folder_id && (
-          <span className="px-2.5 py-1 bg-orange-100 text-orange-700 text-xs font-medium rounded-full">
-            Folder Pending
-          </span>
-        )}
+      {/* Footer: Badge status provisioning folder + Tombol Assign */}
+      <div className="flex items-center justify-between gap-2">
+        {/* Badge status provisioning folder — dibaca langsung dari
+            folder_provisioning_status (pending/provisioned/failed; null → tanpa badge). */}
+        <div className="flex items-center gap-2 min-w-0">
+          {project.folder_provisioning_status === "pending" && (
+            <span className="px-2.5 py-1 bg-orange-100 text-orange-700 text-xs font-medium rounded-full">
+              Folder Pending
+            </span>
+          )}
+          {project.folder_provisioning_status === "provisioned" && (
+            <span className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-full">
+              Folder Siap
+            </span>
+          )}
+          {project.folder_provisioning_status === "failed" && (
+            <span className="px-2.5 py-1 bg-red-100 text-red-700 text-xs font-medium rounded-full">
+              Provisioning Gagal
+            </span>
+          )}
 
-        {/* Spacer jika tidak ada badge */}
-        {(project.status !== "Assigned" || project.gdrive_folder_id) && (
-          <span />
-        )}
+          {/* Tombol Provision Ulang — hanya saat gagal & role Lead_SA/Admin */}
+          {project.folder_provisioning_status === "failed" && canReprovision && (
+            <button
+              onClick={handleReprovision}
+              disabled={isReprovisioning}
+              className="px-2.5 py-1 text-xs font-medium text-red-700 border border-red-200
+                         rounded-lg hover:bg-red-50 transition-colors duration-100
+                         min-h-[36px] disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isReprovisioning ? "Memproses…" : "Provision Ulang"}
+            </button>
+          )}
+        </div>
 
         {/* Tombol Assign */}
         <button
           onClick={onAssign}
-          className="px-3 py-1.5 text-xs font-medium text-white bg-primary-600
+          className="shrink-0 px-3 py-1.5 text-xs font-medium text-white bg-primary-600
                      rounded-lg hover:bg-primary-700 transition-colors duration-100
                      min-h-[36px] min-w-[44px]"
         >
