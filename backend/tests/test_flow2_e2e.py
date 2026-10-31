@@ -64,7 +64,7 @@ def _make_user(role: str, user_id: uuid.UUID | None = None, email: str | None = 
 def _make_project(
     *,
     sales_pic: uuid.UUID,
-    gdrive_folder_id: str | None = "gdrive_solutions_123",
+    gdrive_solutions_folder_id: str | None = "gdrive_solutions_123",
     dq_number: str | None = None,
 ):
     project = MagicMock()
@@ -72,7 +72,9 @@ def _make_project(
     project.project_name = "Proyek Flow 2"
     project.customer_name = "PT Customer Flow"
     project.sales_pic = sales_pic
-    project.gdrive_folder_id = gdrive_folder_id
+    # Master folder selalu ada saat Solutions ada (proxy "sudah ter-provision").
+    project.gdrive_folder_id = "gdrive_master_123" if gdrive_solutions_folder_id else None
+    project.gdrive_solutions_folder_id = gdrive_solutions_folder_id
     project.dq_number = dq_number
     return project
 
@@ -173,11 +175,7 @@ class _FakeFlow2Session:
 
     # --- test helper ---
     def added_of_event(self, event_type: str) -> list:
-        return [
-            o
-            for o in self.added
-            if getattr(o, "event_type", None) == event_type
-        ]
+        return [o for o in self.added if getattr(o, "event_type", None) == event_type]
 
 
 # =============================================================================
@@ -213,9 +211,7 @@ class TestCabangLebih5Hari:
 
         # --- H+3: process → reminder ke Sales, status yellow, belum lock ---
         self._backdate_started_at(session, SLA_YELLOW_THRESHOLD)
-        with patch(
-            "app.services.sla_timer.AsyncSessionLocal", return_value=session
-        ):
+        with patch("app.services.sla_timer.AsyncSessionLocal", return_value=session):
             stats_h3 = await timer.process_sla_actions()
 
         assert stats_h3["reminders_sent"] == 1
@@ -230,12 +226,13 @@ class TestCabangLebih5Hari:
 
         # --- H+5: process → eskalasi ke manager + auto-lock folder Solutions ---
         self._backdate_started_at(session, SLA_RED_THRESHOLD)
-        with patch(
-            "app.services.sla_timer.AsyncSessionLocal", return_value=session
-        ), patch(
-            "app.services.sla_timer.folder_provisioner.lock_solutions_folder",
-            new_callable=AsyncMock,
-        ) as mock_lock:
+        with (
+            patch("app.services.sla_timer.AsyncSessionLocal", return_value=session),
+            patch(
+                "app.services.sla_timer.folder_provisioner.lock_solutions_folder",
+                new_callable=AsyncMock,
+            ) as mock_lock,
+        ):
             stats_h5 = await timer.process_sla_actions()
 
         assert stats_h5["escalations_sent"] == 1
@@ -247,7 +244,7 @@ class TestCabangLebih5Hari:
         assert sales.id in recipients
         # Lock folder Solutions dipanggil dengan folder + email Sales yang benar.
         mock_lock.assert_awaited_once_with(
-            solutions_folder_id=project.gdrive_folder_id,
+            solutions_folder_id=project.gdrive_solutions_folder_id,
             sales_email=sales.email,
         )
         row = session.sla_rows[PROJECT_ID]
@@ -262,7 +259,7 @@ class TestCabangLebih5Hari:
             stopped = await timer.stop_timer(project_id=PROJECT_ID, db=session)
 
         mock_unlock.assert_awaited_once_with(
-            solutions_folder_id=project.gdrive_folder_id,
+            solutions_folder_id=project.gdrive_solutions_folder_id,
             sales_email=sales.email,
         )
         assert stopped.stopped_at is not None
@@ -270,9 +267,7 @@ class TestCabangLebih5Hari:
         assert stopped.unlocked_at is not None
 
         # --- process ulang setelah stop tidak melakukan aksi lagi ---
-        with patch(
-            "app.services.sla_timer.AsyncSessionLocal", return_value=session
-        ):
+        with patch("app.services.sla_timer.AsyncSessionLocal", return_value=session):
             stats_after_stop = await timer.process_sla_actions()
         assert stats_after_stop["total_checked"] == 0
 
@@ -285,7 +280,7 @@ class TestCabangLebih5Hari:
         timer = SLATimer()
         sales = _make_user("Sales")
         manager = _make_user("Lead_SA")
-        project = _make_project(sales_pic=sales.id, gdrive_folder_id=None)
+        project = _make_project(sales_pic=sales.id, gdrive_solutions_folder_id=None)
         session = _FakeFlow2Session(project=project, managers=[manager], sales_user=sales)
 
         await timer.start_timer(
@@ -295,12 +290,13 @@ class TestCabangLebih5Hari:
         )
         self._backdate_started_at(session, SLA_RED_THRESHOLD)
 
-        with patch(
-            "app.services.sla_timer.AsyncSessionLocal", return_value=session
-        ), patch(
-            "app.services.sla_timer.folder_provisioner.lock_solutions_folder",
-            new_callable=AsyncMock,
-        ) as mock_lock:
+        with (
+            patch("app.services.sla_timer.AsyncSessionLocal", return_value=session),
+            patch(
+                "app.services.sla_timer.folder_provisioner.lock_solutions_folder",
+                new_callable=AsyncMock,
+            ) as mock_lock,
+        ):
             stats = await timer.process_sla_actions()
 
         # Eskalasi tetap dikirim, tapi lock tidak dilakukan (folder kosong).
@@ -377,13 +373,16 @@ class TestCabangKurang5Hari:
         _override_current_user(sa)
         _override_db(review_session)
 
-        with patch(
-            "app.api.documents.notification_service.send_notification",
-            new_callable=AsyncMock,
-        ) as mock_notify, patch(
-            "app.api.documents.folder_provisioner.unlock_solutions_folder",
-            new_callable=AsyncMock,
-        ) as mock_unlock:
+        with (
+            patch(
+                "app.api.documents.notification_service.send_notification",
+                new_callable=AsyncMock,
+            ) as mock_notify,
+            patch(
+                "app.api.documents.folder_provisioner.unlock_solutions_folder",
+                new_callable=AsyncMock,
+            ) as mock_unlock,
+        ):
             review_resp = client.patch(
                 f"/api/v1/documents/{document.id_doc}/status",
                 json={"new_status": "Reviewed"},
@@ -398,7 +397,7 @@ class TestCabangKurang5Hari:
         assert event.recipient_user_id == sales.id
         # Akses Drive Solutions dibuka untuk Sales.
         mock_unlock.assert_awaited_once_with(
-            solutions_folder_id=project.gdrive_folder_id,
+            solutions_folder_id=project.gdrive_solutions_folder_id,
             sales_email=sales.email,
         )
 

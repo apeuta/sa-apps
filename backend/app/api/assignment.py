@@ -27,6 +27,10 @@ from app.schemas.assignment import (
     SAAvailability,
 )
 from app.schemas.response import success_response
+from app.services.folder_provisioner import (
+    FolderProvisioningError,
+    folder_provisioner,
+)
 from app.services.sla_timer import sla_timer
 
 logger = logging.getLogger(__name__)
@@ -90,29 +94,84 @@ async def _trigger_folder_provisioner(
     project_id: str,
     sa_email: str,
     lead_sa_email: str,
-    sales_pic_id: str,
+    sales_email: str,
 ) -> None:
     """
     Background task: trigger Folder_Provisioner setelah assignment.
-    Membuat folder proyek di Google Drive secara async.
+    Membuat folder proyek di Google Drive secara async lalu mem-persist
+    id folder (master + Solutions) dan status provisioning ke proyek.
+
+    Membuka session baru via AsyncSessionLocal() karena request session sudah
+    ditutup saat background task berjalan (pola projects.py::_trigger_scoring_engine).
+
+    Alur status (ADR 0005):
+    - set folder_provisioning_status='pending' sebelum memanggil provisioner;
+    - sukses  -> persist gdrive_folder_id + gdrive_solutions_folder_id,
+                 status='provisioned';
+    - gagal (FolderProvisioningError setelah retry internal) -> status='failed'.
+
+    Side-effect ini graceful: error tidak di-re-raise keluar dari task.
 
     Args:
         project_id: ID proyek yang baru di-assign.
         sa_email: Email SA yang ditugaskan.
         lead_sa_email: Email Lead_SA yang melakukan assignment.
-        sales_pic_id: ID Sales PIC proyek.
+        sales_email: Email Sales PIC proyek.
     """
+    from app.core.database import AsyncSessionLocal
+
     logger.info(
         f"[FolderProvisioner] Trigger provisioning untuk proyek {project_id} "
         f"(SA: {sa_email}, Lead: {lead_sa_email})"
     )
-    # TODO: Implementasi lengkap di task 7.2 (Folder_Provisioner)
-    # Saat ini hanya log — folder provisioner akan diimplementasikan terpisah
     try:
-        # Placeholder: akan memanggil FolderProvisioner.provision_project_folder()
-        pass
-    except Exception as e:
-        logger.error(f"[FolderProvisioner] Gagal provision folder proyek {project_id}: {e}")
+        async with AsyncSessionLocal() as db:
+            # Muat proyek dari session baru
+            project_result = await db.execute(
+                select(Project).where(Project.id_project == project_id)
+            )
+            project = project_result.scalar_one_or_none()
+
+            if project is None:
+                logger.error(
+                    f"[FolderProvisioner] Proyek {project_id} tidak ditemukan, skip provisioning."
+                )
+                return
+
+            # Tandai pending sebelum memanggil provisioner
+            project.folder_provisioning_status = "pending"
+            await db.commit()
+
+            try:
+                result = await folder_provisioner.provision_project_folder(
+                    project,
+                    sa_email,
+                    lead_sa_email,
+                    sales_email,
+                )
+            except FolderProvisioningError as e:
+                project.folder_provisioning_status = "failed"
+                await db.commit()
+                logger.error(
+                    f"[FolderProvisioner] Gagal provision folder proyek "
+                    f"{project_id} setelah retry: {e}"
+                )
+                return
+
+            # Sukses — persist kedua id folder + status provisioned
+            project.gdrive_folder_id = result.master
+            project.gdrive_solutions_folder_id = result.solutions
+            project.folder_provisioning_status = "provisioned"
+            await db.commit()
+
+            logger.info(
+                f"[FolderProvisioner] Folder proyek {project_id} berhasil "
+                f"di-provision (master={result.master}, solutions={result.solutions})."
+            )
+    except Exception as e:  # noqa: BLE001 - background task tidak boleh meledak keluar
+        logger.error(
+            f"[FolderProvisioner] Error tidak terduga saat provisioning proyek {project_id}: {e}"
+        )
 
 
 @router.get(
@@ -154,6 +213,7 @@ async def get_pending_projects(
             assigned_at=p.assigned_at,
             target_submit=p.target_submit,
             gdrive_folder_id=p.gdrive_folder_id,
+            folder_provisioning_status=p.folder_provisioning_status,
         ).model_dump(mode="json")
         for p in projects
     ]
@@ -612,12 +672,19 @@ async def assign_sa_to_project(
             ),
         )
 
+    # === 2b. Lookup email Sales (requester) untuk provisioning folder ===
+    sales_result = await db.execute(select(User).where(User.id == project.sales_pic))
+    sales_user = sales_result.scalar_one_or_none()
+    sales_email = sales_user.email if sales_user else None
+
     # === 3. Update proyek ===
     now = datetime.now(timezone.utc)
     project.status = "Assigned"
     project.assigned_sa = body.sa_id
     project.assigned_at = now
     project.updated_at = now
+    # Tandai provisioning akan berjalan (background task men-set 'provisioned'/'failed')
+    project.folder_provisioning_status = "pending"
 
     # === 4. Insert notifikasi ke SA ===
     notification = NotificationLog(
@@ -661,13 +728,24 @@ async def assign_sa_to_project(
         logger.warning(f"Gagal memulai SLA timer untuk proyek {project_id}: {e}")
 
     # === 6. Trigger Folder_Provisioner async ===
-    background_tasks.add_task(
-        _trigger_folder_provisioner,
-        project_id,
-        sa_user.email,
-        current_user.email,
-        str(project.sales_pic),
-    )
+    # Hanya dijadwalkan bila email Sales ditemukan (provisioner butuh email Sales
+    # untuk permission Viewer pada Inventory). folder_scheduled mencerminkan apakah
+    # task benar-benar dijadwalkan (bukan hardcode True).
+    folder_scheduled = False
+    if sales_email is not None:
+        background_tasks.add_task(
+            _trigger_folder_provisioner,
+            project_id,
+            sa_user.email,
+            current_user.email,
+            sales_email,
+        )
+        folder_scheduled = True
+    else:
+        logger.warning(
+            f"Email Sales (sales_pic={project.sales_pic}) tidak ditemukan untuk "
+            f"proyek {project_id}; folder provisioning tidak dijadwalkan."
+        )
 
     # === 7. Build response ===
     response_data = AssignmentResponse(
@@ -682,10 +760,11 @@ async def assign_sa_to_project(
             assigned_at=project.assigned_at,
             target_submit=project.target_submit,
             gdrive_folder_id=project.gdrive_folder_id,
+            folder_provisioning_status=project.folder_provisioning_status,
         ),
         assigned_sa_name=sa_user.name,
         notification_sent=True,
-        folder_provisioning_triggered=True,
+        folder_provisioning_triggered=folder_scheduled,
     )
 
     return success_response(
@@ -810,4 +889,102 @@ async def reassign_sa_to_project(
             "status": project.status,
         },
         message=f"SA proyek '{project.project_name}' berhasil diubah ke {sa_user.name}.",
+    )
+
+
+@router.post(
+    "/projects/{project_id}/provision-folder",
+    summary="Provision ulang folder proyek",
+    description=(
+        "Men-trigger ulang provisioning folder Google Drive untuk proyek yang "
+        "folder-nya belum ter-provision (gdrive_folder_id masih kosong). "
+        "Idempoten: menolak (409) bila folder sudah ada. Hanya untuk Lead_SA atau Admin."
+    ),
+)
+async def provision_folder(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Re-provision folder proyek (ADR 0006: idempotency guard sederhana).
+
+    Flow:
+    1. Validasi role Lead_SA/Admin.
+    2. Validasi proyek ada (404).
+    3. Idempotency: jika gdrive_folder_id sudah terisi -> 409 Conflict.
+    4. Jika kosong: set folder_provisioning_status='pending' (commit) lalu
+       jadwalkan _trigger_folder_provisioner dengan email SA assigned (lookup
+       assigned_sa), Lead_SA (current_user.email), dan Sales (lookup sales_pic).
+
+    Memakai jalur persist yang sama dengan assignment (background task mem-persist
+    gdrive_folder_id + gdrive_solutions_folder_id + status).
+    """
+    _require_lead_sa(current_user)
+
+    # === 1. Validasi proyek ada ===
+    project_result = await db.execute(select(Project).where(Project.id_project == project_id))
+    project = project_result.scalar_one_or_none()
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
+        )
+
+    # === 2. Idempotency guard: folder sudah ada -> tolak ===
+    if project.gdrive_folder_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Folder proyek '{project_id}' sudah ter-provision "
+                f"(gdrive_folder_id='{project.gdrive_folder_id}'). "
+                f"Re-provision hanya untuk proyek yang folder-nya belum ada."
+            ),
+        )
+
+    # === 3. Lookup email SA assigned & Sales (requester) ===
+    sa_email = None
+    if project.assigned_sa is not None:
+        sa_result = await db.execute(select(User).where(User.id == project.assigned_sa))
+        sa_user = sa_result.scalar_one_or_none()
+        sa_email = sa_user.email if sa_user else None
+
+    sales_result = await db.execute(select(User).where(User.id == project.sales_pic))
+    sales_user = sales_result.scalar_one_or_none()
+    sales_email = sales_user.email if sales_user else None
+
+    if sa_email is None or sales_email is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Provisioning tidak bisa dijadwalkan: email SA assigned dan/atau "
+                "Sales PIC tidak ditemukan. Pastikan proyek sudah di-assign ke SA."
+            ),
+        )
+
+    # === 4. Tandai pending lalu jadwalkan provisioning ===
+    project.folder_provisioning_status = "pending"
+    await db.commit()
+
+    background_tasks.add_task(
+        _trigger_folder_provisioner,
+        project_id,
+        sa_email,
+        current_user.email,
+        sales_email,
+    )
+
+    logger.info(
+        f"Re-provision folder dijadwalkan untuk proyek {project_id} oleh {current_user.email}."
+    )
+
+    return success_response(
+        data={
+            "id_project": project.id_project,
+            "folder_provisioning_status": project.folder_provisioning_status,
+            "folder_provisioning_triggered": True,
+        },
+        message=f"Provisioning folder untuk proyek '{project.project_name}' telah dijadwalkan.",
     )

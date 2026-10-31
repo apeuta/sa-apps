@@ -140,16 +140,16 @@ async def _handle_doc_ready(document: Document, db: AsyncSession) -> None:
         logger.error(f"Gagal emit doc_ready untuk dokumen {document.id_doc}: {e}")
 
     # 2. Buka permission Drive Solutions untuk Sales (Viewer)
-    if not project.gdrive_folder_id:
+    if not project.gdrive_solutions_folder_id:
         logger.info(
-            f"Proyek '{project.id_project}' belum punya gdrive_folder_id; "
+            f"Proyek '{project.id_project}' belum punya gdrive_solutions_folder_id; "
             f"skip buka akses Solutions (notifikasi doc_ready tetap terkirim)."
         )
         return
 
     try:
         await folder_provisioner.unlock_solutions_folder(
-            solutions_folder_id=project.gdrive_folder_id,
+            solutions_folder_id=project.gdrive_solutions_folder_id,
             sales_email=sales_user.email,
         )
     except Exception as e:  # noqa: BLE001 - side-effect tidak boleh menggagalkan transisi

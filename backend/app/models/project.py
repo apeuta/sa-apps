@@ -102,6 +102,16 @@ class Project(Base):
         nullable=True,
         comment="ID folder Google Drive proyek",
     )
+    gdrive_solutions_folder_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="ID subfolder Solutions di Google Drive (ADR 0005)",
+    )
+    folder_provisioning_status: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="Status provisioning folder: pending/provisioned/failed",
+    )
     # Konfigurasi handover PMO/Delivery (per-proyek, requirement 17.6)
     pmo_lead_email: Mapped[Optional[str]] = mapped_column(
         String(255),
@@ -150,6 +160,11 @@ class Project(Base):
         CheckConstraint(
             "dq_number IS NULL OR dq_number ~ '^[A-Za-z0-9\\-]{5,20}$'",
             name="chk_dq_number_format",
+        ),
+        CheckConstraint(
+            "folder_provisioning_status IS NULL OR "
+            "folder_provisioning_status IN ('pending','provisioned','failed')",
+            name="chk_projects_folder_provisioning_status",
         ),
         {"comment": "Tabel proyek presales Portal SA"},
     )

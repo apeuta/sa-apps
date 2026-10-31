@@ -269,6 +269,7 @@ async def list_projects(
                 "target_submit": p.target_submit.isoformat() if p.target_submit else None,
                 "assigned_sa": str(p.assigned_sa) if p.assigned_sa else None,
                 "gdrive_folder_id": p.gdrive_folder_id,
+                "folder_provisioning_status": p.folder_provisioning_status,
                 "created_at": p.created_at.isoformat() if p.created_at else None,
                 "updated_at": p.updated_at.isoformat() if p.updated_at else None,
             }
@@ -446,6 +447,7 @@ async def get_project_detail(
         else None,
         "collaborators": collab_list,
         "gdrive_folder_id": project.gdrive_folder_id,
+        "folder_provisioning_status": project.folder_provisioning_status,
         "created_at": project.created_at.isoformat() if project.created_at else None,
         "updated_at": project.updated_at.isoformat() if project.updated_at else None,
     }

@@ -201,11 +201,13 @@ class TestAssignmentWiresStartTimer:
         sa = _make_sa()
 
         mock_session = AsyncMock()
-        # execute() dipanggil: 1) load project, 2) load SA user.
+        # execute() dipanggil: 1) load project, 2) load SA user,
+        # 3) lookup Sales (sales_pic) untuk provisioning, 4) count subtask seed.
         mock_session.execute = AsyncMock(
             side_effect=[
                 _execute_result_scalar(project),
                 _execute_result_scalar(sa),
+                _execute_result_scalar(_make_sa()),
                 # count subtask untuk auto-seed checklist (0 → seeding jalan)
                 _execute_result_scalar(0),
             ]
@@ -244,6 +246,7 @@ class TestAssignmentWiresStartTimer:
             side_effect=[
                 _execute_result_scalar(project),
                 _execute_result_scalar(sa),
+                _execute_result_scalar(_make_sa()),
                 # count subtask untuk auto-seed checklist (0 → seeding jalan)
                 _execute_result_scalar(0),
             ]

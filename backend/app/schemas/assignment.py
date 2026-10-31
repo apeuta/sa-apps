@@ -44,6 +44,7 @@ class ProjectBrief(BaseModel):
     assigned_at: Optional[datetime] = None
     target_submit: date
     gdrive_folder_id: Optional[str] = None
+    folder_provisioning_status: Optional[str] = None
 
 
 class AssignmentResponse(BaseModel):
