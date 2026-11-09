@@ -33,7 +33,7 @@ Portal SA adalah Progressive Web App (PWA) untuk manajemen proyek pre-sales dan 
 |-------|-----------|
 | Frontend | Next.js 14+ (App Router), TypeScript, Tailwind CSS, Zustand, SWR |
 | Backend | FastAPI (Python 3.12+), SQLAlchemy async, Pydantic |
-| Database | PostgreSQL 16 |
+| Database | PostgreSQL 18 |
 | AI | Google Gemini API (via LLM Provider abstraction — multi-provider ready) |
 | Auth | Google OAuth 2.0 + JWT |
 | Integration | Google Drive API, Google Calendar API, Gmail API |
@@ -339,7 +339,7 @@ Setelah aplikasi berjalan:
 - **Calendar OAuth Flow** — Sinkronisasi Google Calendar menggunakan OAuth terpisah dengan token di URL hash (tidak dikirim ke server).
 - **BANT Pass/Fail Display** — Frontend hanya menampilkan "BANT Passed" atau "BANT not passed" (skor numerik disembunyikan, dihitung di backend).
 - **Detail BANT Tetap Ditampilkan** — Informasi dasar proyek (Budget MRR, PIC Customer, Kebutuhan Teknis, Target Timeline) tetap ditampilkan sebagai info proyek.
-- **Release Script** — Script `scripts/release.sh` untuk build & push image Docker hanya dengan specify versi (`./scripts/release.sh v4.2`).
+- **Publish Script** — Script `scripts/publish.sh` untuk build & push image Docker, dijalankan via `mise run publish [backend|frontend]` (versi ditanya per komponen).
 
 **Bug Fixes:**
 - **Calendar Sync 502** — Implementasi frontend Google OAuth token exchange untuk calendar sync (sebelumnya error 502).

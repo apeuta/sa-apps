@@ -19,11 +19,11 @@ Tool yang dikelola saat ini:
 
 | Tool | Versi (pin) |
 |------|-------------|
-| Node.js | 24 |
+| Node.js | 26 |
 | pnpm | 12 |
 | uv | 0.13 |
 
-Versi di-pin ke major agar selaras dengan Dockerfile. **Docker tetap menjadi sumber kebenaran untuk build produksi** (`python:3.12-slim`, `node:24-alpine`); mise menyediakan toolchain lokal yang setara untuk development. Ketika Anda menaikkan versi tool, perbarui `mise.toml` dan Dockerfile terkait bersamaan agar tidak drift.
+Versi di-pin ke major agar selaras dengan Dockerfile. **Docker tetap menjadi sumber kebenaran untuk build produksi** (`python:3.12-slim`, `node:26-alpine`); mise menyediakan toolchain lokal yang setara untuk development. Ketika Anda menaikkan versi tool, perbarui `mise.toml` dan Dockerfile terkait bersamaan agar tidak drift.
 
 Python **tidak** dikelola mise. Interpreter dikelola uv dan versinya mengikuti `backend/.python-version` (3.12); `uv sync` di `backend/` mengunduhnya otomatis. Saat menaikkan versi Python, ubah `backend/.python-version` dan Dockerfile bersamaan.
 
@@ -35,8 +35,8 @@ PostgreSQL (versi 16) dijalankan via Docker Compose, bukan mise.
 
 mise **tidak** mengelola environment variables di repo ini — hanya runtime. Env di-handle sesuai konteks:
 
-- **Docker Compose** membaca `.env` di root (dari `.env.example`) untuk mengisi variable service di `compose.yaml`. Ini jalur development utama (`docker compose up`).
-- **Frontend lokal** memakai `frontend/.env.local` (dari `frontend/.env.local.example`) untuk `NEXT_PUBLIC_*`.
+- **Docker Compose** membaca `.env` di root (dari `.env.example`) untuk mengisi variable service di `compose.yaml`. Ini jalur development utama (`docker compose up`), dan jalur yang mengisi `NEXT_PUBLIC_*` serta `BACKEND_URL`/`FRONTEND_URL` untuk frontend.
+- **Frontend lokal (`next dev`)** jalan tanpa env file: `NEXT_PUBLIC_API_URL` punya fallback `"/api/v1"` di setiap call site. Kalau perlu override lokal, buat sendiri `frontend/.env.local` (di-ignore git) — tidak ada template yang di-commit karena nilai default sudah tercakup fallback dan root `.env`.
 
 Pemisahan ini disengaja: secret backend (DB password, API key, OAuth secret) tidak boleh bocor ke environment build frontend, dan beberapa nilai (`DATABASE_URL`, `BACKEND_URL`) memakai hostname internal jaringan Docker yang tidak valid di shell lokal. Jangan inject `.env` root ke seluruh repo via mise. `.env` dan `.env.local` di-ignore git — jangan commit; perbarui file `*.example` saat menambah variable.
 
@@ -44,7 +44,7 @@ Pemisahan ini disengaja: secret backend (DB password, API key, OAuth secret) tid
 
 ### Full stack lokal (Docker Compose)
 
-`compose.yaml` adalah file produksi/VM: ia memakai prebuilt remote image dan host bind mount ke path VM (`/opt/docker_srv/...`) yang tidak ada di mesin development. Untuk menjalankan full stack di mesin lokal, pakai override `compose.local.yaml` yang di-track git. Override ini build dari source lokal dan mengganti bind mount VM dengan named volume, jadi stack naik di mana pun Docker tersedia (Linux, Windows/WSL, macOS).
+`compose.yaml` adalah file produksi/VM: ia memakai prebuilt remote image dan named volume (`postgres-data`, `backend-data`, `backend-logs`). Nama volume final diawali nama stack/project, jadi nama stack di Portainer harus tetap `sa-portal` agar data lama terbaca. Untuk menjalankan full stack di mesin lokal, pakai override `compose.local.yaml` yang di-track git. Override ini build dari source lokal dan menambah seed demo, jadi stack naik di mana pun Docker tersedia (Linux, Windows/WSL, macOS).
 
 Override ini **opt-in**: namanya sengaja bukan `compose.override.yaml` agar Docker Compose tidak meng-auto-merge-nya. Panggil eksplisit dengan `-f` dari root repo:
 
@@ -160,7 +160,7 @@ Perubahan schema melewati migration Alembic di `backend/alembic/versions/`. Keti
 
 ## Rilis & Penomoran Versi
 
-Image Docker (backend + frontend) dirilis ke GHCR via `scripts/release.sh <version>` lalu di-deploy di Portainer.
+Image Docker dirilis ke registry via `mise run publish [backend|frontend]` (wrapper `scripts/publish.sh`) lalu di-deploy di Portainer. Registry dan owner dibaca dari `IMAGE_REGISTRY`/`IMAGE_OWNER` di `.env`; versi backend dan frontend ditanyakan terpisah (kosongkan untuk melewati) dan dilacak lewat `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`.
 
 **Aturan penomoran versi (wajib):**
 
@@ -170,7 +170,7 @@ Image Docker (backend + frontend) dirilis ke GHCR via `scripts/release.sh <versi
 - Saat MINOR mencapai 99 naik major dan reset (`v4.99` → `v5.00`).
 - Tidak valid: `v4.9` (minor satu digit), `v4.100` (tiga digit).
 
-`scripts/release.sh` memvalidasi format ini dan menolak tag yang tidak sesuai. Build selalu untuk backend dan frontend dengan tag yang sama kecuali ada alasan spesifik memakai `--backend-only`/`--frontend-only`.
+`scripts/publish.sh` memvalidasi format ini dan menolak tag yang tidak sesuai. Backend dan frontend memiliki versi sendiri-sendiri dan tidak harus sama.
 
 ---
 

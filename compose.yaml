@@ -1,6 +1,10 @@
+# Image backend dipakai bersama oleh backend dan backend-init.
+x-backend-image: &backend-image
+  image: ${IMAGE_REGISTRY:-docker.io}/${IMAGE_OWNER:-nikkisatmaka}/sa-portal-backend:${BACKEND_IMAGE_TAG:-latest}
+
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: sa-portal-db
     restart: always
     environment:
@@ -11,8 +15,13 @@ services:
     # Backend mengakses lewat network internal (db:5432).
     ports:
       - "127.0.0.1:5433:5432"
+    # PG18: image memindahkan VOLUME ke /var/lib/postgresql dan menyimpan data
+    # di subdir versi (/var/lib/postgresql/18/docker). Mount HARUS ke
+    # /var/lib/postgresql, bukan /var/lib/postgresql/data (image 18 menolak
+    # start bila menemukan layout lama di .../data). Lihat
+    # docker-library/postgres PR #1259.
     volumes:
-      - /opt/docker_srv/sa-portal/postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
@@ -28,7 +37,7 @@ services:
   # Backup DB tetap dilakukan manual sebelum deploy. Migration harus kompatibel
   # mundur (expand/contract) karena rollback image tidak me-rollback schema.
   backend-init:
-    image: ghcr.io/apeuta/sa-portal-backend:${IMAGE_TAG:-latest}
+    <<: *backend-image
     restart: "no"
     depends_on:
       db:
@@ -41,7 +50,7 @@ services:
       - sa-network
 
   backend:
-    image: ghcr.io/apeuta/sa-portal-backend:${IMAGE_TAG:-latest}
+    <<: *backend-image
     container_name: sa-portal-backend
     restart: always
     depends_on:
@@ -60,6 +69,8 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS}
+      # JSON email/wildcard -> role. Kosong = semua user baru jadi SA (tanpa Admin).
+      ROLE_MAPPING: ${ROLE_MAPPING:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
@@ -72,13 +83,13 @@ services:
     ports:
       - "8555:8000"
     volumes:
-      - /opt/docker_srv/sa-portal/backend-data:/app/data
-      - /opt/docker_srv/sa-portal/backend-logs:/app/logs
+      - backend-data:/app/data
+      - backend-logs:/app/logs
     networks:
       - sa-network
 
   frontend:
-    image: ghcr.io/apeuta/sa-portal-frontend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-docker.io}/${IMAGE_OWNER:-nikkisatmaka}/sa-portal-frontend:${FRONTEND_IMAGE_TAG:-latest}
     container_name: sa-portal-frontend
     restart: always
     depends_on:
@@ -95,3 +106,37 @@ services:
 networks:
   sa-network:
     driver: bridge
+
+# Named volume dengan data fisik di /opt/docker_srv/sa-portal/ (partisi /var
+# kecil di produksi). Nama final = <nama stack>_<volume>, jadi nama stack di
+# Portainer harus tetap `sa-portal`.
+# `driver: local` + `type: none, o: bind` membuat named volume yang hanya
+# menunjuk ke direktori host. Direktori HARUS sudah ada sebelum `up`
+# (Docker tidak membuatnya):
+#   sudo mkdir -p /opt/docker_srv/sa-portal/{postgres-data,backend-data,backend-logs}
+# Konfigurasi volume yang sudah ada tidak berubah otomatis: volume lama di
+# /var/lib/docker harus dimigrasi lalu dihapus (lihat CONTRIBUTING/ops).
+# PG18: container mount kini ke /var/lib/postgresql, jadi data fisik berada di
+# subdir versi host: /opt/docker_srv/sa-portal/postgres-data/18/docker. Device
+# bind di bawah TIDAK berubah (subdir dibuat di dalamnya). Host produksi yang
+# masih punya data layout lama LANGSUNG di postgres-data/ harus dimigrasi lewat
+# pg_upgrade/dump-restore dulu (lihat deployment.md) sebelum deploy image 18.
+volumes:
+  postgres-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/docker_srv/sa-portal/postgres-data
+  backend-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/docker_srv/sa-portal/backend-data
+  backend-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/docker_srv/sa-portal/backend-logs
