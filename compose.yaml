@@ -69,9 +69,12 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS}
-      # JSON email/wildcard -> role. Kosong = semua user baru jadi SA (tanpa Admin).
+      # JSON email/wildcard -> role fungsional. Kosong = semua user baru jadi SA.
       ROLE_MAPPING: ${ROLE_MAPPING:-}
+      # Email (koma) yang menjadi admin (is_admin) saat login pertama. Kosong = tanpa admin awal.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gemini-3.8-flash}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
@@ -80,8 +83,15 @@ services:
       GUARDRAIL_PII_DETECTION_ENABLED: ${GUARDRAIL_PII_DETECTION_ENABLED:-true}
       GMAIL_CREDENTIALS: ${GMAIL_CREDENTIALS:-}
       GMAIL_SENDER: ${GMAIL_SENDER:-}
+      # Google Drive: service account key + writable Shared Drive root folder ID.
+      # Empty settings keep provisioning gracefully failed. See deployment.md.
+      GDRIVE_SERVICE_ACCOUNT_KEY: ${GDRIVE_SERVICE_ACCOUNT_KEY:-}
+      GDRIVE_PARENT_FOLDER_ID: ${GDRIVE_PARENT_FOLDER_ID:-}
+      # Jumlah proxy tepercaya penambah X-Forwarded-For (0 = abaikan XFF). Lihat deployment.md.
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
     ports:
-      - "8555:8000"
+      # Hanya loopback VM: health check lokal jalan, tidak terjangkau dari luar VM.
+      - "127.0.0.1:8555:8000"
     volumes:
       - backend-data:/app/data
       - backend-logs:/app/logs

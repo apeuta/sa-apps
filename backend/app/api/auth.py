@@ -7,25 +7,26 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from cryptography.fernet import InvalidToken
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.auth import (
-    LoginResponse,
-    OAuthError,
-    RefreshRequest,
-    TokenPair,
+    HandoffRequest,
     UserResponse,
 )
 from app.services.auth_service import (
     AuthServiceError,
+    CALENDAR_SESSION_TTL_SECONDS,
     DomainNotAllowedError,
     TokenError,
     auth_service,
@@ -37,6 +38,51 @@ from app.services.auth_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+CALENDAR_SESSION_COOKIE = "calendar_session"
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        "refresh_token", token, httponly=True,
+        secure=settings.ENVIRONMENT == "production", samesite="lax",
+        max_age=7 * 24 * 60 * 60, path="/api/v1/auth",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        "refresh_token", httponly=True,
+        secure=settings.ENVIRONMENT == "production", samesite="lax",
+        path="/api/v1/auth",
+    )
+
+
+def _set_calendar_session_cookie(response: Response, session_id: str) -> None:
+    response.set_cookie(
+        CALENDAR_SESSION_COOKIE,
+        session_id,
+        httponly=True,
+        secure=settings.ENVIRONMENT == "production",
+        samesite="lax",
+        max_age=CALENDAR_SESSION_TTL_SECONDS,
+        path="/api/v1",
+    )
+
+
+def clear_calendar_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        CALENDAR_SESSION_COOKIE,
+        httponly=True,
+        secure=settings.ENVIRONMENT == "production",
+        samesite="lax",
+        path="/api/v1",
+    )
+
+
+def _tolak_origin_silang(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if origin and _origin(origin) != _origin(settings.FRONTEND_URL):
+        raise HTTPException(status_code=403, detail="Origin tidak diizinkan.")
 
 
 @router.get("/config", summary="Auth Configuration Status")
@@ -76,20 +122,32 @@ DEMO_USERS = {
     "Lead_SA": {
         "email": "demo-lead@portal-sa.local",
         "name": "Demo Lead SA",
+        "is_admin": True,
         "google_id": "demo-google-id-lead-sa",
     },
-    "Admin": {
-        "email": "demo-admin@portal-sa.local",
-        "name": "Demo Admin",
-        "google_id": "demo-google-id-admin",
+    "Product": {
+        "email": "demo-product@portal-sa.local",
+        "name": "Demo Product",
+        "google_id": "demo-google-id-product",
     },
 }
+
+def _origin(url: str) -> tuple[str, str]:
+    """(scheme, host:port) dari sebuah URL, untuk membandingkan origin."""
+    parsed = urlparse(url)
+    return parsed.scheme.lower(), parsed.netloc.lower()
+
+
+def _frontend_url_diizinkan(url: str) -> bool:
+    """True hanya bila `url` bermuatan origin yang sama dengan FRONTEND_URL."""
+    asal = _origin(url)
+    return bool(asal[0] and asal[1]) and asal == _origin(settings.FRONTEND_URL)
 
 
 class DemoLoginRequest(BaseModel):
     """Request body untuk demo login."""
 
-    role: Literal["Sales", "SA", "Lead_SA", "Admin"]
+    role: Literal["Sales", "Product", "SA", "Lead_SA"]
 
 
 @router.post("/demo-login", summary="Demo Login (bypass OAuth)")
@@ -111,10 +169,10 @@ async def demo_login(
             detail="Demo mode tidak aktif. Gunakan Google OAuth untuk login.",
         )
 
-    # Ambil konfigurasi demo user berdasarkan role
+    # Demo login tetap memakai akun default per role; field tambahan diabaikan.
     demo_config = DEMO_USERS[body.role]
 
-    # Cari user di database berdasarkan email (INSERT IF NOT EXISTS)
+    # Cari user demo berdasarkan email.
     stmt = select(User).where(User.email == demo_config["email"])
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
@@ -128,7 +186,8 @@ async def demo_login(
             id=user_id,
             email=demo_config["email"],
             name=demo_config["name"],
-            role=body.role,
+            role=demo_config.get("role", body.role),
+            is_admin=demo_config.get("is_admin", False),
             google_id=demo_config["google_id"],
             avatar_url=None,
             created_at=datetime.now(timezone.utc),
@@ -137,14 +196,21 @@ async def demo_login(
         db.add(user)
         await db.commit()
         await db.refresh(user)
+    else:
+        # Sinkronkan flag admin akun demo dengan konfigurasi role.
+        user.is_admin = demo_config.get("is_admin", False)
 
     # Generate JWT token pair — menggunakan method yang sama dengan OAuth flow
-    tokens = auth_service._create_token_pair(user)
-
-    return LoginResponse(
-        user=UserResponse.model_validate(user),
-        tokens=tokens,
+    tokens = auth_service._create_token_pair(user, db)
+    await db.commit()
+    response = JSONResponse(
+        {
+            "user": UserResponse.model_validate(user).model_dump(mode="json"),
+            "tokens": {"access_token": tokens.access_token, "expires_in": tokens.expires_in},
+        }
     )
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return response
 
 
 def _get_token_from_header(request: Request) -> str:
@@ -180,7 +246,7 @@ async def callback(
     Handle callback dari Google setelah user melakukan consent.
     Mendukung 2 flow:
     - Login biasa: state kosong atau URL redirect biasa
-    - Calendar auth: state diawali 'calendar_auth|' → tukar code, redirect ke frontend dengan token
+    - Calendar auth: state diawali 'calendar_auth|' → tukar code, redirect ke frontend dengan kode sekali pakai
     """
     # Handle jika user membatalkan consent
     if error:
@@ -195,18 +261,36 @@ async def callback(
             detail="Authorization code tidak ditemukan.",
         )
 
-    # === Calendar Auth Flow ===
-    # State format: "calendar_auth|{frontend_url}"
     if state and state.startswith("calendar_auth|"):
-        frontend_url = state.split("|", 1)[1] if "|" in state else "/"
+        state_parts = state.split("|", 2)
+        frontend_url = state_parts[1] if len(state_parts) > 1 else "/"
+        state_code = state_parts[2] if len(state_parts) > 2 else None
+        # The OAuth state binds this callback to the authenticated user who started it.
+        if not _frontend_url_diizinkan(frontend_url):
+            raise HTTPException(
+                status_code=400,
+                detail="State tidak valid: URL tujuan harus berada di origin frontend.",
+            )
         try:
+            if not state_code:
+                raise TokenError("State Calendar tidak valid.")
+            auth_state = await auth_service.consume_handoff(db, state_code, "calendar")
+            if auth_state.user_id is None or auth_state.encrypted_value is not None:
+                raise TokenError("State Calendar tidak valid.")
             google_tokens = await auth_service._exchange_code(code)
-            gcal_token = google_tokens.get("access_token", "")
-            # Redirect ke frontend dengan token di URL hash (tidak dikirim ke server)
-            redirect_url = f"{frontend_url}#gcal_token={gcal_token}"
+            gcal_token = google_tokens.get("access_token")
+            if not gcal_token:
+                raise TokenError("Token Calendar tidak tersedia.")
+            handoff_code = await auth_service.create_handoff(
+                db,
+                purpose="calendar",
+                user_id=auth_state.user_id,
+                value=gcal_token,
+            )
+            redirect_url = f"{frontend_url}#gcal_code={handoff_code}"
             return RedirectResponse(url=redirect_url)
-        except Exception as e:
-            logger.error(f"Calendar OAuth token exchange failed: {e}")
+        except Exception:
+            logger.error("Calendar OAuth token exchange failed")
             redirect_url = f"{frontend_url}#gcal_error=token_exchange_failed"
             return RedirectResponse(url=redirect_url)
 
@@ -220,41 +304,109 @@ async def callback(
     except AuthServiceError as e:
         raise HTTPException(status_code=400, detail=e.detail)
 
-    return LoginResponse(
-        user=UserResponse.model_validate(user),
-        tokens=tokens,
-    )
+    handoff_code = await auth_service.create_handoff(db, purpose="login", user_id=user.id)
+    return {"handoff_code": handoff_code}
 
 
-@router.post("/refresh", summary="Refresh Access Token", response_model=TokenPair)
+@router.post("/callback/exchange", summary="Tukar kode OAuth sekali pakai")
+async def exchange_callback(
+    body: HandoffRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    _tolak_origin_silang(request)
+    try:
+        handoff = await auth_service.consume_handoff(db, body.code, "login")
+        user = await db.get(User, handoff.user_id)
+        if user is None:
+            raise TokenError("User tidak ditemukan.")
+        tokens = auth_service._create_token_pair(user, db)
+        await db.commit()
+    except TokenError as e:
+        raise HTTPException(status_code=401, detail=e.detail)
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return {
+        "user": UserResponse.model_validate(user),
+        "access_token": tokens.access_token,
+        "expires_in": tokens.expires_in,
+    }
+
+
+@router.post("/calendar/exchange", summary="Tukar kode Calendar sekali pakai")
+async def exchange_calendar(
+    body: HandoffRequest,
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _tolak_origin_silang(request)
+    try:
+        handoff = await auth_service.consume_handoff(db, body.code, "calendar")
+        if handoff.user_id != current_user.id or not handoff.encrypted_value:
+            raise TokenError("Kode kalender tidak valid.")
+        try:
+            token = auth_service._fernet().decrypt(handoff.encrypted_value.encode()).decode()
+        except (InvalidToken, UnicodeDecodeError) as exc:
+            raise TokenError("Kode kalender tidak valid.") from exc
+        session_id = await auth_service.create_calendar_session(
+            db,
+            user_id=current_user.id,
+            access_token=token,
+            previous_session=request.cookies.get(CALENDAR_SESSION_COOKIE),
+        )
+        await db.commit()
+    except TokenError as e:
+        raise HTTPException(status_code=401, detail=e.detail)
+    _set_calendar_session_cookie(response, session_id)
+    return {"connected": True}
+
+@router.post("/refresh", summary="Refresh Access Token")
 async def refresh(
-    body: RefreshRequest,
+    request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     """
     Refresh access token menggunakan refresh token yang masih valid.
     Mengembalikan token pair baru (access + refresh).
     """
+    _tolak_origin_silang(request)
     try:
-        tokens = await auth_service.refresh_token(body.refresh_token, db)
+        token = request.cookies.get("refresh_token")
+        if not token:
+            raise TokenError("Refresh cookie tidak ditemukan.")
+        tokens = await auth_service.refresh_token(token, db)
     except TokenError as e:
-        raise HTTPException(status_code=401, detail=e.detail)
+        _clear_refresh_cookie(response)
+        response.status_code = 401
+        return {"detail": e.detail}
 
-    return tokens
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return {"access_token": tokens.access_token, "expires_in": tokens.expires_in}
 
 
 @router.post("/logout", summary="Logout / Revoke Session")
-async def logout(request: Request):
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Revoke session user (logout).
     Client harus menghapus token dari storage setelah endpoint ini dipanggil.
     """
-    token = _get_token_from_header(request)
-
-    try:
-        auth_service.revoke_session(token)
-    except TokenError as e:
-        raise HTTPException(status_code=401, detail=e.detail)
+    _tolak_origin_silang(request)
+    refresh_token = request.cookies.get("refresh_token")
+    if refresh_token:
+        await auth_service.revoke_refresh_token(refresh_token, db)
+    await auth_service.revoke_calendar_session(
+        db, request.cookies.get(CALENDAR_SESSION_COOKIE)
+    )
+    await db.commit()
+    clear_calendar_session_cookie(response)
+    _clear_refresh_cookie(response)
 
     return {"message": "Logout berhasil."}
 

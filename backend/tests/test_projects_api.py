@@ -3,6 +3,7 @@ Unit tests untuk API endpoint POST /api/v1/projects.
 Memverifikasi validasi input, file upload, pembuatan record, dan trigger scoring.
 """
 
+import json
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
@@ -14,6 +15,21 @@ from fastapi import status
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.customer import Customer
+from app.models.project import Project
+
+# Jawaban kuesioner minimal valid (skor rubrik 22 → Intake + Need Clarification, tanpa notifikasi)
+QA = json.dumps(
+    {
+        "budget_dialokasikan": "Tidak tahu",
+        "peran_pic": "Tidak tahu",
+        "masalah_bisnis": "Butuh cloud",
+        "jenis_workload": "Lainnya",
+        "lingkungan": "Cloud",
+        "skala": "5 server",
+        "target_go_live": "Tidak tahu",
+    }
+)
 
 # =============================================================================
 # Fixtures & Helpers
@@ -26,7 +42,7 @@ def _mock_user():
     user.id = uuid.uuid4()
     user.email = "sales@company.com"
     user.name = "Test Sales"
-    user.role = "Sales"
+    user.role = "Product"  # Product: product_pic otomatis dirinya (tanpa lookup DB)
     return user
 
 
@@ -49,26 +65,33 @@ def mock_auth_and_db():
     mock_user = _mock_user()
 
     # Patch get_current_user dependency
-    with patch("app.api.projects.get_current_user", return_value=mock_user) as auth_mock:
+    with patch("app.api.project_intake_api.get_current_user", return_value=mock_user) as auth_mock:
         # Patch database session
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_session.commit = AsyncMock()
         mock_session.refresh = AsyncMock()
 
-        with patch("app.api.projects.get_db") as db_mock:
-            # Override dependency
-            async def override_get_db():
-                yield mock_session
+        async def flush():
+            for call in mock_session.add.call_args_list:
+                entity = call.args[0]
+                if isinstance(entity, Customer) and entity.id is None:
+                    entity.id = uuid.uuid4()
 
-            app.dependency_overrides[
-                __import__("app.core.database", fromlist=["get_db"]).get_db
-            ] = override_get_db
-            app.dependency_overrides[
-                __import__("app.core.dependencies", fromlist=["get_current_user"]).get_current_user
-            ] = lambda: mock_user
+        mock_session.flush = AsyncMock(side_effect=flush)
+        mock_session.scalar = AsyncMock(return_value=None)
 
-            yield mock_user, mock_session
+        # Override dependency
+        async def override_get_db():
+            yield mock_session
+
+        app.dependency_overrides[
+            __import__("app.core.database", fromlist=["get_db"]).get_db
+        ] = override_get_db
+        app.dependency_overrides[
+            __import__("app.core.dependencies", fromlist=["get_current_user"]).get_current_user
+        ] = lambda: mock_user
+        yield mock_user, mock_session
 
     # Cleanup overrides
     app.dependency_overrides.clear()
@@ -92,6 +115,7 @@ class TestProjectFormValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "1000000",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -109,6 +133,7 @@ class TestProjectFormValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "1000000",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -124,6 +149,7 @@ class TestProjectFormValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(yesterday),
                 "estimasi_nilai": "1000000",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -144,6 +170,7 @@ class TestProjectFormValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "0.001",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -162,6 +189,7 @@ class TestProjectFormValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "9999999999999.00",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -176,12 +204,13 @@ class TestProjectFormValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "bukan-angka",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     def test_input_valid_tanpa_file_berhasil(self, mock_auth_and_db):
-        """Input valid tanpa file menghasilkan 201 dengan message BANT manual."""
+        """Input valid tanpa file: skor dihitung backend dari kuesioner (tanpa form BANT manual)."""
         client = TestClient(app)
         response = client.post(
             "/api/v1/projects",
@@ -190,15 +219,17 @@ class TestProjectFormValidation:
                 "customer_name": "PT Customer",
                 "target_submit": str(date.today() + timedelta(days=30)),
                 "estimasi_nilai": "500000000",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_201_CREATED
         body = response.json()
         assert body["status"] == "success"
-        assert body["data"]["status"] == "New"
+        assert body["data"]["status"] == "Intake"
+        assert body["data"]["qualification_state"] == "Need Clarification"
+        assert body["data"]["bant_score"] == 22
         assert body["data"]["scoring_triggered"] is False
-        assert body["data"]["message_bant"] is not None
-        assert "BANT Manual" in body["data"]["message_bant"]
+        assert "message_bant" not in body["data"]
 
 
 # =============================================================================
@@ -219,6 +250,8 @@ class TestFileUploadValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "1000000",
+                "qualification_answers": QA,
+                "file_types": ["MoM"]*1,
             },
             files=[_create_fake_file("proposal.pdf")],
         )
@@ -240,6 +273,8 @@ class TestFileUploadValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "1000000",
+                "qualification_answers": QA,
+                "file_types": ["MoM"]*1,
             },
             files=[("files", ("document.docx", BytesIO(b"docx content"), mime))],
         )
@@ -259,6 +294,8 @@ class TestFileUploadValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "1000000",
+                "qualification_answers": QA,
+                "file_types": ["MoM"]*1,
             },
             files=[("files", ("image.png", BytesIO(b"png data"), "image/png"))],
         )
@@ -280,6 +317,8 @@ class TestFileUploadValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "1000000",
+                "qualification_answers": QA,
+                "file_types": ["MoM"]*3,
             },
             files=[
                 _create_fake_file("valid.pdf"),
@@ -311,6 +350,7 @@ class TestFileUploadValidation:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "1000000",
+                "qualification_answers": QA,
             },
             files=many_files,
         )
@@ -329,22 +369,71 @@ class TestFileUploadValidation:
 class TestProjectRecordCreation:
     """Test pembuatan record project."""
 
-    def test_project_dibuat_dengan_status_new(self, mock_auth_and_db):
-        """Proyek baru selalu memiliki status 'New'."""
+    def test_project_dengan_file_dibuat_dengan_qualification_state_scoring(self, mock_auth_and_db):
+        """Proyek baru dengan file berstatus Intake + qualification_state 'Scoring' sampai scoring AI selesai."""
         client = TestClient(app)
         response = client.post(
             "/api/v1/projects",
+            files=[_create_fake_file("proposal.pdf")],
             data={
+                "file_types": ["MoM"],
                 "project_name": "Proyek Baru",
                 "customer_name": "PT Baru",
                 "target_submit": str(date.today() + timedelta(days=14)),
                 "estimasi_nilai": "250000000",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_201_CREATED
         body = response.json()
-        assert body["data"]["status"] == "New"
+        assert body["data"]["status"] == "Intake"
+        assert body["data"]["qualification_state"] == "Scoring"
 
+    def test_unknown_customer_identity_is_rejected(self, mock_auth_and_db):
+        _, mock_session = mock_auth_and_db
+        mock_session.get = AsyncMock(return_value=None)
+
+        response = TestClient(app).post(
+            "/api/v1/projects",
+            data={
+                "project_name": "Proyek Tanpa Customer",
+                "customer_id": str(uuid.uuid4()),
+                "target_submit": str(date.today() + timedelta(days=7)),
+                "estimasi_nilai": "100000",
+                "qualification_answers": QA,
+            },
+        )
+
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        mock_session.add.assert_not_called()
+        mock_session.commit.assert_not_awaited()
+
+    def test_project_reuses_customer_inserted_concurrently(self, mock_auth_and_db):
+        from sqlalchemy.exc import IntegrityError
+
+        _, mock_session = mock_auth_and_db
+        winner = Customer(id=uuid.uuid4(), name="PT Baru", normalized_name="pt baru")
+        mock_session.scalar.side_effect = [None, winner]
+        mock_session.flush.side_effect = IntegrityError("insert", {}, Exception("unique"))
+
+        response = TestClient(app).post(
+            "/api/v1/projects",
+            data={
+                "project_name": "Proyek Race",
+                "customer_name": " PT BARU ",
+                "target_submit": str(date.today() + timedelta(days=7)),
+                "estimasi_nilai": "100000",
+                "qualification_answers": QA,
+            },
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.json()["data"]["customer_name"] == "PT Baru"
+        assert any(
+            isinstance(call.args[0], Project) and call.args[0].customer_id == winner.id
+            for call in mock_session.add.call_args_list
+        )
+        mock_session.commit.assert_awaited_once()
     def test_project_id_format_prj(self, mock_auth_and_db):
         """ID proyek mengikuti format PRJ-{date}-{random}."""
         client = TestClient(app)
@@ -355,18 +444,16 @@ class TestProjectRecordCreation:
                 "customer_name": "PT ID",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "100000",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_201_CREATED
-        body = response.json()
-        project_id = body["data"]["id_project"]
-        assert project_id.startswith("PRJ-")
-        # Format: PRJ-YYYYMMDD-XXXXXX (total panjang = 4+8+6+2 separators = 20)
+        project_id = response.json()["data"]["id_project"]
         parts = project_id.split("-")
         assert len(parts) == 3
         assert parts[0] == "PRJ"
-        assert len(parts[1]) == 8  # YYYYMMDD
-        assert len(parts[2]) == 6  # Random
+        assert len(parts[1]) == 8
+        assert len(parts[2]) == 6
 
     def test_project_memiliki_timestamp(self, mock_auth_and_db):
         """Proyek baru memiliki created_at yang tidak null."""
@@ -378,28 +465,32 @@ class TestProjectRecordCreation:
                 "customer_name": "PT Timestamp",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "100000",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_201_CREATED
         body = response.json()
         assert body["data"]["created_at"] is not None
 
-    def test_project_memiliki_sales_pic(self, mock_auth_and_db):
-        """Proyek baru memiliki sales_pic yang sesuai user login."""
+    def test_project_mencatat_pembuat_dan_product_pic_tanpa_sales(self, mock_auth_and_db):
+        """Pembuat Product: created_by = product_pic = pembuat, sales_pic kosong (ADR 0014)."""
         mock_user, _ = mock_auth_and_db
         client = TestClient(app)
         response = client.post(
             "/api/v1/projects",
             data={
-                "project_name": "Proyek Sales PIC",
-                "customer_name": "PT Sales",
+                "project_name": "Proyek Product PIC",
+                "customer_name": "PT Product",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "100000",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_201_CREATED
-        body = response.json()
-        assert body["data"]["sales_pic"] == str(mock_user.id)
+        data = response.json()["data"]
+        assert data["created_by"]["id"] == str(mock_user.id)
+        assert data["product_pic"]["id"] == str(mock_user.id)
+        assert data["sales_pic"] is None
 
 
 # =============================================================================
@@ -420,6 +511,7 @@ class TestResponseFormat:
                 "customer_name": "PT Format",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "100000",
+                "qualification_answers": QA,
             },
         )
         body = response.json()
@@ -439,6 +531,7 @@ class TestResponseFormat:
                 "customer_name": "PT Test",
                 "target_submit": str(date.today() - timedelta(days=1)),
                 "estimasi_nilai": "abc",
+                "qualification_answers": QA,
             },
         )
         body = response.json()
@@ -472,14 +565,18 @@ class TestEstimasiNilaiPersist:
                 "customer_name": "PT Estimasi",
                 "target_submit": str(date.today() + timedelta(days=7)),
                 "estimasi_nilai": "750000000.50",
+                "qualification_answers": QA,
             },
         )
         assert response.status_code == status.HTTP_201_CREATED
 
-        # Ambil object Project yang di-add ke session (akan di-commit ke DB)
-        assert mock_session.add.call_count == 1
-        added_project = mock_session.add.call_args.args[0]
+        added_objects = [call.args[0] for call in mock_session.add.call_args_list]
+        added_project = next(obj for obj in added_objects if isinstance(obj, Project))
+        added_customer = next(obj for obj in added_objects if isinstance(obj, Customer))
+        assert added_project.customer_id == added_customer.id
+        assert added_customer.name == "PT Estimasi"
         assert added_project.estimasi_nilai == Decimal("750000000.50")
+        mock_session.commit.assert_awaited_once()
 
         # Nilai juga tercermin di response
         body = response.json()
@@ -499,9 +596,11 @@ def _real_project(**overrides):
         id_project="PRJ-20250101-ABC123",
         project_name="Proyek Lama",
         customer_name="PT Lama",
-        status="New",
+        status="Intake",
         target_submit=date.today() + timedelta(days=7),
         sales_pic=uuid.uuid4(),
+        product_pic=uuid.uuid4(),
+        created_by=uuid.uuid4(),
         bant_detail=None,
         estimasi_nilai=None,
     )
@@ -572,7 +671,19 @@ class TestFolderProvisioningStatusInResponse:
             result.scalars = MagicMock(return_value=scalars)
             return result
 
-        mock_session.execute = AsyncMock(return_value=_make_scalars_result([project]))
+        # Query order: count, project page, then user lookup.
+        def _make_scalar_result(value):
+            result = MagicMock()
+            result.scalar_one = MagicMock(return_value=value)
+            return result
+
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                _make_scalar_result(1),
+                _make_scalars_result([project]),
+                _make_scalars_result([]),
+            ]
+        )
 
         async def override_get_db():
             yield mock_session
@@ -587,9 +698,8 @@ class TestFolderProvisioningStatusInResponse:
             response = client.get("/api/v1/projects")
             assert response.status_code == status.HTTP_200_OK
             body = response.json()
-            item = body["data"][0]
+            item = body["data"]["items"][0]
             assert item["folder_provisioning_status"] == "provisioned"
-            # Field lama tetap ada dan tidak rusak
             assert item["gdrive_folder_id"] == "gdrive_master_123"
         finally:
             app.dependency_overrides.clear()
@@ -620,14 +730,15 @@ class TestFolderProvisioningStatusInResponse:
             return result
 
         # Urutan execute di get_project_detail:
-        # 1) lookup Project, 2) cek collaborator (None),
-        # 3) lookup Sales PIC (None), 4) lookup SA assigned (skip: assigned_sa None),
-        # 5) daftar collaborators (kosong).
+        # 1) lookup Project, user PIC (lewat _muat_user), [SA assigned bila ada],
+        # collaborators, Source document, lalu integration operations.
         mock_session.execute = AsyncMock(
             side_effect=[
                 _make_scalar_result(project),
                 _make_scalar_result(None),
                 _make_scalar_result(None),
+                _make_scalars_result([]),
+                _make_scalars_result([]),
                 _make_scalars_result([]),
             ]
         )
@@ -669,25 +780,25 @@ class TestUpdateProjectPersist:
         client = TestClient(app)
         response = client.patch(
             "/api/v1/projects/PRJ-20250101-ABC123",
-            json={"bant_detail": {"budget": 8, "authority": 5}},
+            json={"bant_detail": {"budget_mrr": 8, "pic_name": "Budi"}},
         )
         assert response.status_code == status.HTTP_200_OK
         # commit dipanggil
         mock_session.commit.assert_awaited()
         # Readback dari object yang di-commit
-        assert project.bant_detail == {"budget": 8, "authority": 5}
+        assert project.bant_detail == {"budget_mrr": 8, "pic_name": "Budi"}
 
     def test_patch_bant_detail_merge_dengan_existing(self, mock_patch_db):
         """PATCH bant_detail melakukan merge terhadap nilai existing."""
         mock_user, mock_session, project = mock_patch_db
-        project.bant_detail = {"budget": 2}
+        project.bant_detail = {"budget_mrr": 2}
         client = TestClient(app)
         response = client.patch(
             "/api/v1/projects/PRJ-20250101-ABC123",
-            json={"bant_detail": {"authority": 9}},
+            json={"bant_detail": {"pic_name": "Siti"}},
         )
         assert response.status_code == status.HTTP_200_OK
-        assert project.bant_detail == {"budget": 2, "authority": 9}
+        assert project.bant_detail == {"budget_mrr": 2, "pic_name": "Siti"}
 
     def test_patch_estimasi_nilai_valid_tersimpan(self, mock_patch_db):
         """PATCH estimasi_nilai valid ter-set pada object (readback)."""

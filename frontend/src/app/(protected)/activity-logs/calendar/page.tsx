@@ -1,8 +1,9 @@
 "use client";
 
 import useSWR from "swr";
-import { fetcher } from "@/lib/fetcher";
+import { LoadError } from "@/components/LoadError";
 import { CalendarSync } from "@/components/CalendarSync";
+import { getAllProjects, type ProjectListItem } from "@/lib/api/projects";
 
 /**
  * Halaman Calendar Sync
@@ -14,28 +15,30 @@ import { CalendarSync } from "@/components/CalendarSync";
  * Requirements: 13.1, 13.2
  */
 
-/** Bentuk item dari API /projects (field id_project) */
-interface ProjectItem {
-  id_project: string;
-  project_name: string;
-}
 
 interface Project {
   id: string;
   project_name: string;
+  status?: string;
 }
 
 export default function CalendarSyncPage() {
-  // Fetch daftar proyek untuk mapping dropdown
-  const { data: rawProjects, isLoading: projectsLoading } = useSWR<ProjectItem[]>(
-    "/projects",
-    fetcher
+  // Load every project through bounded API pages for the mapping dropdown.
+  const {
+    data: rawProjects,
+    isLoading: projectsLoading,
+    error: projectsError,
+    mutate: mutateProjects,
+  } = useSWR<ProjectListItem[]>(
+    "projects:all",
+    getAllProjects,
   );
 
   // Normalisasi: API mengembalikan id_project, komponen butuh { id, project_name }
   const projects: Project[] = (rawProjects || []).map((p) => ({
     id: p.id_project,
     project_name: p.project_name,
+    status: p.status,
   }));
 
   return (
@@ -67,6 +70,8 @@ export default function CalendarSyncPage() {
             <div className="h-10 bg-neutral-200 rounded w-full" />
             <div className="h-80 bg-neutral-200 rounded w-full" />
           </div>
+        ) : projectsError && !rawProjects ? (
+          <LoadError message="Gagal memuat daftar proyek." onRetry={() => mutateProjects()} />
         ) : (
           <CalendarSync projects={projects} />
         )}

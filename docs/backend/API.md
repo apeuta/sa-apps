@@ -45,8 +45,8 @@ Referensi lengkap API backend Portal SA. Disusun dari router di `backend/app/api
 | Method & Path | Auth / Role | Request | Response | Purpose |
 |---|---|---|---|---|
 | `POST /projects` | `get_current_user` (Sales/SA/Lead_SA) | multipart form: `project_name`, `customer_name`, `target_submit`, `estimasi_nilai`, `dq_number?`, `files[]` (PDF/DOCX, max 20MB, max 5) | `ProjectResponse` + hasil upload per file | Buat opportunity baru (status `New`), trigger scoring async. **`estimasi_nilai` divalidasi tapi tidak dipersist (B4).** |
-| `GET /projects` | `get_current_user` (scoped by role) | query `sales_pic`, `assigned_to`, `status`, `sort` | array ringkasan proyek | Daftar proyek. Lead_SA/Admin lihat semua; Sales/SA lihat proyek terkait + collaborator (scoping server-side). |
-| `GET /projects/status-summary` | `get_current_user` (scoped) | query `sales_pic`, `assigned_to` | `[{status, count}]` | Ringkasan jumlah proyek per status. |
+| `GET /projects` | `get_current_user` (scoped by role) | query `involved` (`me`), `status`, `sort` | array ringkasan proyek | Daftar proyek. Lead_SA/Admin lihat semua; Sales/SA lihat proyek terkait + collaborator (scoping server-side). |
+| `GET /projects/status-summary` | `get_current_user` (scoped) | query `involved` (`me`) | `[{status, count}]` | Ringkasan jumlah proyek per status. `sales_pic`/`assigned_to` dipensiunkan (#155): dijawab 422. |
 | `GET /projects/{project_id}` | `get_current_user` + cek akses (privileged/sales_pic/assigned_sa/collaborator) | — | detail proyek + PIC + collaborators | Detail satu proyek. 403 jika tidak punya akses. |
 | `PATCH /projects/{project_id}` | `get_current_user` | body dict (`project_name`, `customer_name`, `dq_number`, `target_submit`, `bant_detail`) | `{id_project, status}` | Update field proyek. **Catatan risiko: tidak ada pengecekan role/akses eksplisit di handler ini.** |
 | `DELETE /projects/{project_id}` | `get_current_user` (Lead_SA/Admin) | — | `{id_project}` | Hapus proyek. |
@@ -70,12 +70,12 @@ Referensi lengkap API backend Portal SA. Disusun dari router di `backend/app/api
 | Method & Path | Auth / Role | Request | Response | Purpose |
 |---|---|---|---|---|
 | `GET /projects/pending-assignment` | Lead_SA/Admin | — | daftar proyek `Pending Assignment` | Proyek siap di-assign. |
-| `GET /sa/available` | Lead_SA/Admin | — | daftar SA + jumlah proyek aktif | Ketersediaan/workload SA. |
+| `GET /sa/available` | Lead_SA/Admin | — | daftar SA + jumlah proyek aktif | Ketersediaan/workload SA. Definisi "aktif" sama dengan `/workload/beban` (bukan soft-deleted, status bukan Closed/Lost/On Hold, SA utama + tambahan). |
 | `GET /sa/utilization` | Lead_SA/Admin | query `year?`, `sa_id?` | utilisasi jam per SA per bulan | Rekap utilisasi dari activity logs. |
 | `GET /utilization/projects` | Lead_SA/Admin | — | jam + personel per proyek | Effort distribution antar proyek. |
 | `GET /utilization/summary` | Lead_SA/Admin | query `year?` | agregasi work_type & project_phase | Ringkasan dua dimensi untuk dashboard. |
 | `POST /projects/{project_id}/assign` | Lead_SA/Admin | `AssignRequest` (`sa_id`) | `AssignmentResponse` | Assign SA ke proyek `Pending Assignment` → `Assigned`, notifikasi SA, trigger folder provisioning (stub, B2). **Notifikasi gagal karena B1 (`metadata=`).** |
-| `POST /projects/{project_id}/reassign` | Lead_SA/Admin | `AssignRequest` (`sa_id`) | detail SA baru | Reassign SA pada proyek `Assigned`/`Ready`/`Pending Assignment`. **`event_type="reassignment"` melanggar CheckConstraint + B1.** |
+| `POST /projects/{project_id}/reassign` | Lead_SA/Admin | `AssignRequest` (`sa_id`) | detail SA baru | Reassign SA pada proyek `Assigned`/`Ready`/`Pending Assignment`. Timer SLA berlanjut (tidak direset); bila folder Drive sudah ada, SA baru diberi Editor dan SA lama dicabut (background, graceful); subtask tidak dipindahkan. Dari `Pending Assignment`: status → `Assigned`, timer SLA dimulai, dan provisioning folder dijadwalkan (setara `assign`). |
 
 ---
 
@@ -83,7 +83,7 @@ Referensi lengkap API backend Portal SA. Disusun dari router di `backend/app/api
 
 | Method & Path | Auth / Role | Request | Response | Purpose |
 |---|---|---|---|---|
-| `PATCH /projects/{project_id}/status` | `get_current_user` + `_check_project_access` (Sales: proyek sendiri, SA: proyek ditugaskan, Lead_SA/Admin: semua) | `StatusUpdateRequest` (`new_status`) | `StatusTransitionResponse` + audit log | Ubah status proyek dengan validasi state machine linear. `Lost` hanya Lead_SA/Admin. Mencatat `AuditLog`. |
+| `PATCH /projects/{project_id}/status` | `get_current_user` + `_check_project_access` (Sales: proyek sendiri, SA: proyek ditugaskan, Lead_SA/Admin: semua) | `StatusUpdateRequest` (`new_status`) | `StatusTransitionResponse` + audit log | Ubah status proyek dengan validasi state machine linear (`New` … `Closed-Win`). `Lost` hanya Lead_SA/Admin. `Handover Complete` ditolak 400 dan diarahkan ke `POST /handover`. Mencatat `AuditLog`. |
 
 ---
 
@@ -132,7 +132,7 @@ Referensi lengkap API backend Portal SA. Disusun dari router di `backend/app/api
 | Method & Path | Auth / Role | Request | Response | Purpose |
 |---|---|---|---|---|
 | `GET /projects/{project_id}/sla-status` | `get_current_user` | — | `{status, days_elapsed, is_locked, is_active}` | Status SLA proyek (badge green/yellow/red). 404 jika tracker belum ada. |
-| `POST /sla/process` | `get_current_user` (Admin/Lead_SA) | — | statistik proses | Trigger SLA processing semua proyek aktif (reminder H+3, eskalasi + lock H+5). Untuk cron/manual. |
+| `POST /sla/process` | `get_current_user` (Admin/Lead_SA) | — | statistik proses (`total_checked`, `reminders_sent`, `escalations_sent`, `locks_performed`, `unlocks_retried`, `errors`) | Trigger SLA processing semua proyek aktif (reminder H+3, eskalasi sekali + lock H+5 yang dicoba ulang tiap siklus, ulangi unlock yang gagal). Untuk cron/manual. |
 
 ---
 
@@ -152,7 +152,7 @@ Referensi lengkap API backend Portal SA. Disusun dari router di `backend/app/api
 |---|---|---|---|---|
 | `GET /projects/{project_id}/handover-status` | SA ditugaskan/Lead_SA/Admin (Sales ditolak) | — | `{ready, missing_items, pmo_email, delivery_email, project_status, hld_status}` | Cek kesiapan handover. |
 | `POST /projects/{project_id}/handover-config` | Lead_SA/Admin | `HandoverConfigInput` (`pmo_email`, `delivery_email`) | config tersimpan | Set email PMO/Delivery Lead. |
-| `POST /projects/{project_id}/handover` | SA ditugaskan/Lead_SA/Admin | — | detail handover | Trigger handover: prasyarat `Closed-Win` + HLD `Final` + email PMO/Delivery + folder GDrive. Provision `Final_Deliverables`, notifikasi, status `Handover Complete`, audit log. GDrive gagal → `Handover Failed`. |
+| `POST /projects/{project_id}/handover` | SA ditugaskan/Lead_SA/Admin | — | detail handover | Trigger handover: prasyarat `Closed-Win` + HLD `Final` + email PMO/Delivery + folder GDrive. Provision `Final_Deliverables`, notifikasi (in-app + email bila punya akun; email langsung bila tidak, dicatat di audit `penerima_email_langsung`), status `Handover Complete`, audit log. GDrive gagal → 400, status tetap `Closed-Win`, SA/Lead_SA diberi notifikasi. Satu-satunya jalan ke `Handover Complete` (`PATCH /status` menolaknya, 400). |
 
 ---
 

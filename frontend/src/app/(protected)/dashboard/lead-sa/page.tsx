@@ -1,10 +1,12 @@
 "use client";
 
+import { statusBadgeClass } from "@/lib/status";
 import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
+import { LoadError } from "@/components/LoadError";
 import {
   PendingProject,
   AvailableSA,
@@ -12,12 +14,13 @@ import {
 } from "@/lib/api/assignment";
 import { AssignmentModal } from "@/components/AssignmentModal";
 import { useAuthStore } from "@/store/auth";
+import { isPrivileged } from "@/lib/roles";
 
 /**
  * Dashboard Lead_SA
  *
  * Empat section utama:
- * 1. Antrian Assignment — proyek berstatus "Pending Assignment"
+ * 1. Antrian Assignment — proyek berstatus "Awaiting Assignment"
  * 2. Overview Proyek Aktif — count proyek per status
  * 3. Utilisasi SA — daftar SA dengan jumlah proyek aktif
  * 4. Utilisasi SA per Bulan — jam kerja per SA per bulan (chart tabel)
@@ -49,25 +52,13 @@ interface UtilizationResponse {
   };
 }
 
-/** Warna badge per status proyek */
-const STATUS_BADGE_COLORS: Record<string, string> = {
-  "Pending Assignment": "bg-yellow-100 text-yellow-700",
-  Assigned: "bg-blue-100 text-blue-700",
-  Ready: "bg-green-100 text-green-700",
-  "Closed-Win": "bg-emerald-100 text-emerald-700",
-  "Need Clarification": "bg-orange-100 text-orange-700",
-  New: "bg-neutral-100 text-neutral-700",
-  Lost: "bg-red-100 text-red-700",
-  "Scoring Pending": "bg-purple-100 text-purple-700",
-  "Manual Review Required": "bg-pink-100 text-pink-700",
-  "Handover Complete": "bg-teal-100 text-teal-700",
-};
-
 /** Nama bulan singkat */
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
 
 export default function LeadSADashboard() {
   const router = useRouter();
+  // Tampilan workload hanya untuk Lead_SA/Admin (spec §2.5)
+  const bolehWorkload = isPrivileged(useAuthStore((s) => s.user));
   // State untuk modal assignment
   const [assigningProject, setAssigningProject] =
     useState<PendingProject | null>(null);
@@ -87,18 +78,25 @@ export default function LeadSADashboard() {
   const {
     data: pendingProjects,
     isLoading: isLoadingPending,
+    error: pendingError,
     mutate: mutatePending,
   } = useSWR<PendingProject[]>("/projects/pending-assignment", fetcher);
 
   // Fetch overview proyek aktif (count per status)
-  const { data: statusSummary, isLoading: isLoadingStatus } = useSWR<
-    StatusCount[]
-  >("/projects/status-summary", fetcher);
+  const {
+    data: statusSummary,
+    isLoading: isLoadingStatus,
+    error: statusError,
+    mutate: mutateStatus,
+  } = useSWR<StatusCount[]>("/projects/status-summary", fetcher);
 
   // Fetch utilisasi SA (proyek aktif)
-  const { data: saUtilization, isLoading: isLoadingSA } = useSWR<
-    AvailableSA[]
-  >("/sa/available", fetcher);
+  const {
+    data: saUtilization,
+    isLoading: isLoadingSA,
+    error: saError,
+    mutate: mutateSA,
+  } = useSWR<AvailableSA[]>("/sa/available", fetcher);
 
   // Fetch utilisasi SA per bulan
   const utilizationUrl = selectedSAId
@@ -133,15 +131,27 @@ export default function LeadSADashboard() {
           </p>
         </div>
 
-        {/* Tombol Request SA — Lead SA bisa mengajukan request proyek baru */}
-        <button
-          onClick={() => router.push("/projects/new")}
-          className="px-4 py-2 text-sm font-medium text-white bg-primary-600
-                     rounded-lg hover:bg-primary-700 transition-colors duration-100
-                     min-h-[44px] min-w-[44px] shrink-0"
-        >
-          + Request SA
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {bolehWorkload && (
+            <Link
+              href="/dashboard/lead-sa/workload"
+              className="px-4 py-2 text-sm font-medium text-primary-700 border border-primary-600
+                         rounded-lg hover:bg-primary-50 transition-colors duration-100
+                         min-h-[44px] inline-flex items-center"
+            >
+              Lihat Workload
+            </Link>
+          )}
+          {/* Tombol Request SA — Lead SA bisa mengajukan request proyek baru */}
+          <button
+            onClick={() => router.push("/projects/new")}
+            className="px-4 py-2 text-sm font-medium text-white bg-primary-600
+                       rounded-lg hover:bg-primary-700 transition-colors duration-100
+                       min-h-[44px] min-w-[44px] shrink-0"
+          >
+            + Request SA
+          </button>
+        </div>
       </div>
 
       {/* Toast notification */}
@@ -202,6 +212,10 @@ export default function LeadSADashboard() {
         {/* Loading skeleton */}
         {isLoadingPending && <PendingListSkeleton />}
 
+        {pendingError && !pendingProjects && (
+          <LoadError message="Gagal memuat antrian assignment." onRetry={() => mutatePending()} />
+        )}
+
         {/* Daftar proyek pending */}
         {!isLoadingPending && pendingProjects && (
           <>
@@ -241,6 +255,10 @@ export default function LeadSADashboard() {
 
           {isLoadingStatus && <StatusSummarySkeleton />}
 
+          {statusError && !statusSummary && (
+            <LoadError message="Gagal memuat ringkasan proyek aktif." onRetry={() => mutateStatus()} />
+          )}
+
           {!isLoadingStatus && statusSummary && (
             <div className="rounded-lg border border-neutral-200 bg-white p-5">
               {statusSummary.length === 0 ? (
@@ -257,7 +275,7 @@ export default function LeadSADashboard() {
                       <span
                         className={`
                           px-2.5 py-1 text-xs font-medium rounded-full
-                          ${STATUS_BADGE_COLORS[item.status] || "bg-neutral-100 text-neutral-600"}
+                          ${statusBadgeClass(item.status)}
                         `}
                       >
                         {item.status}
@@ -289,6 +307,10 @@ export default function LeadSADashboard() {
           </h2>
 
           {isLoadingSA && <SAUtilizationSkeleton />}
+
+          {saError && !saUtilization && (
+            <LoadError message="Gagal memuat utilisasi SA." onRetry={() => mutateSA()} />
+          )}
 
           {!isLoadingSA && saUtilization && (
             <div className="rounded-lg border border-neutral-200 bg-white p-5">
@@ -605,8 +627,7 @@ function ProjectCard({
   onToast: (message: string, type: "success" | "error") => void;
 }) {
   // Role user untuk gating tombol "Provision Ulang" (Lead_SA/Admin saja)
-  const role = useAuthStore((s) => s.user?.role);
-  const canReprovision = role === "Lead_SA" || role === "Admin";
+  const canReprovision = isPrivileged(useAuthStore((s) => s.user));
   const [isReprovisioning, setIsReprovisioning] = useState(false);
 
   const handleReprovision = async () => {
@@ -625,6 +646,8 @@ function ProjectCard({
     }
   };
 
+  const useCaseTags = project.use_case_tags ?? [];
+
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-5 hover:shadow-sm transition-shadow duration-200">
       {/* Header card */}
@@ -639,24 +662,26 @@ function ProjectCard({
         </div>
 
         {/* BANT Status badge */}
-        <span
-          className={`
-            shrink-0 px-2.5 py-1 text-xs font-semibold rounded-full
-            ${
-              project.bant_score >= 60
-                ? "bg-green-100 text-green-700"
-                : "bg-amber-100 text-amber-700"
-            }
-          `}
-        >
-          {project.bant_score >= 60 ? "BANT Passed" : "BANT not passed"}
-        </span>
+        {project.bant_score !== null && (
+          <span
+            className={`
+              shrink-0 px-2.5 py-1 text-xs font-semibold rounded-full
+              ${
+                project.bant_score >= 60
+                  ? "bg-green-100 text-green-700"
+                  : "bg-amber-100 text-amber-700"
+              }
+            `}
+          >
+            {project.bant_score >= 60 ? "BANT Passed" : "BANT not passed"}
+          </span>
+        )}
       </div>
 
       {/* Tags */}
-      {project.use_case_tags.length > 0 && (
+      {useCaseTags.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
-          {project.use_case_tags.slice(0, 3).map((tag) => (
+          {useCaseTags.slice(0, 3).map((tag) => (
             <span
               key={tag}
               className="px-2 py-0.5 bg-neutral-100 text-neutral-600 text-xs rounded"
@@ -664,9 +689,9 @@ function ProjectCard({
               {tag}
             </span>
           ))}
-          {project.use_case_tags.length > 3 && (
+          {useCaseTags.length > 3 && (
             <span className="px-2 py-0.5 text-neutral-400 text-xs">
-              +{project.use_case_tags.length - 3}
+              +{useCaseTags.length - 3}
             </span>
           )}
         </div>
@@ -810,7 +835,7 @@ interface ProjectUtilData {
 /** Komponen section utilisasi per proyek */
 function ProjectUtilizationSection() {
   const router = useRouter();
-  const { data, isLoading } = useSWR<ProjectUtilData[]>(
+  const { data, isLoading, error, mutate } = useSWR<ProjectUtilData[]>(
     "/utilization/projects",
     fetcher
   );
@@ -826,6 +851,10 @@ function ProjectUtilizationSection() {
         </div>
       </div>
     );
+  }
+
+  if (error && !data) {
+    return <LoadError message="Gagal memuat effort per proyek." onRetry={() => mutate()} />;
   }
 
   if (!data || data.length === 0) {
@@ -871,7 +900,7 @@ function ProjectUtilizationSection() {
                 <td className="px-4 py-3 text-neutral-600">{proj.customer_name}</td>
                 <td className="px-4 py-3 text-center">
                   <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-                    STATUS_BADGE_COLORS[proj.status] || "bg-neutral-100 text-neutral-600"
+                    statusBadgeClass(proj.status)
                   }`}>
                     {proj.status}
                   </span>

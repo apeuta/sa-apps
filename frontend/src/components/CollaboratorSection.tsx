@@ -3,7 +3,10 @@
 import { useState, useEffect, useRef } from "react";
 import useSWR from "swr";
 import { fetcher, apiRequest } from "@/lib/fetcher";
+import { LoadError } from "./LoadError";
 import { useAuthStore } from "@/store/auth";
+import { isPrivileged, isRequester, isRequesterTerbatas } from "@/lib/roles";
+import { useAksesProyek } from "@/lib/useAksesProyek";
 
 /**
  * Section Kolaborator — Menampilkan dan mengelola kolaborator proyek.
@@ -40,6 +43,7 @@ export function CollaboratorSection({
   onMutate,
 }: CollaboratorSectionProps) {
   const { user } = useAuthStore();
+  const { bisa } = useAksesProyek(projectId);
   const [showAddForm, setShowAddForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState<UserSearchResult | null>(null);
@@ -49,36 +53,43 @@ export function CollaboratorSection({
   const searchRef = useRef<HTMLDivElement>(null);
 
   // Fetch collaborators
-  const { data, mutate } = useSWR<{ items: Collaborator[]; total: number }>(
+  const { data, mutate, error: listError } = useSWR<{ items: Collaborator[]; total: number }>(
     `/projects/${projectId}/collaborators`,
     fetcher
   );
 
   const collaborators = data?.items ?? initialCollaborators ?? [];
+  // Gagal memuat dan belum ada data dari server: tampilkan error, bukan keadaan kosong.
+  const gagalMemuat = Boolean(listError) && !data;
 
   // Search users
-  const { data: searchResultsRaw } = useSWR<UserSearchResult[]>(
+  const {
+    data: searchResultsRaw,
+    error: searchError,
+    mutate: mutateSearch,
+  } = useSWR<UserSearchResult[]>(
     searchQuery.length >= 2 ? `/projects/users/search?q=${encodeURIComponent(searchQuery)}&limit=10` : null,
     fetcher
   );
 
   // Batasi kandidat sesuai aturan role penambah (selaras dengan backend):
-  // - Sales hanya bisa menambahkan sesama Sales
+  // - Sales/Product hanya bisa menambahkan sesama Sales/Product
   // - SA hanya bisa menambahkan sesama SA
-  // - Lead_SA / Admin bisa menambahkan role apa pun
+  // - Lead_SA / admin (`is_admin`) bisa menambahkan role apa pun
+  const terbatasRequester = isRequesterTerbatas(user);
+  const terbatasSA = user?.role === "SA" && !isPrivileged(user);
   const searchResults = (searchResultsRaw ?? []).filter((u) => {
-    if (user?.role === "Sales") return u.role === "Sales";
-    if (user?.role === "SA") return u.role === "SA";
-    return true; // Lead_SA / Admin
+    if (terbatasRequester) return u.role === "Sales" || u.role === "Product";
+    if (terbatasSA) return u.role === "SA";
+    return true;
   });
 
   // Keterangan batasan untuk ditampilkan di form
-  const addRestrictionNote =
-    user?.role === "Sales"
-      ? "Sebagai Sales, Anda hanya dapat menambahkan sesama Sales."
-      : user?.role === "SA"
-        ? "Sebagai SA, Anda hanya dapat menambahkan sesama SA."
-        : null;
+  const addRestrictionNote = terbatasRequester
+    ? "Sebagai Sales/Product, Anda hanya dapat menambahkan sesama Sales/Product."
+    : terbatasSA
+      ? "Sebagai SA, Anda hanya dapat menambahkan sesama SA."
+      : null;
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -130,8 +141,10 @@ export function CollaboratorSection({
     }
   };
 
-  // Can add collaborator: SA, Sales, Lead_SA, Admin
-  const canManage = user?.role && ["SA", "Sales", "Lead_SA", "Admin"].includes(user.role);
+  // Can add collaborator: semua role fungsional (SA, Sales, Product, Lead_SA); batasan per role di atas
+  // Hak tulis mencerminkan TingkatAkses.TAMBAH_/HAPUS_KOLABORATOR (lib/akses). Daftar tetap terbaca semua.
+  const canAdd = bisa("tambah_kolaborator");
+  const canRemove = bisa("hapus_kolaborator");
 
   const getRoleBadge = (role: string) => {
     if (role === "viewer")
@@ -153,7 +166,7 @@ export function CollaboratorSection({
             Peer atau atasan yang di-tag untuk melihat atau berkontribusi di proyek ini
           </p>
         </div>
-        {canManage && (
+        {canAdd && (
           <button
             onClick={() => setShowAddForm(!showAddForm)}
             className="px-3 py-1.5 text-xs font-medium text-primary-600 border border-primary-200
@@ -173,7 +186,7 @@ export function CollaboratorSection({
 
       {/* Add form */}
       {showAddForm && (
-        <div className="mb-4 p-3 bg-neutral-50 rounded-lg border border-neutral-200 space-y-3">
+        <div ref={searchRef} className="mb-4 p-3 bg-neutral-50 rounded-lg border border-neutral-200 space-y-3">
           {/* Keterangan batasan role */}
           {addRestrictionNote && (
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
@@ -182,7 +195,7 @@ export function CollaboratorSection({
           )}
 
           {/* Search user */}
-          <div ref={searchRef} className="relative">
+          <div className="relative">
             <label className="text-xs font-medium text-neutral-600 mb-1 block">
               Cari user (nama atau email):
             </label>
@@ -198,8 +211,17 @@ export function CollaboratorSection({
                          focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
             />
 
+            {/* Pencarian gagal: bedakan dari "tidak ada yang cocok" */}
+            {searchQuery.length >= 2 && !selectedUser && searchError && !searchResultsRaw && (
+              <LoadError
+                className="mt-1"
+                message="Gagal mencari user."
+                onRetry={() => mutateSearch()}
+              />
+            )}
+
             {/* Tidak ada kandidat yang cocok setelah filter role */}
-            {searchQuery.length >= 2 && !selectedUser && searchResults.length === 0 && (
+            {searchQuery.length >= 2 && !selectedUser && !searchError && searchResults.length === 0 && (
               <p className="mt-1 text-xs text-neutral-400">
                 Tidak ada user yang cocok dan diizinkan untuk ditambahkan.
               </p>
@@ -216,7 +238,7 @@ export function CollaboratorSection({
                       setSelectedUser(u);
                       setSearchQuery(u.name);
                       // Auto-set contributor only if user is SA
-                      if (u.role !== "SA" && u.role !== "Lead_SA" && u.role !== "Admin") {
+                      if (u.role !== "SA" && u.role !== "Lead_SA") {
                         setSelectedRole("viewer");
                       }
                     }}
@@ -280,13 +302,13 @@ export function CollaboratorSection({
               <button
                 type="button"
                 onClick={() => setSelectedRole("contributor")}
-                disabled={selectedUser?.role === "Sales"}
+                disabled={isRequester(selectedUser)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
                   selectedRole === "contributor"
                     ? "bg-emerald-50 text-emerald-700 border-emerald-300"
                     : "bg-white text-neutral-600 border-neutral-300 hover:bg-neutral-50"
-                } ${selectedUser?.role === "Sales" ? "opacity-50 cursor-not-allowed" : ""}`}
-                title={selectedUser?.role === "Sales" ? "Hanya SA yang bisa menjadi contributor" : ""}
+                } ${isRequester(selectedUser) ? "opacity-50 cursor-not-allowed" : ""}`}
+                title={isRequester(selectedUser) ? "Hanya SA yang bisa menjadi contributor" : ""}
               >
                 ✏️ Contributor — Bisa tambah Activity Log
               </button>
@@ -306,11 +328,22 @@ export function CollaboratorSection({
         </div>
       )}
 
+      {/* Gagal memuat daftar: tampil di atas daftar awal (bila ada) atau menggantikan keadaan kosong */}
+      {gagalMemuat && (
+        <LoadError
+          className="mb-3"
+          message="Gagal memuat daftar kolaborator."
+          onRetry={() => mutate()}
+        />
+      )}
+
       {/* List collaborators */}
       {collaborators.length === 0 ? (
-        <p className="text-sm text-neutral-500 text-center py-3">
-          Belum ada kolaborator di proyek ini.
-        </p>
+        !gagalMemuat && (
+          <p className="text-sm text-neutral-500 text-center py-3">
+            Belum ada kolaborator di proyek ini.
+          </p>
+        )
       ) : (
         <div className="space-y-2">
           {collaborators.map((c) => (
@@ -332,7 +365,7 @@ export function CollaboratorSection({
               <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${getRoleBadge(c.role)}`}>
                 {getRoleLabel(c.role)}
               </span>
-              {canManage && (
+              {canRemove && (
                 <button
                   onClick={() => handleRemove(c.user_id, c.user_name)}
                   className="p-1 text-neutral-400 hover:text-red-600 transition-colors"

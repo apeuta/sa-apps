@@ -16,16 +16,20 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import TingkatAkses, ensure_project_access, get_current_user
+from app.models.activity_log import ActivityLog
+from app.models.project import Project
 from app.models.user import User
 from app.schemas.activity_log import (
     ActivityLogCreate,
     ActivityLogResponse,
     ProjectStoryResponse,
 )
+from app.services.status_proyek import pastikan_proyek_bisa_ditulis
 from app.schemas.response import error_response, success_response
 from app.services.activity_logger import ActivityLogger
 from app.services.llm_provider import llm_factory
@@ -34,6 +38,27 @@ from app.utils.guardrails import is_nonempty_summary, sanitize_text_input
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Activity Logs"])
+
+
+async def _periksa_akses_proyek(
+    db: AsyncSession, id_project: str | None, user: User, tingkat: TingkatAkses
+) -> None:
+    """Cek akses `user` ke proyek `id_project` pada `tingkat` (403 bila tidak berhak).
+
+    WAJIB dipanggil di LUAR blok `try/except Exception` handler: `HTTPException` 403 yang
+    di-raise di dalam `try` akan tertelan jadi 500. Proyek yang tidak ada (atau `id_project`
+    kosong, mis. Non-Project) tidak ditolak di sini; validasi 404/422 tetap milik
+    `ActivityLogger` sehingga kontrak lama tidak berubah.
+    """
+    if id_project is None:
+        return
+    project = (
+        await db.execute(select(Project).where(Project.id_project == id_project))
+    ).scalar_one_or_none()
+    if project is not None:
+        await ensure_project_access(db, project, user, tingkat)
+        if tingkat == TingkatAkses.TULIS:
+            pastikan_proyek_bisa_ditulis(project)  # Closed/Lost read-only (409)
 
 
 def _build_log_response(log) -> dict:
@@ -53,6 +78,25 @@ def _build_log_response(log) -> dict:
         "created_at": log.created_at.isoformat(),
         "needs_repolish": log.ai_polished_notes is None,
     }
+
+
+def _teks_catatan(log) -> str:
+    """
+    Teks catatan untuk ringkasan proyek: hasil polish AI (`discussion_points` + `action_items`)
+    bila ada isinya, selain itu `raw_notes`. Dijadikan satu baris agar format daftar aktivitas
+    di prompt tetap satu entri per baris.
+    """
+    polished = log.ai_polished_notes or {}
+    bagian = [str(p).strip() for p in polished.get("discussion_points", []) if str(p).strip()]
+    for item in polished.get("action_items", []):
+        deskripsi = str(item.get("description", "")).strip()
+        if not deskripsi:
+            continue
+        pic = item.get("pic")
+        bagian.append(f"Aksi: {deskripsi} (PIC: {pic})" if pic else f"Aksi: {deskripsi}")
+    if not bagian:
+        return log.raw_notes
+    return " ".join(" ".join(bagian).split())
 
 
 @router.post(
@@ -82,6 +126,13 @@ async def create_activity_log(
 
     Requirement: 8.1, 8.2, 8.3, 8.4, 8.6
     """
+    # Akses TULIS dicek sebelum polish LLM, insert, dan kemajuan subtask. Non-Project tidak
+    # terkait proyek sehingga tidak dicek. Di luar try agar 403 tidak tertelan jadi 500.
+    if payload.work_type == "Project":
+        await _periksa_akses_proyek(
+            db, payload.id_project, current_user, TingkatAkses.TULIS
+        )
+
     try:
         activity_logger = ActivityLogger(db)
 
@@ -146,18 +197,39 @@ async def retry_polish_notes(
 
     Requirement: 8.6
     """
+    # Kepemilikan log tetap ditegakkan service (orang lain → 404). Di atasnya (spec #87, #92)
+    # penulis harus MASIH punya akses TULIS ke proyek log: penulis yang kini viewer / kehilangan
+    # akses ditolak 403 sebelum panggilan LLM. Log Non-Project tidak terkait proyek → dilewati.
+    # Dilakukan di LUAR try agar 403 tidak tertelan jadi 500.
+    log = (
+        await db.execute(select(ActivityLog).where(ActivityLog.id_log == id_log))
+    ).scalar_one_or_none()
+    if log is not None and log.sa_id == current_user.id:
+        # Proyek soft-deleted tersaring filter global (select(Project) → None), padahal log
+        # masih menunjuknya (FK): tolak 404 seperti endpoint proyek lain, sebelum LLM dipanggil.
+        if log.id_project is not None:
+            proyek = (
+                await db.execute(select(Project).where(Project.id_project == log.id_project))
+            ).scalar_one_or_none()
+            if proyek is None:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=error_response(message="Proyek untuk log ini tidak ditemukan."),
+                )
+        await _periksa_akses_proyek(db, log.id_project, current_user, TingkatAkses.TULIS)
+
     try:
         activity_logger = ActivityLogger(db)
 
         # Retry polish — service menangani validasi ownership
-        activity_log = await activity_logger.retry_polish(
+        activity_log, berhasil = await activity_logger.retry_polish(
             id_log=id_log,
             sa_id=current_user.id,
         )
 
         response_data = _build_log_response(activity_log)
 
-        if activity_log.ai_polished_notes:
+        if berhasil:
             message = "AI polishing berhasil. Notes sudah diperbarui."
         else:
             message = "AI polishing masih gagal. Silakan coba lagi nanti."
@@ -213,6 +285,9 @@ async def get_project_story(
 
     Requirement: 8.5
     """
+    # Akses STORY (termasuk Sales PIC proyek itu) di luar try agar 403 tidak tertelan jadi 500.
+    await _periksa_akses_proyek(db, id_project, current_user, TingkatAkses.STORY)
+
     try:
         activity_logger = ActivityLogger(db)
 
@@ -292,7 +367,12 @@ async def summarize_project(
     3. Bangun teks data aktivitas
     4. Kirim ke LLM untuk dirangkum
     5. Return hasil ringkasan
+
+    Akses STORY dicek lebih dulu: penolakan terjadi sebelum query log dan panggilan LLM.
     """
+    # Di luar try agar 403 tidak tertelan jadi 500.
+    await _periksa_akses_proyek(db, id_project, current_user, TingkatAkses.STORY)
+
     try:
         activity_logger = ActivityLogger(db)
 
@@ -317,8 +397,7 @@ async def summarize_project(
         total_hours = sum(float(log.duration_hours) for log in items)
         lines = []
         for log in items:
-            polished = log.ai_polished_notes or {}
-            notes_text = polished.get("structured_notes", log.raw_notes)
+            notes_text = _teks_catatan(log)
             lines.append(f"- [{log.subtask_category}] {float(log.duration_hours)}h | {notes_text}")
         activity_data = "\n".join(lines)
 

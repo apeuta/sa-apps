@@ -3,16 +3,15 @@ API endpoints untuk Document Tracking.
 Menangani CRUD dokumen proyek dan state machine transisi status.
 
 State Machine:
-- Draft → Reviewed: SA, Lead_SA
-- Reviewed → Final: SA, Lead_SA
-- Final → Reviewed (mundur): HANYA Lead_SA
-- Reviewed → Draft (mundur): HANYA Lead_SA
+- Draft → Reviewed: Lead_SA, Admin, SA ditugaskan
+- Reviewed → Final: Lead_SA, Admin, SA ditugaskan
+- Final → Reviewed (mundur): HANYA Lead_SA dan Admin
+- Reviewed → Draft (mundur): HANYA Lead_SA dan Admin
 - Draft → Final (loncat): DITOLAK untuk semua role
+- `doc_ready` hanya pada transisi tepat Draft → Reviewed (spec #87)
 """
 
 import logging
-import random
-import string
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,33 +19,70 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import (
+    adalah_privileged,
+    adalah_sa_ditugaskan,
+    HubunganProyek,
+    TingkatAkses,
+    ensure_project_access,
+    get_current_user,
+    izinkan,
+)
 from app.models.document import Document
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.document import (
+    DocTypeEnum,
     DocumentCreate,
     DocumentResponse,
     DocumentStatusUpdate,
 )
 from app.schemas.response import success_response
+from app.services.dq_akses import saring_dokumen_terlihat
 from app.services.folder_provisioner import folder_provisioner
+from app.services.integration_operations import run_side_effect
 from app.services.notification_service import (
     NotificationEvent,
     NotificationEventType,
     notification_service,
 )
+from app.services.status_proyek import pastikan_proyek_bisa_ditulis
+from app.services.requirement_generator import (
+    can_manage_requirement,
+    collect_sources,
+    is_protected_requirement,
+    is_source_changed,
+    new_requirement_item,
+)
+from app.utils.guardrails import RequirementItem
+from app.utils.identifiers import generate_doc_id
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Documents"])
 
 
-def _generate_doc_id() -> str:
-    """Generate ID dokumen unik dengan format DOC-{YYYYMMDD}-{random6}."""
-    date_part = datetime.now(timezone.utc).strftime("%Y%m%d")
-    random_part = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-    return f"DOC-{date_part}-{random_part}"
+def _to_response(doc: Document, source_changed: bool = False) -> dict:
+    """Bentuk respons dokumen (JSON-ready), termasuk kolom khusus Requirement."""
+    return DocumentResponse(
+        id_doc=doc.id_doc,
+        id_project=doc.id_project,
+        doc_type=doc.doc_type,
+        status=doc.status,
+        gdrive_link=doc.gdrive_link,
+        folder_type=doc.folder_type,
+        notes=doc.notes,
+        created_by=doc.created_by,
+        updated_by=doc.updated_by,
+        created_at=doc.created_at,
+        updated_at=doc.updated_at,
+        content=doc.content,
+        is_overridden=doc.is_overridden,
+        source_hash=doc.source_hash,
+        generated_at=doc.generated_at,
+        source_truncated=doc.source_truncated,
+        source_changed=source_changed,
+    ).model_dump(mode="json")
 
 
 # Definisi transisi yang valid dalam state machine
@@ -56,12 +92,36 @@ VALID_TRANSITIONS = {
     "Final": [],  # Final tidak bisa maju (terminal state untuk forward)
 }
 
-# Transisi mundur — hanya bisa dilakukan oleh Lead_SA
+# Transisi mundur — hanya bisa dilakukan oleh Lead_SA dan Admin
 BACKWARD_TRANSITIONS = {
-    "Final": ["Reviewed"],  # Final bisa mundur ke Reviewed (Lead_SA only)
-    "Reviewed": ["Draft"],  # Reviewed bisa mundur ke Draft (Lead_SA only)
+    "Final": ["Reviewed"],  # Final bisa mundur ke Reviewed (Lead_SA/Admin only)
+    "Reviewed": ["Draft"],  # Reviewed bisa mundur ke Draft (Lead_SA/Admin only)
     "Draft": [],  # Draft tidak bisa mundur
 }
+
+
+
+async def _periksa_akses_kelola_dokumen(
+    document: Document, user: User, db: AsyncSession
+) -> None:
+    """
+    Pastikan `user` boleh mengelola status dokumen (KELOLA: Lead_SA, Admin, SA ditugaskan).
+
+    Proyek yang soft-deleted tersembunyi dari ORM; tanpa proyek tidak ada relasi yang bisa
+    dibuktikan, sehingga hanya Lead_SA/Admin yang lolos (perilaku lama bagi mereka tetap).
+    """
+    project = (
+        await db.execute(select(Project).where(Project.id_project == document.id_project))
+    ).scalar_one_or_none()
+    if project is not None:
+        await ensure_project_access(db, project, user, TingkatAkses.KELOLA)
+        pastikan_proyek_bisa_ditulis(project)  # Closed/Lost read-only (409)
+        return
+    if not izinkan(HubunganProyek(privileged=adalah_privileged(user)), TingkatAkses.KELOLA):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki akses ke proyek ini.",
+        )
 
 
 async def _handle_doc_ready(document: Document, db: AsyncSession) -> None:
@@ -105,9 +165,11 @@ async def _handle_doc_ready(document: Document, db: AsyncSession) -> None:
         )
         return
 
-    # Ambil user Sales (requester/sales_pic) untuk notifikasi + akses Drive
+    # Ambil user Sales dan Product untuk notifikasi serta izin Drive Solutions.
     sales_result = await db.execute(select(User).where(User.id == project.sales_pic))
     sales_user = sales_result.scalar_one_or_none()
+    product_result = await db.execute(select(User).where(User.id == project.product_pic))
+    product_user = product_result.scalar_one_or_none()
 
     if sales_user is None:
         logger.warning(
@@ -139,7 +201,7 @@ async def _handle_doc_ready(document: Document, db: AsyncSession) -> None:
     except Exception as e:  # noqa: BLE001 - side-effect tidak boleh menggagalkan transisi
         logger.error(f"Gagal emit doc_ready untuk dokumen {document.id_doc}: {e}")
 
-    # 2. Buka permission Drive Solutions untuk Sales (Viewer)
+    # 2. Buka permission Drive Solutions untuk Sales dan Product (Viewer)
     if not project.gdrive_solutions_folder_id:
         logger.info(
             f"Proyek '{project.id_project}' belum punya gdrive_solutions_folder_id; "
@@ -147,16 +209,31 @@ async def _handle_doc_ready(document: Document, db: AsyncSession) -> None:
         )
         return
 
-    try:
+    async def unlock_requester_access() -> None:
         await folder_provisioner.unlock_solutions_folder(
             solutions_folder_id=project.gdrive_solutions_folder_id,
             sales_email=sales_user.email,
-        )
-    except Exception as e:  # noqa: BLE001 - side-effect tidak boleh menggagalkan transisi
-        logger.error(
-            f"Gagal membuka akses Solutions untuk Sales pada proyek '{project.id_project}': {e}"
+            product_email=product_user.email if product_user else None,
         )
 
+    await run_side_effect(
+        project_id=project.id_project,
+        operation_type="drive_permission",
+        action="document_review_unlock",
+        actor_user_id=document.updated_by,
+        context={
+            "folder_id": project.gdrive_solutions_folder_id,
+            "sales_email": sales_user.email,
+            "document_id": document.id_doc,
+        },
+        retryable=True,
+        perform=unlock_requester_access,
+        outcome="Sales and Product viewer access restored after document review.",
+        actionable_failure=(
+            "Document review was saved, but Sales or Product Drive access was not restored. "
+            "Ask a Lead SA or Admin to retry after confirming the Solutions folder still exists."
+        ),
+    )
 
 @router.post(
     "/projects/{project_id}/documents",
@@ -182,6 +259,13 @@ async def create_document(
     3. Set status awal "Draft"
     4. Simpan ke database
     """
+    # Requirement hanya dibuat sistem (generate AI), bukan lewat input link.
+    if body.doc_type == DocTypeEnum.Requirement:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Dokumen Requirement dibuat otomatis oleh sistem dan tidak dapat ditambahkan manual.",
+        )
+
     # Validasi proyek ada
     project_result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = project_result.scalar_one_or_none()
@@ -191,10 +275,13 @@ async def create_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
+    # Unggah dokumen = tulis: Lead_SA, Admin, SA ditugaskan, collaborator contributor.
+    await ensure_project_access(db, project, current_user, TingkatAkses.TULIS)
+    pastikan_proyek_bisa_ditulis(project)  # Closed/Lost read-only (409)
 
     # Generate ID dokumen dan timestamp
     now = datetime.now(timezone.utc)
-    doc_id = _generate_doc_id()
+    doc_id = generate_doc_id()
 
     # Buat record dokumen baru
     new_document = Document(
@@ -215,19 +302,7 @@ async def create_document(
     await db.refresh(new_document)
 
     # Format response
-    response_data = DocumentResponse(
-        id_doc=new_document.id_doc,
-        id_project=new_document.id_project,
-        doc_type=new_document.doc_type,
-        status=new_document.status,
-        gdrive_link=new_document.gdrive_link,
-        folder_type=new_document.folder_type,
-        notes=new_document.notes,
-        created_by=new_document.created_by,
-        updated_by=new_document.updated_by,
-        created_at=new_document.created_at,
-        updated_at=new_document.updated_at,
-    ).model_dump(mode="json")
+    response_data = _to_response(new_document)
 
     return success_response(
         data=response_data,
@@ -258,6 +333,7 @@ async def list_project_documents(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
+    await ensure_project_access(db, project, current_user)
 
     # Query semua dokumen untuk proyek ini
     result = await db.execute(
@@ -265,28 +341,35 @@ async def list_project_documents(
         .where(Document.id_project == project_id)
         .order_by(Document.created_at.desc())
     )
-    documents = result.scalars().all()
+    # Gating link Solutions bagi Sales (sama dengan GET .../documents/solutions) diterapkan SEBELUM
+    # apa pun diturunkan dari daftar: `total` dan pesan dihitung dari daftar yang sudah disaring.
+    documents = saring_dokumen_terlihat(current_user, project, result.scalars().all())
 
-    # Format response
-    documents_data = [
-        DocumentResponse(
-            id_doc=doc.id_doc,
-            id_project=doc.id_project,
-            doc_type=doc.doc_type,
-            status=doc.status,
-            gdrive_link=doc.gdrive_link,
-            folder_type=doc.folder_type,
-            notes=doc.notes,
-            created_by=doc.created_by,
-            updated_by=doc.updated_by,
-            created_at=doc.created_at,
-            updated_at=doc.updated_at,
-        ).model_dump(mode="json")
-        for doc in documents
-    ]
+    # Banner "sumber berubah" (#37): hanya Requirement yang di-override/Final perlu hash saat ini.
+    documents_data = []
+    for doc in documents:
+        changed = False
+        if doc.doc_type == "Requirement" and is_protected_requirement(doc):
+            _, current_hash = await collect_sources(db, project)
+            changed = is_source_changed(doc, current_hash)
+        documents_data.append(_to_response(doc, source_changed=changed))
 
     return success_response(
-        data={"documents": documents_data, "total": len(documents_data)},
+        data={
+            "documents": documents_data,
+            "total": len(documents_data),
+            # Status generate Requirement (#34): UI menampilkan pending/gagal + tombol coba lagi.
+            "requirement_generation_status": project.requirement_generation_status,
+            "can_regenerate_requirement": can_manage_requirement(
+                project,
+                current_user,
+                sa_ditugaskan=(
+                    None
+                    if adalah_privileged(current_user)  # privileged lolos tanpa penugasan
+                    else await adalah_sa_ditugaskan(db, project, current_user)
+                ),
+            ),
+        },
         message=f"Ditemukan {len(documents_data)} dokumen untuk proyek '{project_id}'.",
     )
 
@@ -296,8 +379,8 @@ async def list_project_documents(
     summary="Update status dokumen (state machine)",
     description=(
         "Mengubah status dokumen mengikuti aturan state machine. "
-        "Transisi maju: Draft → Reviewed → Final (SA & Lead_SA). "
-        "Transisi mundur: hanya Lead_SA. "
+        "Transisi maju: Draft → Reviewed → Final (Lead_SA, Admin, SA ditugaskan). "
+        "Transisi mundur: hanya Lead_SA dan Admin. "
         "Loncat (Draft → Final): ditolak."
     ),
 )
@@ -311,10 +394,11 @@ async def update_document_status(
     Update status dokumen dengan enforcement state machine.
 
     Rules:
-    - Transisi maju (Draft→Reviewed, Reviewed→Final): SA dan Lead_SA
-    - Transisi mundur (Final→Reviewed, Reviewed→Draft): hanya Lead_SA
+    - Transisi maju (Draft→Reviewed, Reviewed→Final): Lead_SA, Admin, SA ditugaskan
+    - Transisi mundur (Final→Reviewed, Reviewed→Draft): hanya Lead_SA dan Admin
     - Loncat (Draft→Final): ditolak untuk semua role
-    - Status "Final" hanya bisa diubah oleh Lead_SA
+    - Status "Final" hanya bisa diubah oleh Lead_SA dan Admin
+    - `doc_ready` hanya pada transisi tepat Draft→Reviewed
     - Catat timestamp dan user pada setiap transisi
     """
     # Cari dokumen
@@ -327,6 +411,9 @@ async def update_document_status(
             detail=f"Dokumen dengan ID '{doc_id}' tidak ditemukan.",
         )
 
+    # Akses (403) diputuskan SEBELUM validasi transisi, commit, dan side-effect doc_ready.
+    await _periksa_akses_kelola_dokumen(document, current_user, db)
+
     current_status = document.status
     new_status = body.new_status.value
 
@@ -337,30 +424,33 @@ async def update_document_status(
             detail=f"Dokumen sudah berstatus '{current_status}'. Tidak ada perubahan.",
         )
 
-    # Cek proteksi: status "Final" hanya bisa diubah oleh Lead_SA
-    if current_status == "Final" and current_user.role != "Lead_SA":
+    # Cek proteksi: status "Final" hanya bisa diubah oleh Lead_SA dan Admin
+    if current_status == "Final" and not adalah_privileged(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=("Hanya Lead_SA yang dapat mengubah status dokumen yang sudah 'Final'."),
+            detail=(
+                "Hanya Lead_SA dan Admin yang dapat mengubah status dokumen yang sudah 'Final'."
+            ),
         )
 
     # Cek apakah transisi maju yang valid
     is_forward = new_status in VALID_TRANSITIONS.get(current_status, [])
 
-    # Cek apakah transisi mundur yang valid (hanya Lead_SA)
+    # Cek apakah transisi mundur yang valid (hanya Lead_SA dan Admin)
     is_backward = new_status in BACKWARD_TRANSITIONS.get(current_status, [])
 
     if is_forward:
-        # Transisi maju — SA dan Lead_SA boleh
+        # Transisi maju — Lead_SA, Admin, SA ditugaskan (sudah lolos cek KELOLA di atas)
         pass
     elif is_backward:
-        # Transisi mundur — hanya Lead_SA
-        if current_user.role != "Lead_SA":
+        # Transisi mundur — hanya Lead_SA dan Admin
+        if not adalah_privileged(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
-                    "Hanya Lead_SA yang dapat melakukan transisi mundur. "
-                    f"Transisi '{current_status}' → '{new_status}' memerlukan role Lead_SA."
+                    "Hanya Lead_SA dan Admin yang dapat melakukan transisi mundur. "
+                    f"Transisi '{current_status}' → '{new_status}' memerlukan role Lead_SA "
+                    "atau Admin."
                 ),
             )
     else:
@@ -387,25 +477,19 @@ async def update_document_status(
     await db.commit()
     await db.refresh(document)
 
-    # Side-effect doc_ready: HANYA saat transisi ke `Reviewed` dengan DQ terisi.
-    # Transisi lain (ke Final, mundur, dll) tidak memicu ini (fix B13 / Fase 2A.3).
-    if new_status == "Reviewed":
+    # Side-effect doc_ready: HANYA pada transisi tepat Draft → Reviewed dengan DQ terisi.
+    # Transisi lain (ke Final, mundur termasuk Final → Reviewed) tidak memicu ini
+    # (fix B13 / Fase 2A.3, spec #87). Requirement (konten turunan AI, bukan dokumen kerja SA)
+    # tidak memicu doc_ready maupun pembukaan folder Solutions (#33).
+    if (
+        current_status == "Draft"
+        and new_status == "Reviewed"
+        and document.doc_type != "Requirement"
+    ):
         await _handle_doc_ready(document, db)
 
     # Format response
-    response_data = DocumentResponse(
-        id_doc=document.id_doc,
-        id_project=document.id_project,
-        doc_type=document.doc_type,
-        status=document.status,
-        gdrive_link=document.gdrive_link,
-        folder_type=document.folder_type,
-        notes=document.notes,
-        created_by=document.created_by,
-        updated_by=document.updated_by,
-        created_at=document.created_at,
-        updated_at=document.updated_at,
-    ).model_dump(mode="json")
+    response_data = _to_response(document)
 
     return success_response(
         data=response_data,
@@ -413,3 +497,130 @@ async def update_document_status(
             f"Status dokumen '{doc_id}' berhasil diubah: '{current_status}' → '{new_status}'."
         ),
     )
+
+
+# --------------------------------------------------------------------------- override Requirement (5B-4)
+async def _load_requirement_for_edit(
+    project_id: str, current_user: User, db: AsyncSession
+) -> Document:
+    """
+    Ambil dokumen Requirement proyek (dikunci FOR UPDATE) untuk diedit.
+
+    Edit hanya untuk Lead_SA, Admin, dan SA yang ditugaskan pada proyek; peran lain
+    (Sales termasuk Sales PIC, SA tidak ditugaskan, collaborator) read-only -> 403. Requirement `Final`
+    terkunci (409) kecuali Lead_SA menurunkan statusnya lebih dulu.
+    """
+    project = (
+        await db.execute(select(Project).where(Project.id_project == project_id))
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
+        )
+
+    await ensure_project_access(
+        db,
+        project,
+        current_user,
+        TingkatAkses.KELOLA_REQUIREMENT,
+        pesan="Hanya SA yang ditugaskan, Lead_SA, atau Admin yang dapat mengedit Requirement.",
+    )
+    pastikan_proyek_bisa_ditulis(project)  # Closed/Lost read-only (409)
+
+    document = (
+        await db.execute(
+            select(Document)
+            .where(Document.id_project == project_id, Document.doc_type == "Requirement")
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Requirement untuk proyek ini belum tersedia.",
+        )
+    if document.status == "Final":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Requirement berstatus Final tidak dapat diedit.",
+        )
+    return document
+
+
+async def _save_requirement_items(
+    document: Document, items: list[dict], current_user: User, db: AsyncSession
+) -> None:
+    """Simpan daftar butir hasil edit manual; `source_hash` sengaja tidak disentuh."""
+    document.content = items  # assign list baru agar perubahan JSONB terdeteksi
+    document.is_overridden = True
+    document.updated_by = current_user.id
+    document.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+
+def _find_item(items: list[dict], item_id: str) -> int:
+    for idx, item in enumerate(items):
+        if item.get("id") == item_id:
+            return idx
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Butir Requirement '{item_id}' tidak ditemukan.",
+    )
+
+
+@router.post(
+    "/projects/{project_id}/requirement/items",
+    status_code=status.HTTP_201_CREATED,
+    summary="Tambah butir Requirement",
+)
+async def add_requirement_item(
+    project_id: str,
+    body: RequirementItem,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Tambah butir baru (id 8 hex); menyetel `is_overridden`."""
+    document = await _load_requirement_for_edit(project_id, current_user, db)
+    items = list(document.content or [])
+    items.append(new_requirement_item(body.kategori, body.butir))
+    await _save_requirement_items(document, items, current_user, db)
+    return success_response(data=_to_response(document), message="Butir Requirement ditambahkan.")
+
+
+@router.put(
+    "/projects/{project_id}/requirement/items/{item_id}",
+    summary="Ubah butir Requirement",
+)
+async def update_requirement_item(
+    project_id: str,
+    item_id: str,
+    body: RequirementItem,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ganti kategori/teks satu butir; `id` butir dipertahankan."""
+    document = await _load_requirement_for_edit(project_id, current_user, db)
+    items = [dict(i) for i in (document.content or [])]
+    idx = _find_item(items, item_id)
+    items[idx] = {"id": item_id, "kategori": body.kategori, "butir": body.butir}
+    await _save_requirement_items(document, items, current_user, db)
+    return success_response(data=_to_response(document), message="Butir Requirement diperbarui.")
+
+
+@router.delete(
+    "/projects/{project_id}/requirement/items/{item_id}",
+    summary="Hapus butir Requirement",
+)
+async def delete_requirement_item(
+    project_id: str,
+    item_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hapus satu butir (boleh sampai kosong)."""
+    document = await _load_requirement_for_edit(project_id, current_user, db)
+    items = [dict(i) for i in (document.content or [])]
+    del items[_find_item(items, item_id)]
+    await _save_requirement_items(document, items, current_user, db)
+    return success_response(data=_to_response(document), message="Butir Requirement dihapus.")

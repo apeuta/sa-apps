@@ -1,15 +1,25 @@
 "use client";
 
+import { useState } from "react";
+import { statusBadgeClass } from "@/lib/status";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
+import { LoadError } from "@/components/LoadError";
 import { ProjectCard } from "@/components/ProjectCard";
+import { ProjectPagination } from "@/components/ProjectPagination";
+import {
+  PROJECT_LIST_PAGE_SIZE,
+  projectListUrl,
+  type ProjectListItem,
+  type ProjectListPage,
+} from "@/lib/api/projects";
 import { useAuthStore } from "@/store/auth";
 
 /**
- * Dashboard Sales
+ * Dashboard requester (bersama untuk Sales dan Product; #109, ADR 0014)
  *
- * Menampilkan daftar proyek yang disubmit oleh Sales yang sedang login.
+ * Menampilkan "proyek saya": semua proyek tempat user login terlibat (`involved=me`).
  * Informasi per proyek: nama proyek, nama customer, status, tanggal update terakhir.
  *
  * Fitur:
@@ -20,18 +30,7 @@ import { useAuthStore } from "@/store/auth";
  * Requirements: 9.1, 19.5
  */
 
-/** Tipe project yang dikembalikan dari API */
-interface SalesProject {
-  id_project: string;
-  project_name: string;
-  customer_name: string;
-  status: string;
-  dq_number: string | null;
-  bant_score: number | null;
-  sla_days_elapsed?: number | null;
-  sla_is_locked?: boolean;
-  updated_at: string;
-}
+type SalesProject = ProjectListItem;
 
 /** Tipe ringkasan proyek per status */
 interface StatusCount {
@@ -39,33 +38,33 @@ interface StatusCount {
   count: number;
 }
 
-/** Warna badge per status proyek */
-const STATUS_BADGE_COLORS: Record<string, string> = {
-  "Pending Assignment": "bg-yellow-100 text-yellow-700",
-  Assigned: "bg-blue-100 text-blue-700",
-  Ready: "bg-green-100 text-green-700",
-  "Closed-Win": "bg-emerald-100 text-emerald-700",
-  "Need Clarification": "bg-orange-100 text-orange-700",
-  New: "bg-neutral-100 text-neutral-700",
-  Lost: "bg-red-100 text-red-700",
-  "Scoring Pending": "bg-purple-100 text-purple-700",
-  "Manual Review Required": "bg-pink-100 text-pink-700",
-  "Handover Complete": "bg-teal-100 text-teal-700",
-};
-
 export default function SalesDashboard() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
+  const [page, setPage] = useState(1);
 
-  // Fetch proyek milik Sales saat ini, sorted by updated_at descending
-  const { data: projects, isLoading } = useSWR<SalesProject[]>(
-    user ? "/projects?sales_pic=me&sort=-updated_at" : null,
-    fetcher
-  );
+  // Fetch proyek yang melibatkan user saat ini, sorted by updated_at descending.
+  const { data: projects, isLoading, error: projectsError, mutate: mutateProjects } =
+    useSWR<ProjectListPage<SalesProject>>(
+      user
+        ? projectListUrl({
+          page,
+          pageSize: PROJECT_LIST_PAGE_SIZE,
+          involved: "me",
+          sort: "-updated_at",
+        })
+        : null,
+      fetcher,
+    );
 
-  // Fetch ringkasan status proyek milik Sales
-  const { data: statusSummary, isLoading: isLoadingStatus } = useSWR<StatusCount[]>(
-    user ? "/projects/status-summary?sales_pic=me" : null,
+  // Fetch ringkasan status proyek yang melibatkan user
+  const {
+    data: statusSummary,
+    isLoading: isLoadingStatus,
+    error: statusError,
+    mutate: mutateStatus,
+  } = useSWR<StatusCount[]>(
+    user ? "/projects/status-summary?involved=me" : null,
     fetcher
   );
 
@@ -75,10 +74,10 @@ export default function SalesDashboard() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-neutral-900">
-            Dashboard Sales
+            Dashboard Requester
           </h1>
           <p className="mt-1 text-neutral-500">
-            Pantau status proyek yang sudah Anda submit.
+            Pantau status proyek yang melibatkan Anda.
           </p>
         </div>
 
@@ -112,6 +111,10 @@ export default function SalesDashboard() {
           </div>
         )}
 
+        {statusError && !statusSummary && (
+          <LoadError message="Gagal memuat ringkasan proyek." onRetry={() => mutateStatus()} />
+        )}
+
         {!isLoadingStatus && statusSummary && (
           <div className="rounded-lg border border-neutral-200 bg-white p-5">
             {statusSummary.length === 0 ? (
@@ -128,7 +131,7 @@ export default function SalesDashboard() {
                     <span
                       className={`
                         px-2.5 py-1 text-xs font-medium rounded-full
-                        ${STATUS_BADGE_COLORS[item.status] || "bg-neutral-100 text-neutral-600"}
+                        ${statusBadgeClass(item.status)}
                       `}
                     >
                       {item.status}
@@ -156,29 +159,42 @@ export default function SalesDashboard() {
       {/* Loading skeleton — ditampilkan saat data belum tersedia (Req 19.5) */}
       {isLoading && <ProjectListSkeleton />}
 
+      {projectsError && !projects && (
+        <LoadError message="Gagal memuat daftar proyek." onRetry={() => mutateProjects()} />
+      )}
+
       {/* Konten utama: daftar proyek atau empty state */}
       {!isLoading && projects && (
         <>
-          {projects.length === 0 ? (
+          {projects.items.length === 0 ? (
             <EmptyState onCreateNew={() => router.push("/projects/new")} />
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {projects.map((project) => (
-                <ProjectCard
-                  key={project.id_project}
-                  id={project.id_project}
-                  projectName={project.project_name}
-                  customerName={project.customer_name}
-                  status={project.status}
-                  dqNumber={project.dq_number}
-                  lastUpdated={project.updated_at}
-                  bantScore={project.bant_score}
-                  slaDaysElapsed={project.sla_days_elapsed}
-                  slaIsLocked={project.sla_is_locked}
-                  onClick={() => router.push(`/projects/${project.id_project}`)}
-                />
-              ))}
-            </div>
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {projects.items.map((project) => (
+                  <ProjectCard
+                    key={project.id_project}
+                    id={project.id_project}
+                    projectName={project.project_name}
+                    customerName={project.customer_name}
+                    status={project.status}
+                    dqNumber={project.dq_number}
+                    lastUpdated={project.updated_at || ""}
+                    bantScore={project.bant_score}
+                    slaDaysElapsed={project.sla_days_elapsed}
+                    slaIsLocked={project.sla_is_locked}
+                    onClick={() => router.push(`/projects/${project.id_project}`)}
+                  />
+                ))}
+              </div>
+              <ProjectPagination
+                page={projects.page}
+                pageSize={projects.page_size}
+                total={projects.total}
+                totalPages={projects.total_pages}
+                onPageChange={setPage}
+              />
+            </>
           )}
         </>
       )}
@@ -215,7 +231,7 @@ function EmptyState({ onCreateNew }: { onCreateNew: () => void }) {
         Belum ada proyek
       </h3>
       <p className="text-sm text-neutral-500 mb-6">
-        Anda belum memiliki proyek. Buat request baru untuk memulai.
+        Anda belum terlibat di proyek mana pun. Buat request baru untuk memulai.
       </p>
 
       <button

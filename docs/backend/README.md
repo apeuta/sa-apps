@@ -13,7 +13,7 @@ Untuk konteks kontribusi, lihat [`CONTRIBUTING.md`](../../CONTRIBUTING.md); untu
 | Komponen | Teknologi | Versi (pinned) |
 |----------|-----------|----------------|
 | Framework API | FastAPI | 0.115.6 |
-| Runtime | Python | 3.12 |
+| Runtime | Python | 3.14 |
 | ASGI server | Uvicorn | 0.34.0 |
 | ORM | SQLAlchemy (async) | 2.0.36 |
 | Driver DB | asyncpg | 0.30.0 |
@@ -26,7 +26,7 @@ Untuk konteks kontribusi, lihat [`CONTRIBUTING.md`](../../CONTRIBUTING.md); untu
 | Package manager | uv (uv_build backend) | — |
 | Dev tools | pytest, pytest-asyncio, ruff, hypothesis | — |
 
-LLM: abstraction layer multi-provider (`llm_provider.py`) dengan adapter aktif `GeminiAdapter` (default model `gemini-1.5-flash`), didaftarkan saat startup di `main.py`.
+LLM: abstraction layer multi-provider (`llm_provider.py`) dengan adapter aktif `GeminiAdapter` (default model `gemini-3.8-flash`), didaftarkan saat startup di `main.py`.
 
 ## Project Layout
 
@@ -43,7 +43,7 @@ backend/
 ├── alembic/versions/      # migration (001 initial, 002 handover cols, 003 activity utilization)
 ├── tests/                 # pytest (condong ke AI/guardrail/provisioning/SLA/scoring)
 ├── pyproject.toml         # sumber kebenaran dependency (uv)
-└── Dockerfile             # multi-stage build (uv, Python 3.12-slim, non-root)
+└── Dockerfile             # multi-stage build (uv, Python 3.14-slim, non-root)
 ```
 
 Layering: `api` (HTTP + auth + validasi akses) → `services` (business logic + integrasi eksternal) → `models` (persistence). `schemas` dipakai lintas layer untuk kontrak data; `core` menyediakan infrastruktur. Beberapa router (`projects.py`, `assignment.py`) cukup besar dan mencampur logic ke dalam handler — kandidat refactor (roadmap).
@@ -90,12 +90,12 @@ Dibaca via `pydantic-settings` di `core/config.py` (file `.env`, `case_sensitive
 | `JWT_ALGORITHM` | `HS256` | Algoritma signing. |
 | `JWT_EXPIRE_HOURS` / `JWT_REFRESH_EXPIRE_HOURS` | `24` / `168` | TTL access/refresh token. |
 | `ALLOWED_DOMAINS` | `""` | Whitelist domain email (kosong = izinkan semua). |
-| `ROLE_MAPPING` | `"{}"` | JSON mapping email/wildcard → role. Default role `SA`. |
+| `ROLE_MAPPING` | `"{}"` | JSON mapping email/wildcard → role. Default role `SA`. Nilai peran harus `Sales`, `SA`, `Lead_SA`, atau `Admin` (persis); peran lain membuat backend gagal start (fail-fast). |
 | `FRONTEND_URL` | `http://localhost:3000` | Untuk redirect pasca OAuth. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | `""` | Kredensial Google OAuth. |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:8000/api/v1/auth/callback` | Callback OAuth. |
 | `LLM_PROVIDER` | `gemini` | Provider LLM aktif. |
-| `LLM_MODEL_NAME` | `gemini-1.5-flash` | Model default. |
+| `LLM_MODEL_NAME` | `gemini-3.8-flash` | Model default. |
 | `LLM_API_ENDPOINT` | `https://generativelanguage.googleapis.com/v1` | Endpoint LLM. |
 | `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | `30` / `3` | Timeout + retry LLM. |
 | `LLM_MAX_INPUT_CHARS` | `20000` | Guardrail batas karakter input teks. |

@@ -2,11 +2,13 @@
 HandoverService — Modul untuk mengelola proses handover proyek ke PMO dan Delivery.
 
 Fitur utama:
-- Trigger handover otomatis saat HLD "Final" + status "Closed-Win"
+- Trigger handover MANUAL (POST /projects/{id}/handover) saat HLD "Final" + status "Won"
+  (keputusan pemilik produk 2026-11-10: tidak otomatis; satu-satunya jalan ke "Handed Over")
 - Provisioning folder Final_Deliverables + permission PMO/Delivery
-- Kirim notifikasi handover (in-app + email)
-- Update status → "Handover Complete" + audit log
-- Handle error GDrive: retry 3x interval 5s, flag "Handover Failed"
+- Kirim notifikasi handover: in-app + email bila punya akun portal, email langsung bila tidak
+- Update status → "Handed Over" + audit log
+- Handle error GDrive: retry 3x interval 5s; bila tetap gagal status TIDAK berubah (tetap
+  "Won"), SA dan Lead_SA diberi tahu, dan handover dapat dicoba ulang
 - Handle konfigurasi PMO/Delivery belum ada
 
 Requirements: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7
@@ -57,13 +59,15 @@ class HandoverService:
     Service untuk mengelola proses handover proyek.
 
     Proses handover terdiri dari:
-    1. Validasi prasyarat (status Closed-Win, HLD Final, PMO/Delivery dikonfigurasi)
+    1. Validasi prasyarat (status Won, HLD Final, PMO/Delivery dikonfigurasi)
     2. Provisioning folder Final_Deliverables + permission (via FolderProvisioner)
     3. Kirim notifikasi handover ke PMO Lead dan Delivery Lead
-    4. Update status proyek → "Handover Complete"
+    4. Update status proyek → "Handed Over"
     5. Catat audit log
 
-    Jika GDrive gagal setelah 3x retry, tandai "Handover Failed" dan notif error.
+    Jika GDrive gagal setelah 3x retry, status proyek tidak berubah dan SA/Lead_SA diberi notifikasi
+    error. Tidak ada status "Handover Failed" yang disimpan; kegagalan terlihat lewat notifikasi dan
+    status yang tetap "Won".
 
     Requirements: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7
     """
@@ -73,7 +77,7 @@ class HandoverService:
         Cek apakah semua prasyarat handover terpenuhi.
 
         Prasyarat:
-        - Status proyek = "Closed-Win"
+        - Status proyek = "Won"
         - Dokumen HLD ada dengan status "Final"
         - PMO Lead email sudah dikonfigurasi
         - Delivery Lead email sudah dikonfigurasi
@@ -104,24 +108,29 @@ class HandoverService:
             }
 
         # Cek status proyek
-        if project.status != "Closed-Win":
-            missing_items.append(f"Status proyek harus 'Closed-Win' (saat ini: '{project.status}')")
+        if project.status != "Won":
+            missing_items.append(f"Status proyek harus 'Won' (saat ini: '{project.status}')")
 
         # Cek dokumen HLD Final
+        # Satu proyek boleh punya beberapa dokumen HLD (revisi); cukup satu yang Final.
+        # Bila belum ada yang Final, laporkan status dokumen HLD terbaru.
         hld_result = await db.execute(
-            select(Document).where(
+            select(Document)
+            .where(
                 and_(
                     Document.id_project == project_id,
                     Document.doc_type == "HLD",
                 )
             )
+            .order_by(Document.created_at.desc())
         )
-        hld_doc = hld_result.scalar_one_or_none()
+        hld_docs = hld_result.scalars().all()
 
         hld_status = None
-        if hld_doc is None:
+        if not hld_docs:
             missing_items.append("Dokumen HLD belum dibuat")
         else:
+            hld_doc = next((d for d in hld_docs if d.status == "Final"), hld_docs[0])
             hld_status = hld_doc.status
             if hld_doc.status != "Final":
                 missing_items.append(
@@ -144,6 +153,10 @@ class HandoverService:
         if not project.gdrive_folder_id:
             missing_items.append("Folder Google Drive belum di-provisioning")
 
+        # Final_Deliverables dibuat di dalam Solutions (ADR 0005): id Solutions wajib ada.
+        if not project.gdrive_solutions_folder_id:
+            missing_items.append("Folder Solutions Google Drive belum di-provisioning")
+
         return {
             "ready": len(missing_items) == 0,
             "missing_items": missing_items,
@@ -163,14 +176,14 @@ class HandoverService:
         Eksekusi proses handover proyek ke PMO dan Delivery.
 
         Flow:
-        1. Validasi prasyarat (status Closed-Win, HLD Final, config ada)
+        1. Validasi prasyarat (status Won, HLD Final, config ada)
         2. Panggil FolderProvisioner.provision_handover()
         3. Kirim notifikasi handover ke PMO Lead + Delivery Lead
-        4. Update status → "Handover Complete"
+        4. Update status → "Handed Over"
         5. Catat audit log
 
-        Jika GDrive gagal (retry sudah di-handle oleh FolderProvisioner),
-        tandai "Handover Failed" dan kirim notif error.
+        Jika GDrive gagal (retry sudah di-handle oleh FolderProvisioner), status tetap
+        "Won" dan notifikasi error dikirim ke SA/Lead_SA.
 
         Args:
             project_id: ID proyek yang akan di-handover
@@ -193,23 +206,25 @@ class HandoverService:
             raise HandoverError(f"Proyek '{project_id}' tidak ditemukan.")
 
         # Validasi status
-        if project.status != "Closed-Win":
+        if project.status != "Won":
             raise HandoverError(
-                f"Handover hanya bisa dilakukan saat status 'Closed-Win' "
+                f"Handover hanya bisa dilakukan saat status 'Won' "
                 f"(saat ini: '{project.status}')."
             )
 
         # Validasi HLD Final
         hld_result = await db.execute(
-            select(Document).where(
+            select(Document)
+            .where(
                 and_(
                     Document.id_project == project_id,
                     Document.doc_type == "HLD",
                     Document.status == "Final",
                 )
             )
+            .limit(1)
         )
-        hld_doc = hld_result.scalar_one_or_none()
+        hld_doc = hld_result.scalars().first()
 
         if hld_doc is None:
             raise HandoverError(
@@ -234,6 +249,13 @@ class HandoverService:
                 "Pastikan folder sudah dibuat sebelum handover."
             )
 
+        # Final_Deliverables dibuat di dalam Solutions; tanpa id-nya folder akan salah tempat.
+        if not project.gdrive_solutions_folder_id:
+            raise HandoverError(
+                "Folder Solutions Google Drive proyek belum di-provisioning. "
+                "Provisioning ulang folder sebelum handover."
+            )
+
         # === 2. Provisioning folder Final_Deliverables ===
         # FolderProvisioner sudah handle retry 3x interval 5s
         final_deliverables_id: Optional[str] = None
@@ -245,7 +267,7 @@ class HandoverService:
             )
             logger.info(f"Folder Final_Deliverables berhasil dibuat: {final_deliverables_id}")
         except FolderProvisioningError as e:
-            # GDrive gagal setelah 3x retry — tandai Handover Failed
+            # GDrive gagal setelah 3x retry — status tidak berubah, SA/Lead_SA diberi tahu
             logger.error(f"Handover gagal (GDrive error): {e}")
 
             # Kirim notifikasi error ke SA dan Lead_SA
@@ -253,7 +275,7 @@ class HandoverService:
 
             raise HandoverError(
                 f"Provisioning folder gagal setelah 3x retry: {e}. "
-                f"Handover ditandai sebagai 'Handover Failed'. "
+                f"Status proyek tidak berubah. "
                 f"SA dan Lead_SA telah diberitahu."
             )
 
@@ -282,10 +304,24 @@ class HandoverService:
             "handover_at": now.isoformat(),
         }
 
-        # Cari user PMO dan Delivery (jika terdaftar di sistem)
-        # Jika tidak terdaftar, kirim notifikasi tetap (email only)
+        # Cari user PMO dan Delivery (jika terdaftar di sistem). Yang punya akun menerima in-app +
+        # email; yang tidak punya akun menerima email langsung (#76), dicatat di audit log.
         pmo_user = await self._find_user_by_email(pmo_email, db)
         delivery_user = await self._find_user_by_email(delivery_email, db)
+        subject_handover = (
+            f"[Portal SA] Handover Proyek: {project.customer_name} - {project.project_name}"
+        )
+        penerima_email_langsung: list[str] = []
+        for alamat, akun in ((pmo_email, pmo_user), (delivery_email, delivery_user)):
+            if akun is None:
+                penerima_email_langsung.append(alamat)
+                await notification_service.send_email_langsung(
+                    to=alamat,
+                    event_type=NotificationEventType.HANDOVER,
+                    reference_id=project_id,
+                    metadata=handover_metadata,
+                    subject=subject_handover,
+                )
 
         # Kirim notifikasi ke PMO Lead
         if pmo_user:
@@ -323,9 +359,9 @@ class HandoverService:
             f"Notifikasi handover terkirim ke PMO ({pmo_email}) dan Delivery ({delivery_email})"
         )
 
-        # === 4. Update status → "Handover Complete" ===
+        # === 4. Update status → "Handed Over" ===
         old_status = project.status
-        project.status = "Handover Complete"
+        project.status = "Handed Over"
         project.updated_at = now
 
         # === 5. Catat audit log ===
@@ -338,10 +374,11 @@ class HandoverService:
             performed_by=performed_by,
             old_value={"status": old_status},
             new_value={
-                "status": "Handover Complete",
+                "status": "Handed Over",
                 "pmo_lead_email": pmo_email,
                 "delivery_lead_email": delivery_email,
                 "final_deliverables_folder_id": final_deliverables_id,
+                "penerima_email_langsung": penerima_email_langsung,
                 "handover_at": now.isoformat(),
             },
             created_at=now,
@@ -354,7 +391,7 @@ class HandoverService:
 
         logger.info(
             f"Handover proyek {project_id} berhasil. "
-            f"Status: '{old_status}' → 'Handover Complete'. "
+            f"Status: '{old_status}' → 'Handed Over'. "
             f"PMO: {pmo_email}, Delivery: {delivery_email}"
         )
 
@@ -363,7 +400,7 @@ class HandoverService:
             "project_name": project.project_name,
             "customer_name": project.customer_name,
             "old_status": old_status,
-            "new_status": "Handover Complete",
+            "new_status": "Handed Over",
             "pmo_email": pmo_email,
             "delivery_email": delivery_email,
             "final_deliverables_folder_id": final_deliverables_id,

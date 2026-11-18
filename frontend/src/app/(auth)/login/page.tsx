@@ -16,6 +16,7 @@ const ERROR_MESSAGES: Record<string, string> = {
     "Domain email Anda tidak diizinkan untuk mengakses sistem ini.",
   auth_cancelled: "Login dibatalkan.",
   auth_failed: "Login gagal. Silakan coba lagi.",
+  session_expired: "Sesi Anda telah berakhir. Silakan masuk kembali.",
 };
 
 function LoginContent() {
@@ -46,7 +47,7 @@ function LoginContent() {
     error && (ERROR_MESSAGES[error] || "Terjadi kesalahan. Silakan coba lagi.");
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-neutral-50 px-4">
+    <main className="flex min-h-screen items-center justify-center bg-neutral-50 px-4">
       <div className="w-full max-w-sm space-y-6">
         {/* Logo / App Name */}
         <div className="text-center">
@@ -110,7 +111,7 @@ function LoginContent() {
           </button>
 
           {!oauthConfigured && (
-            <p className="text-center text-xs text-neutral-400">
+            <p className="text-center text-xs text-neutral-500">
               Hubungi administrator jika login Google belum tersedia.
             </p>
           )}
@@ -128,7 +129,7 @@ function LoginContent() {
           </p>
         )}
       </div>
-    </div>
+    </main>
   );
 }
 

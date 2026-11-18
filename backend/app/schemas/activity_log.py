@@ -58,11 +58,11 @@ def subtask_categories_for(work_type: str) -> list[str]:
 def default_phase_for_status(project_status: str) -> str:
     """
     Default project_phase berdasarkan status proyek saat log dibuat.
-    - Handover Complete → Implementation (masa serah terima)
+    - Handed Over → Implementation (masa serah terima)
     - Selainnya → Pre-Implementation (mayoritas kerja SA pre-sales)
     - Post-Implementation tidak pernah jadi default (tag manual saja).
     """
-    if project_status == "Handover Complete":
+    if project_status == "Handed Over":
         return "Implementation"
     return "Pre-Implementation"
 
@@ -172,6 +172,14 @@ class ActivityLogCreate(BaseModel):
 
         return self
 
+    @field_validator("raw_notes", "gcal_event_id", "id_subtask", "id_project")
+    @classmethod
+    def tolak_karakter_nul(cls, v: Optional[str]) -> Optional[str]:
+        """`\\x00` tidak bisa disimpan Postgres (text/varchar); tolak 422, bukan 500 dari DB."""
+        if v is not None and "\x00" in v:
+            raise ValueError("Teks tidak boleh berisi karakter NUL (\\x00).")
+        return v
+
     @field_validator("duration_hours")
     @classmethod
     def validate_duration_multiple(cls, v: Decimal) -> Decimal:
@@ -184,8 +192,11 @@ class ActivityLogCreate(BaseModel):
     @field_validator("raw_notes")
     @classmethod
     def strip_notes(cls, v: str) -> str:
-        """Trim whitespace di awal/akhir."""
-        return v.strip()
+        """Trim whitespace di awal/akhir; catatan yang hanya berisi spasi dianggap kosong."""
+        v = v.strip()
+        if not v:
+            raise ValueError("raw_notes wajib diisi (tidak boleh hanya spasi).")
+        return v
 
 
 class ActivityLogResponse(BaseModel):

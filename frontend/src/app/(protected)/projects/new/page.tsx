@@ -1,15 +1,44 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import useSWR, { useSWRConfig } from "swr";
+import { fetcher } from "@/lib/fetcher";
+import { bisaMembuatProyek } from "@/lib/roles";
+import { useAuthStore } from "@/store/auth";
 import { FileUpload, FileItem } from "@/components/FileUpload";
-import { BANTManualForm, BANTScores, BANTMetadata } from "./bant-manual";
+import { QualificationForm } from "@/components/QualificationForm";
 import {
   createProject,
-  submitManualBANT,
-  BANTResult,
+  extractFieldErrors,
   CreateProjectResponse,
+  renameCustomer,
+  CustomerOption,
 } from "@/lib/api/projects";
+import {
+  QualificationAnswers,
+  QualificationErrors,
+  toPayload,
+  useQualificationSchema,
+  validateAnswers,
+} from "@/lib/qualification";
+import {
+  buildProjectFormData,
+  formatIDR,
+  getTodayString,
+  parseIDR,
+  ProjectFormData,
+  ProjectFormErrors,
+  validateProjectForm,
+} from "./project-form";
+
+
+/** User kandidat Product/Sales PIC (GET /projects/users/search?role=...). */
+interface OrangOption {
+  id: string;
+  name: string;
+  email: string;
+}
 
 /**
  * Halaman Form Request SA
@@ -18,85 +47,68 @@ import {
  * - Input fields: nama proyek, nama customer, target submit, estimasi nilai
  * - File upload drag-and-drop (PDF/DOCX, max 20MB, max 5 file)
  * - Client-side validation
- * - BANT manual form sebagai fallback (jika tanpa file)
+ * - Dua langkah: (1) data dasar + file, (2) Kuesioner kualifikasi; satu kali pengiriman
+ * - Skor BANT dihitung backend dari jawaban kuesioner (tidak ada form BANT manual)
  * - Feedback BANT score dan status perubahan
  *
  * Requirements: 2.1, 2.3, 2.7, 3.6
  */
 
-// ==================== Types ====================
-
-interface FormData {
-  projectName: string;
-  customerName: string;
-  targetSubmit: string;
-  estimatedValue: string;
-  dqNumber: string;
-}
-
-interface FormErrors {
-  projectName?: string;
-  customerName?: string;
-  targetSubmit?: string;
-  estimatedValue?: string;
-  dqNumber?: string;
-}
-
-// ==================== Helpers ====================
-
-/**
- * Format angka ke format IDR (titik sebagai pemisah ribuan)
- */
-function formatIDR(value: string): string {
-  // Hapus semua karakter non-digit dan non-dot/comma
-  const cleaned = value.replace(/[^\d]/g, "");
-  if (!cleaned) return "";
-
-  // Format dengan pemisah ribuan
-  return cleaned.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-}
-
-/**
- * Parse string IDR ke angka
- */
-function parseIDR(value: string): number {
-  const cleaned = value.replace(/\./g, "");
-  return parseInt(cleaned) || 0;
-}
-
-/**
- * Dapatkan tanggal hari ini dalam format YYYY-MM-DD (untuk min date picker)
- */
-function getTodayString(): string {
-  const today = new Date();
-  return today.toISOString().split("T")[0];
-}
 
 // ==================== Component ====================
 
 export default function NewProjectPage() {
   const router = useRouter();
+  const currentUser = useAuthStore((state) => state.user);
+
+  // ADR 0014: pembuat Product otomatis jadi Product PIC; pembuat Sales otomatis jadi Sales PIC.
+  // Hanya Sales/Product/Lead_SA/Admin yang boleh membuat project (spec §2.0); SA melihat pesan akses.
+  const bolehMembuat = bisaMembuatProyek(currentUser);
+  const perluPilihProduct = currentUser?.role !== "Product";
+  const bolehPilihSales = currentUser?.role !== "Sales";
+  const bolehRenameCustomer = currentUser?.role === "Lead_SA" || currentUser?.is_admin === true;
+  const { data: daftarProduct } = useSWR<OrangOption[]>(
+    bolehMembuat && perluPilihProduct ? "/projects/users/search?role=Product&limit=50" : null,
+    fetcher
+  );
+  const { data: customers = [] } = useSWR<CustomerOption[]>(
+    bolehMembuat ? "/customers" : null,
+    fetcher,
+  );
+  const { mutate } = useSWRConfig();
+  const { data: daftarSales } = useSWR<OrangOption[]>(
+    bolehMembuat && bolehPilihSales ? "/projects/users/search?role=Sales&limit=50" : null,
+    fetcher
+  );
 
   // Form state
-  const [form, setForm] = useState<FormData>({
+  const [form, setForm] = useState<ProjectFormData>({
     projectName: "",
     customerName: "",
     targetSubmit: "",
     estimatedValue: "",
     dqNumber: "",
+    productPic: "",
+    salesPic: "",
   });
   const [files, setFiles] = useState<FileItem[]>([]);
-  const [errors, setErrors] = useState<FormErrors>({});
+  const [errors, setErrors] = useState<ProjectFormErrors>({});
+  // Wizard: langkah 1 = data dasar + file, langkah 2 = kuesioner kualifikasi.
+  // State dimiliki komponen ini sehingga kembali ke langkah 1 tidak menghilangkan isian.
+  const [step, setStep] = useState<1 | 2>(1);
+  const [answers, setAnswers] = useState<QualificationAnswers>({});
+  const [answerErrors, setAnswerErrors] = useState<QualificationErrors>({});
+  const { schema, error: schemaError } = useQualificationSchema();
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [customerError, setCustomerError] = useState<string | null>(null);
+  const [customerRename, setCustomerRename] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
 
   // Post-submit state
   const [createdProject, setCreatedProject] = useState<CreateProjectResponse | null>(null);
-  const [showBANTManual, setShowBANTManual] = useState(false);
-  const [bantResult, setBantResult] = useState<BANTResult | null>(null);
-  const [isSubmittingBANT, setIsSubmittingBANT] = useState(false);
 
   // Toast notification
   const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
@@ -116,194 +128,181 @@ export default function NewProjectPage() {
 
   // ==================== Validation ====================
 
-  /**
-   * Validasi form sebelum submit
-   * Returns true jika valid, false jika ada error
-   */
   const validateForm = useCallback((): boolean => {
-    const newErrors: FormErrors = {};
-
-    // Nama proyek: wajib, max 150 karakter
-    if (!form.projectName.trim()) {
-      newErrors.projectName = "Nama proyek wajib diisi";
-    } else if (form.projectName.trim().length > 150) {
-      newErrors.projectName = "Nama proyek maksimal 150 karakter";
-    }
-
-    // Nama customer: wajib, max 150 karakter
-    if (!form.customerName.trim()) {
-      newErrors.customerName = "Nama customer wajib diisi";
-    } else if (form.customerName.trim().length > 150) {
-      newErrors.customerName = "Nama customer maksimal 150 karakter";
-    }
-
-    // Target submit: wajib, tidak boleh di masa lalu
-    if (!form.targetSubmit) {
-      newErrors.targetSubmit = "Target submit wajib diisi";
-    } else {
-      const selectedDate = new Date(form.targetSubmit);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (selectedDate < today) {
-        newErrors.targetSubmit = "Target submit tidak boleh tanggal di masa lalu";
-      }
-    }
-
-    // Estimasi nilai: wajib, rentang 0.01 - 999,999,999,999
-    const numericValue = parseIDR(form.estimatedValue);
-    if (!form.estimatedValue.trim()) {
-      newErrors.estimatedValue = "Estimasi nilai proyek wajib diisi";
-    } else if (numericValue < 1) {
-      newErrors.estimatedValue = "Estimasi nilai minimal Rp 1";
-    } else if (numericValue > 999999999999) {
-      newErrors.estimatedValue = "Estimasi nilai maksimal Rp 999.999.999.999";
-    }
-
-    // DQ Number: opsional, tapi kalau diisi harus valid (alfanumerik + hyphen, 5-20 karakter)
-    if (form.dqNumber.trim()) {
-      const dqRegex = /^[A-Za-z0-9\-]{5,20}$/;
-      if (!dqRegex.test(form.dqNumber.trim())) {
-        newErrors.dqNumber = "Format DQ Number tidak valid (alfanumerik + hyphen, 5-20 karakter)";
-      }
-    }
-
+    const newErrors = validateProjectForm(form, validFiles, perluPilihProduct);
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  }, [form]);
+  }, [form, validFiles, perluPilihProduct]);
 
   // ==================== Handlers ====================
 
   // Update form field
   const updateField = useCallback(
-    (field: keyof FormData, value: string) => {
+    (field: keyof ProjectFormData, value: string) => {
       setForm((prev) => ({ ...prev, [field]: value }));
-      // Clear error saat user mulai mengetik
-      if (errors[field]) {
+      if (errors[field as keyof ProjectFormErrors]) {
         setErrors((prev) => ({ ...prev, [field]: undefined }));
       }
     },
     [errors]
   );
 
-  // Handle submit form utama
+
+  const saveCustomerRename = useCallback(async () => {
+    if (!form.customerId || !customerRename.trim()) return;
+    try {
+      const customer = await renameCustomer(form.customerId, customerRename.trim());
+      setForm((previous) => ({ ...previous, customerName: customer.name }));
+      setCustomerError(null);
+      await mutate("/customers");
+    } catch (error) {
+      setCustomerError(error instanceof Error ? error.message : "Gagal mengganti nama Customer");
+    }
+  }, [customerRename, form.customerId, mutate]);
+
+  // Update jawaban kuesioner
+  const updateAnswer = useCallback(
+    (field: string, value: string) => {
+      setAnswers((prev) => ({ ...prev, [field]: value }));
+      setAnswerErrors((prev) => (prev[field] ? { ...prev, [field]: undefined } : prev));
+    },
+    []
+  );
+
+  // Pemetaan field backend → field form langkah 1
+  const HEADER_FIELDS: Record<string, keyof ProjectFormErrors> = {
+    project_name: "projectName",
+    customer_name: "customerName",
+    target_submit: "targetSubmit",
+    estimasi_nilai: "estimatedValue",
+    dq_number: "dqNumber",
+    product_pic: "productPic",
+  };
+
+  // Kirim seluruh data (langkah 1 + 2) dalam satu permintaan
+  const submitAll = useCallback(async () => {
+    setSubmitError(null);
+
+    if (!schema) {
+      setSubmitError("Skema kuesioner belum dimuat. Muat ulang halaman.");
+      return;
+    }
+    const answerValidation = validateAnswers(schema, answers);
+    setAnswerErrors(answerValidation);
+    if (Object.keys(answerValidation).length > 0) return;
+
+    setIsSubmitting(true);
+
+    try {
+      const formData = buildProjectFormData(
+        form,
+        toPayload(schema, answers),
+        validFiles,
+        perluPilihProduct,
+        bolehPilihSales,
+      );
+      const response = await createProject(formData);
+      setCreatedProject(response);
+
+      const failedFiles = response.files.filter((file) => !file.success);
+      if (failedFiles.length > 0) {
+        showToast("error", "Proyek dibuat, tetapi sebagian file gagal diproses. Periksa daftar di bawah.");
+      } else if (response.scoring_triggered) {
+        showToast("success", "Proyek berhasil dibuat! File sedang diproses untuk scoring.");
+        // Redirect ke detail proyek setelah 2 detik: lihat useEffect di bawah (dibersihkan saat unmount)
+      } else if (response.status === "Awaiting Assignment") {
+        showToast("success", `BANT Score: ${response.bant_score} — Proyek masuk antrian assignment!`);
+      } else {
+        showToast("error", `BANT Score: ${response.bant_score} — Perlu klarifikasi tambahan.`);
+      }
+    } catch (err) {
+      // Petakan error 422 per field ke form
+      const fieldErrors = extractFieldErrors(err);
+      const headerErrs: ProjectFormErrors = {};
+      const answerErrs: QualificationErrors = {};
+      for (const { field, reason } of fieldErrors) {
+        if (field.startsWith("qualification_answers.")) {
+          answerErrs[field.split(".")[1]] = reason;
+        } else if (HEADER_FIELDS[field]) {
+          headerErrs[HEADER_FIELDS[field]] = reason;
+        }
+      }
+      if (Object.keys(headerErrs).length > 0) {
+        setErrors(headerErrs);
+        setStep(1);
+      }
+      if (Object.keys(answerErrs).length > 0) setAnswerErrors(answerErrs);
+
+      const message =
+        err instanceof Error ? err.message : "Terjadi kesalahan saat submit";
+      setSubmitError(message);
+      showToast("error", message);
+    } finally {
+      setIsSubmitting(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form, answers, schema, validFiles, router, showToast, perluPilihProduct, bolehPilihSales]);
+
+  // Proyek sudah dibuat dan tidak ada layar hasil BANT (scoring berjalan, atau skor tanpa sub-skor):
+  // arahkan ke detail proyek setelah 2 detik. Timer dibersihkan saat unmount agar berpindah halaman
+  // lebih dulu tidak memicu navigasi paksa.
+  const adaLayarHasilBant = createdProject?.bant_score != null && !!createdProject.sub_scores;
+  const adaFileGagal = createdProject?.files.some((file) => !file.success) ?? false;
+  const redirectProjectId =
+    createdProject && !adaLayarHasilBant && !adaFileGagal ? createdProject.id_project : null;
+  useEffect(() => {
+    if (!redirectProjectId) return;
+    const timer = setTimeout(() => router.push(`/projects/${redirectProjectId}`), 2000);
+    return () => clearTimeout(timer);
+  }, [redirectProjectId, router]);
+
+  // Submit form: langkah 1 → lanjut ke langkah 2; langkah 2 → kirim
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       setSubmitError(null);
 
-      if (!validateForm()) return;
-
-      setIsSubmitting(true);
-
-      try {
-        // Buat FormData untuk multipart/form-data
-        const formData = new window.FormData();
-        formData.append("project_name", form.projectName.trim());
-        formData.append("customer_name", form.customerName.trim());
-        formData.append("target_submit", form.targetSubmit);
-        formData.append("estimasi_nilai", parseIDR(form.estimatedValue).toString());
-
-        // DQ Number opsional
-        if (form.dqNumber.trim()) {
-          formData.append("dq_number", form.dqNumber.trim());
-        }
-
-        // Tambahkan file valid
-        validFiles.forEach((item) => {
-          formData.append("files", item.file);
-        });
-
-        const response = await createProject(formData);
-        setCreatedProject(response);
-
-        // Jika tidak ada file → tampilkan BANT manual form
-        if (validFiles.length === 0) {
-          setShowBANTManual(true);
-          showToast("success", "Proyek berhasil dibuat. Silakan isi BANT manual.");
-        } else {
-          showToast("success", "Proyek berhasil dibuat! File sedang diproses untuk scoring.");
-          // Redirect ke detail proyek setelah 2 detik
-          setTimeout(() => {
-            router.push(`/projects/${response.id_project}`);
-          }, 2000);
-        }
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "Terjadi kesalahan saat submit";
-        setSubmitError(message);
-        showToast("error", message);
-      } finally {
-        setIsSubmitting(false);
+      if (step === 1) {
+        if (validateForm()) setStep(2);
+        return;
       }
+      await submitAll();
     },
-    [form, validFiles, validateForm, router, showToast]
-  );
-
-  // Handle submit BANT manual
-  const handleBANTSubmit = useCallback(
-    async (scores: BANTScores, metadata?: BANTMetadata) => {
-      if (!createdProject) return;
-
-      setIsSubmittingBANT(true);
-
-      try {
-        const result = await submitManualBANT(createdProject.id_project, scores, metadata);
-        setBantResult(result);
-
-        if (result.bant_score >= 60) {
-          showToast("success", `BANT Score: ${result.bant_score} — Proyek masuk antrian assignment!`);
-        } else {
-          showToast("error", `BANT Score: ${result.bant_score} — Perlu klarifikasi tambahan.`);
-        }
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "Gagal submit skor BANT";
-        showToast("error", message);
-      } finally {
-        setIsSubmittingBANT(false);
-      }
-    },
-    [createdProject, showToast]
+    [step, validateForm, submitAll]
   );
 
   // ==================== Render ====================
 
-  // Jika sudah submit dan ada hasil BANT → tampilkan feedback
-  if (bantResult && createdProject) {
+  if (!bolehMembuat) {
+    return <p className="text-neutral-600">Halaman ini hanya untuk Sales, Product, Lead_SA, atau Admin.</p>;
+  }
+
+  // Jika sudah submit dan skor langsung tersedia (tanpa file) → tampilkan feedback
+  if (createdProject && createdProject.bant_score !== null && createdProject.sub_scores) {
     return (
       <div className="max-w-2xl mx-auto">
         <BANTResultFeedback
-          result={bantResult}
+          result={createdProject}
           projectName={createdProject.project_name}
           onViewProject={() => router.push(`/projects/${createdProject.id_project}`)}
         />
+        <FileUploadFailures files={createdProject.files} />
+        {toast && <Toast type={toast.type} message={toast.message} />}
       </div>
     );
   }
 
-  // Jika sudah submit dan perlu BANT manual
-  if (showBANTManual && createdProject) {
+  // Proyek sudah dibuat tetapi tanpa rincian skor (scoring berjalan, atau skor tanpa sub-skor):
+  // ganti form dengan layar hasil agar form tidak bisa dikirim ulang (proyek duplikat).
+  if (createdProject) {
     return (
-      <div className="max-w-2xl mx-auto space-y-6">
-        {/* Info proyek yang dibuat */}
-        <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
-          <p className="text-sm text-primary-800">
-            <span className="font-semibold">Proyek dibuat:</span>{" "}
-            {createdProject.project_name}
-          </p>
-          <p className="text-xs text-primary-600 mt-1">
-            Karena tidak ada file attachment, silakan isi skor BANT secara manual
-            untuk melanjutkan proses scoring.
-          </p>
-        </div>
-
-        {/* BANT Manual Form */}
-        <div className="bg-white rounded-lg border border-neutral-200 p-6">
-          <BANTManualForm
-            onSubmit={handleBANTSubmit}
-            isSubmitting={isSubmittingBANT}
-          />
-        </div>
+      <div className="max-w-2xl mx-auto">
+        <ProjectCreatedNotice
+          result={createdProject}
+          onViewProject={() => router.push(`/projects/${createdProject.id_project}`)}
+        />
+        <FileUploadFailures files={createdProject.files} />
+        {toast && <Toast type={toast.type} message={toast.message} />}
       </div>
     );
   }
@@ -317,12 +316,15 @@ export default function NewProjectPage() {
           Request SA
         </h1>
         <p className="text-sm text-neutral-500 mt-1">
-          Ajukan request proyek pre-sales dengan mengisi form berikut
+          Langkah {step} dari 2 —{" "}
+          {step === 1 ? "Data dasar dan file" : "Kuesioner kualifikasi"}
         </p>
       </div>
 
       {/* Form */}
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} className="space-y-6" noValidate>
+        {step === 1 && (
+        <>
         <div className="bg-white rounded-lg border border-neutral-200 p-6 space-y-5">
           {/* Nama Proyek */}
           <div>
@@ -354,17 +356,67 @@ export default function NewProjectPage() {
                 {errors.projectName}
               </p>
             )}
-            <p className="text-xs text-neutral-400 mt-1">
+            <p className="text-xs text-neutral-500 mt-1">
               {form.projectName.length}/150 karakter
             </p>
           </div>
 
-          {/* Nama Customer */}
+          {/* Select an existing identity or create one inline. */}
           <div>
-            <label
-              htmlFor="customerName"
-              className="block text-sm font-medium text-neutral-700 mb-1"
+            <label htmlFor="customerSearch" className="block text-sm font-medium text-neutral-700 mb-1">
+              Cari Customer
+            </label>
+            <input
+              id="customerSearch"
+              type="search"
+              value={customerSearch}
+              onChange={(event) => setCustomerSearch(event.target.value)}
+              placeholder="Cari Customer yang sudah ada"
+              disabled={isSubmitting}
+              className="w-full px-3 py-2.5 border border-neutral-300 rounded-lg text-sm"
+            />
+            <select
+              id="customerSelect"
+              aria-label="Customer"
+              value={form.customerId ?? "new"}
+              onChange={(event) => {
+                const selected = customers.find((customer) => customer.id === event.target.value);
+                setForm((previous) => selected
+                  ? { ...previous, customerId: selected.id, customerName: selected.name }
+                  : { ...previous, customerId: undefined, customerName: "" });
+                setCustomerRename(selected?.name ?? "");
+                setCustomerError(null);
+              }}
+              disabled={isSubmitting}
+              className="mt-2 w-full px-3 py-2.5 border border-neutral-300 rounded-lg text-sm"
             >
+              <option value="new">Buat Customer baru</option>
+              {customers
+                .filter((customer) => customer.name.toLocaleLowerCase().includes(customerSearch.trim().toLocaleLowerCase()))
+                .map((customer) => (
+                  <option key={customer.id} value={customer.id}>{customer.name}</option>
+                ))}
+            </select>
+            {bolehRenameCustomer && form.customerId && (
+              <div className="mt-2">
+                <label htmlFor="customerRename" className="block text-sm text-neutral-700 mb-1">
+                  Nama Customer baru
+                </label>
+                <input
+                  id="customerRename"
+                  value={customerRename}
+                  onChange={(event) => setCustomerRename(event.target.value)}
+                  maxLength={150}
+                  className="w-full px-3 py-2 border border-neutral-300 rounded-lg text-sm"
+                />
+                <button type="button" onClick={() => void saveCustomerRename()} className="mt-2 text-sm text-primary-700 underline">
+                  Ganti nama Customer
+                </button>
+              </div>
+            )}
+          </div>
+          <div>
+            <label htmlFor="customerName" className="block text-sm font-medium text-neutral-700 mb-1">
               Nama Customer <span className="text-red-500">*</span>
             </label>
             <input
@@ -372,26 +424,18 @@ export default function NewProjectPage() {
               type="text"
               maxLength={150}
               value={form.customerName}
-              onChange={(e) => updateField("customerName", e.target.value)}
-              disabled={isSubmitting}
+              onChange={(event) => updateField("customerName", event.target.value)}
+              disabled={isSubmitting || !!form.customerId}
               placeholder="Contoh: PT Astra International"
-              className={`
-                w-full px-3 py-2.5 border rounded-lg text-sm
-                focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
-                disabled:opacity-50 disabled:bg-neutral-100
-                ${errors.customerName ? "border-red-300 bg-red-50" : "border-neutral-300"}
-              `}
+              className={`w-full px-3 py-2.5 border rounded-lg text-sm ${errors.customerName ? "border-red-300 bg-red-50" : "border-neutral-300"}`}
               aria-invalid={!!errors.customerName}
               aria-describedby={errors.customerName ? "customerName-error" : undefined}
             />
+            {customerError && <p className="text-xs text-red-600 mt-1" role="alert">{customerError}</p>}
             {errors.customerName && (
-              <p id="customerName-error" className="text-xs text-red-600 mt-1" role="alert">
-                {errors.customerName}
-              </p>
+              <p id="customerName-error" className="text-xs text-red-600 mt-1" role="alert">{errors.customerName}</p>
             )}
-            <p className="text-xs text-neutral-400 mt-1">
-              {form.customerName.length}/150 karakter
-            </p>
+            <p className="text-xs text-neutral-500 mt-1">{form.customerName.length}/150 karakter</p>
           </div>
 
           {/* Target Submit Date */}
@@ -462,6 +506,65 @@ export default function NewProjectPage() {
             )}
           </div>
 
+          {/* Product PIC (wajib bila pembuat bukan Product) */}
+          {perluPilihProduct && (
+            <div>
+              <label htmlFor="productPic" className="block text-sm font-medium text-neutral-700 mb-1">
+                Product Manager PIC <span className="text-red-500">*</span>
+              </label>
+              <select
+                id="productPic"
+                value={form.productPic}
+                onChange={(e) => updateField("productPic", e.target.value)}
+                disabled={isSubmitting}
+                required
+                className={`
+                  w-full px-3 py-2.5 border rounded-lg text-sm bg-white
+                  focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+                  disabled:opacity-50 disabled:bg-neutral-100
+                  ${errors.productPic ? "border-red-300 bg-red-50" : "border-neutral-300"}
+                `}
+                aria-invalid={!!errors.productPic}
+                aria-describedby={errors.productPic ? "productPic-error" : undefined}
+              >
+                <option value="">Pilih Product Manager…</option>
+                {(daftarProduct ?? []).map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name} ({u.email})
+                  </option>
+                ))}
+              </select>
+              {errors.productPic && (
+                <p id="productPic-error" className="text-xs text-red-600 mt-1" role="alert">
+                  {errors.productPic}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Sales PIC (opsional; pembuat Sales otomatis dirinya sendiri) */}
+          {bolehPilihSales && (
+            <div>
+              <label htmlFor="salesPic" className="block text-sm font-medium text-neutral-700 mb-1">
+                Sales PIC <span className="text-neutral-400 text-xs font-normal">(opsional)</span>
+              </label>
+              <select
+                id="salesPic"
+                value={form.salesPic}
+                onChange={(e) => updateField("salesPic", e.target.value)}
+                disabled={isSubmitting}
+                className="w-full px-3 py-2.5 border border-neutral-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 disabled:opacity-50 disabled:bg-neutral-100"
+              >
+                <option value="">Tanpa Sales</option>
+                {(daftarSales ?? []).map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name} ({u.email})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* DQ Number (Opsional) */}
           <div>
             <label
@@ -502,20 +605,45 @@ export default function NewProjectPage() {
         <div className="bg-white rounded-lg border border-neutral-200 p-6">
           <div className="mb-4">
             <h2 className="text-sm font-medium text-neutral-700">
-              File Attachment
+              Source document
             </h2>
             <p className="text-xs text-neutral-500 mt-0.5">
-              Upload dokumen referensi (opsional). Jika tidak ada file, Anda bisa
-              mengisi BANT secara manual setelah submit.
+              Upload dokumen referensi (opsional). Penilaian kelayakan berdasarkan
+              Kuesioner kualifikasi di langkah berikutnya.
             </p>
           </div>
 
           <FileUpload
             files={files}
-            onChange={setFiles}
+            onChange={(next) => {
+              setFiles(next);
+              if (errors.files) setErrors((prev) => ({ ...prev, files: undefined }));
+            }}
             disabled={isSubmitting}
           />
+          {errors.files && (
+            <p className="text-xs text-red-600 mt-1" role="alert">
+              {errors.files}
+            </p>
+          )}
         </div>
+        </>
+        )}
+
+        {step === 2 && !schema && (
+          <p className="text-sm text-neutral-500" role="status">
+            {schemaError ? "Gagal memuat kuesioner. Muat ulang halaman." : "Memuat kuesioner..."}
+          </p>
+        )}
+        {step === 2 && schema && (
+          <QualificationForm
+            schema={schema}
+            answers={answers}
+            errors={answerErrors}
+            onChange={updateAnswer}
+            disabled={isSubmitting}
+          />
+        )}
 
         {/* Error message global */}
         {submitError && (
@@ -528,55 +656,38 @@ export default function NewProjectPage() {
           </div>
         )}
 
-        {/* Submit Button */}
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className={`
-            w-full py-3 px-4 rounded-lg font-medium text-white transition-all duration-200
-            ${isSubmitting
-              ? "bg-neutral-400 cursor-not-allowed"
-              : "bg-primary-600 hover:bg-primary-700 active:bg-primary-800"
-            }
-            disabled:opacity-50 disabled:cursor-not-allowed
-            min-h-touch
-          `}
-        >
-          {isSubmitting ? (
-            <span className="flex items-center justify-center gap-2">
-              <svg
-                className="animate-spin w-4 h-4"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                />
-              </svg>
-              Mengirim request...
-            </span>
-          ) : (
-            `Submit Request${validFiles.length > 0 ? ` (${validFiles.length} file)` : ""}`
+        {/* Tombol aksi */}
+        <div className="flex gap-3">
+          {step === 2 && (
+            <button
+              type="button"
+              onClick={() => setStep(1)}
+              disabled={isSubmitting}
+              className="py-3 px-4 rounded-lg font-medium text-neutral-700 border border-neutral-300 bg-white hover:bg-neutral-50 disabled:opacity-50 min-h-touch"
+            >
+              Kembali
+            </button>
           )}
-        </button>
-
-        {/* Hint tentang BANT manual */}
-        {validFiles.length === 0 && (
-          <p className="text-xs text-neutral-500 text-center">
-            Tanpa file attachment, Anda akan diminta mengisi skor BANT secara
-            manual setelah submit.
-          </p>
-        )}
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className={`
+              flex-1 py-3 px-4 rounded-lg font-medium text-white transition-all duration-200
+              ${isSubmitting
+                ? "bg-neutral-400 cursor-not-allowed"
+                : "bg-primary-600 hover:bg-primary-700 active:bg-primary-800"
+              }
+              disabled:opacity-50 disabled:cursor-not-allowed
+              min-h-touch
+            `}
+          >
+            {isSubmitting
+              ? "Mengirim request..."
+              : step === 1
+                ? "Lanjut ke Kuesioner"
+                : `Submit Request${validFiles.length > 0 ? ` (${validFiles.length} file)` : ""}`}
+          </button>
+        </div>
       </form>
 
       {/* Toast Notification */}
@@ -627,19 +738,78 @@ function Toast({ type, message }: { type: "success" | "error"; message: string }
 }
 
 /**
+ * Layar konfirmasi setelah proyek dibuat tanpa rincian skor (#83).
+ * Menggantikan form sehingga tidak ada tombol submit yang bisa ditekan lagi.
+ */
+function ProjectCreatedNotice({
+  result,
+  onViewProject,
+}: {
+  result: CreateProjectResponse;
+  onViewProject: () => void;
+}) {
+  const detail = result.scoring_triggered
+    ? "File sedang dianalisis AI untuk scoring. Anda akan diarahkan ke detail proyek."
+    : result.status === "Awaiting Assignment"
+      ? `BANT Score ${result.bant_score} — proyek masuk antrian assignment. Anda akan diarahkan ke detail proyek.`
+      : `BANT Score ${result.bant_score} — perlu klarifikasi tambahan. Anda akan diarahkan ke detail proyek.`;
+
+  return (
+    <div className="space-y-4 rounded-lg border border-neutral-200 bg-white p-8 text-center">
+      <h2 className="text-xl font-bold text-neutral-900">Request SA terkirim</h2>
+      <p className="text-sm text-neutral-600">{result.project_name}</p>
+      <p className="text-sm text-neutral-600">{detail}</p>
+      <button
+        type="button"
+        onClick={onViewProject}
+        className="py-3 px-6 rounded-lg font-medium text-white bg-primary-600 hover:bg-primary-700 min-h-touch"
+      >
+        Lihat Proyek
+      </button>
+    </div>
+  );
+}
+
+function FileUploadFailures({ files }: { files: CreateProjectResponse["files"] }) {
+  const failures = files.filter((file) => !file.success);
+  if (failures.length === 0) return null;
+
+  return (
+    <section
+      className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-left text-sm text-amber-950"
+      role="alert"
+      aria-labelledby="file-upload-failures-title"
+    >
+      <h3 id="file-upload-failures-title" className="font-semibold">
+        Proyek dibuat, tetapi sebagian file tidak dapat diproses
+      </h3>
+      <ul className="mt-2 list-disc space-y-1 pl-5">
+        {failures.map((file, index) => (
+          <li key={`${file.filename}-${index}`}>
+            <span className="font-medium">{file.filename}:</span>{" "}
+            {file.error || "File gagal diproses."}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+
+/**
  * Komponen feedback hasil BANT scoring
- * Tampil setelah BANT manual disubmit
+ * Tampil setelah proyek dibuat tanpa file (skor langsung dihitung backend)
  */
 function BANTResultFeedback({
   result,
   projectName,
   onViewProject,
 }: {
-  result: BANTResult;
+  result: CreateProjectResponse;
   projectName: string;
   onViewProject: () => void;
 }) {
-  const isPass = result.bant_score >= 60;
+  const isPass = (result.bant_score ?? 0) >= 60;
 
   return (
     <div className="space-y-6">
@@ -686,7 +856,7 @@ function BANTResultFeedback({
             <div key={key} className="bg-white rounded-md p-3 border border-neutral-100">
               <p className="text-xs text-neutral-500 capitalize">{key}</p>
               <p className="text-lg font-semibold text-neutral-800">
-                {result.bant_detail[key]}
+                {result.sub_scores?.[key] ?? 0}
                 <span className="text-xs font-normal text-neutral-400">/25</span>
               </p>
             </div>
@@ -709,21 +879,10 @@ function BANTResultFeedback({
           </span>
         </p>
 
-        {/* Use case tags jika ada */}
-        {result.use_case_tags && result.use_case_tags.length > 0 && (
-          <div className="mt-3">
-            <p className="text-xs text-neutral-500 mb-1">Use Case Tags:</p>
-            <div className="flex flex-wrap gap-1.5">
-              {result.use_case_tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="inline-block px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded text-xs"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          </div>
+        {result.feedback && (
+          <pre className="mt-3 whitespace-pre-wrap text-xs text-neutral-600 font-sans">
+            {result.feedback}
+          </pre>
         )}
       </div>
 

@@ -1,7 +1,8 @@
 """
 Model SQLAlchemy untuk tabel Projects.
 Menyimpan data proyek yang dikelola oleh Sales dan SA.
-Catatan: kolom sales_pic menyimpan requester (bisa Sales, SA, atau Lead_SA).
+Orang per project (ADR 0014): created_by (pembuat), product_pic (wajib), sales_pic (opsional),
+lead_sa (opsional; diisi saat assign di tiket Orang-2).
 """
 
 import uuid
@@ -10,6 +11,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Date,
     DateTime,
@@ -19,6 +21,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     event,
     text,
 )
@@ -33,7 +36,13 @@ from sqlalchemy.orm import (
     with_loader_criteria,
 )
 
+from app.core import status as status_konst
 from app.core.database import Base
+
+
+def _daftar_sql(nilai: tuple[str, ...]) -> str:
+    """Daftar literal untuk `IN (...)` dari konstanta internal (bukan input user)."""
+    return ", ".join(f"'{n}'" for n in nilai)
 
 
 class Project(Base):
@@ -57,16 +66,41 @@ class Project(Base):
         nullable=False,
         comment="Nama customer/perusahaan",
     )
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("customers.id", name="fk_projects_customer_id"),
+        nullable=True,
+    )
+    customer: Mapped["Customer"] = relationship(back_populates="projects")
+
     dq_number: Mapped[Optional[str]] = mapped_column(
         String(20),
         nullable=True,
         comment="Nomor DQ (Deal Qualification)",
     )
-    sales_pic: Mapped[uuid.UUID] = mapped_column(
+    created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id"),
+        ForeignKey("users.id", name="fk_projects_created_by"),
         nullable=False,
-        comment="FK ke user requester yang membuat request (Sales/SA/Lead_SA)",
+        comment="FK ke user pembuat project",
+    )
+    product_pic: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", name="fk_projects_product_pic"),
+        nullable=False,
+        comment="FK ke user Product penanggung jawab",
+    )
+    sales_pic: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", name="fk_projects_sales_pic"),
+        nullable=True,
+        comment="FK ke user Sales PIC (opsional; project boleh tanpa Sales)",
+    )
+    lead_sa: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", name="fk_projects_lead_sa"),
+        nullable=True,
+        comment="FK ke user Lead_SA penanggung jawab (wajib sejak Assigned; diisi di Orang-2)",
     )
     assigned_sa: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
@@ -77,8 +111,26 @@ class Project(Base):
     status: Mapped[str] = mapped_column(
         String(30),
         nullable=False,
-        default="New",
-        comment="Status proyek saat ini",
+        default=status_konst.INTAKE,
+        server_default=status_konst.INTAKE,
+        comment="Status siklus kerja proyek (ADR 0013)",
+    )
+    qualification_state: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default=status_konst.QS_SCORING,
+        server_default=status_konst.QS_SCORING,
+        comment="Gate kualifikasi; bermakna saat status Intake, selanjutnya Qualified",
+    )
+    previous_status: Mapped[Optional[str]] = mapped_column(
+        String(30),
+        nullable=True,
+        comment="Status sebelum On Hold atau Lost; dipakai saat lanjut atau dibuka kembali",
+    )
+    lost_reason: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Alasan proyek Lost (wajib saat status Lost)",
     )
     target_submit: Mapped[date] = mapped_column(
         Date,
@@ -95,6 +147,31 @@ class Project(Base):
         nullable=True,
         comment="Detail breakdown skor BANT per kriteria",
     )
+    qualification_answers: Mapped[Optional[dict]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=True,
+        comment="Jawaban Kuesioner kualifikasi (NULL = proyek lama / legacy)",
+    )
+    qualification_schema_version: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Versi skema kuesioner pada saat jawaban disimpan",
+    )
+    ai_scoring_result: Mapped[Optional[dict]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=True,
+        comment="Hasil analisis AI terakhir atas file (sub_scores, use_case_tags), terpisah dari rubrik",
+    )
+    override_sub_scores: Mapped[Optional[dict]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=True,
+        comment="Sub-skor override Lead SA/Admin (batas bawah skor akhir), terpisah dari rubrik dan AI",
+    )
+    requirement_generation_status: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        nullable=True,
+        comment="Status generate Requirement otomatis: pending/ready/failed (NULL = belum pernah lolos gate)",
+    )
     estimasi_nilai: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2),
         nullable=True,
@@ -106,10 +183,21 @@ class Project(Base):
         default=list,
         comment="Tags use case proyek (array JSON)",
     )
+    gdrive_folder_number: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="Reserved per-Customer number for the provisioned Drive project folder",
+    )
     gdrive_folder_id: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
         comment="ID folder Google Drive proyek",
+    )
+    gdrive_inventory_folder_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, comment="ID subfolder Inventory di Google Drive"
+    )
+    gdrive_diagram_folder_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, comment="ID subfolder Diagram di Google Drive"
     )
     gdrive_solutions_folder_id: Mapped[Optional[str]] = mapped_column(
         String(255),
@@ -120,6 +208,11 @@ class Project(Base):
         String(20),
         nullable=True,
         comment="Status provisioning folder: pending/provisioned/failed",
+    )
+    folder_provisioning_operation: Mapped[Optional[dict]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=True,
+        comment="Persisted status, attempt history, outcome, and repair guidance for Drive provisioning",
     )
     # Konfigurasi handover PMO/Delivery (per-proyek, requirement 17.6)
     pmo_lead_email: Mapped[Optional[str]] = mapped_column(
@@ -172,10 +265,21 @@ class Project(Base):
     # Constraints
     __table_args__ = (
         CheckConstraint(
-            "status IN ('New', 'Pending Assignment', 'Assigned', 'Ready', "
-            "'Closed-Win', 'Handover Complete', 'Lost', 'Need Clarification', "
-            "'Scoring Pending', 'Manual Review Required')",
+            f"status IN ({_daftar_sql(status_konst.SEMUA_STATUS)})",
             name="chk_projects_status",
+        ),
+        CheckConstraint(
+            f"qualification_state IN ({_daftar_sql(status_konst.SEMUA_QUALIFICATION_STATE)})",
+            name="chk_projects_qualification_state",
+        ),
+        CheckConstraint(
+            f"previous_status IS NULL OR previous_status IN "
+            f"({_daftar_sql(status_konst.STATUS_SEBELUMNYA_VALID)})",
+            name="chk_projects_previous_status",
+        ),
+        CheckConstraint(
+            "status <> 'Lost' OR (lost_reason IS NOT NULL AND btrim(lost_reason) <> '')",
+            name="chk_projects_lost_reason",
         ),
         CheckConstraint(
             "bant_score IS NULL OR (bant_score BETWEEN 0 AND 100)",
@@ -189,6 +293,20 @@ class Project(Base):
             "folder_provisioning_status IS NULL OR "
             "folder_provisioning_status IN ('pending','provisioned','failed')",
             name="chk_projects_folder_provisioning_status",
+        ),
+        CheckConstraint(
+            "gdrive_folder_number IS NULL OR gdrive_folder_number > 0",
+            name="chk_projects_gdrive_folder_number_positive",
+        ),
+        UniqueConstraint(
+            "customer_id",
+            "gdrive_folder_number",
+            name="uq_projects_customer_gdrive_folder_number",
+        ),
+        CheckConstraint(
+            "requirement_generation_status IS NULL OR "
+            "requirement_generation_status IN ('pending','ready','failed')",
+            name="chk_projects_requirement_generation_status",
         ),
         Index(
             "idx_projects_active",

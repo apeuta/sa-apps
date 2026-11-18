@@ -1,0 +1,248 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { HttpResponse, api, errorEnvelope, gagalLaluBerhasil, http, renderWithProviders, server, successEnvelope } from "@/test";
+import { users } from "@/test/fixtures/users";
+import { makeAvailableSA, makePendingProject } from "@/test/fixtures/operations";
+import { AssignmentModal } from "./AssignmentModal";
+
+const LEAD_SAYA = makeAvailableSA({ id: users.Lead_SA.id, name: "Lead SA Demo", email: "lead@example.com", role: "Lead_SA" });
+const LEAD_LAIN = makeAvailableSA({ id: "lead-2", name: "Lead Kedua", email: "lead2@example.com", role: "Lead_SA" });
+const SA_BIASA = makeAvailableSA({ id: "sa-2", name: "Eka Putri", email: "eka@example.com", active_project_count: 4 });
+
+/** Daftar kandidat dari `/sa/available`: dua Lead_SA dan satu SA (peran lewat field `role`). */
+function sediakanKandidat() {
+  server.use(http.get(api("/sa/available"), () => HttpResponse.json(successEnvelope([LEAD_SAYA, LEAD_LAIN, SA_BIASA]))));
+}
+
+/** Tangkap body POST assign. */
+function tangkapAssign() {
+  const diterima: { body?: Record<string, unknown> } = {};
+  server.use(
+    http.post(api("/projects/:id/assign"), async ({ request }) => {
+      diterima.body = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json(successEnvelope({ id_project: "x", assigned_sa: "sa-2", assigned_at: "", status: "Assigned" }));
+    })
+  );
+  return diterima;
+}
+
+function setup(project = makePendingProject(), role: "Lead_SA" | "Admin" = "Lead_SA") {
+  const onClose = vi.fn();
+  const onSuccess = vi.fn();
+  const utils = renderWithProviders(<AssignmentModal project={project} onClose={onClose} onSuccess={onSuccess} />, {
+    role,
+  });
+  return { onClose, onSuccess, project, ...utils };
+}
+
+describe("AssignmentModal", () => {
+  it("menampilkan skeleton saat daftar SA dimuat, lalu daftar SA beserta workload", async () => {
+    const { container } = setup();
+    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Konfirmasi Assignment" })).toBeDisabled();
+
+    expect(await screen.findByText("Budi Santoso")).toBeInTheDocument();
+    expect(container.querySelectorAll(".animate-pulse")).toHaveLength(0);
+    expect(screen.getByText("Rendah")).toBeInTheDocument(); // 1 proyek
+    expect(screen.getByText("Sedang")).toBeInTheDocument(); // 4 proyek
+  });
+
+  it("menampilkan info proyek, status BANT Passed, dan use case tag", async () => {
+    setup(makePendingProject({ bant_score: 60, use_case_tags: ["Cloud Migration", "Security"] }));
+    expect(screen.getByText("Migrasi Cloud — PT Contoh")).toBeInTheDocument();
+    expect(screen.getByText("Passed")).toBeInTheDocument();
+    expect(screen.getByText("Security")).toBeInTheDocument();
+    await screen.findByText("Budi Santoso");
+  });
+
+  it("menampilkan Not Passed bila skor BANT < 60 dan tanpa tag", async () => {
+    setup(makePendingProject({ bant_score: 59, use_case_tags: [] }));
+    expect(screen.getByText("Not Passed")).toBeInTheDocument();
+    await screen.findByText("Budi Santoso");
+  });
+  it("menampilkan BANT belum dinilai saat skor dan tags null", () => {
+    setup(makePendingProject({ bant_score: null, use_case_tags: null }));
+    expect(screen.getByText("Belum dinilai")).toBeInTheDocument();
+    expect(screen.queryByText("Not Passed")).not.toBeInTheDocument();
+  });
+
+  it("menandai workload Tinggi (5+) dan memakai avatar bila tersedia", async () => {
+    server.use(
+      http.get(api("/sa/available"), () =>
+        HttpResponse.json(
+          successEnvelope([
+            makeAvailableSA({ id: "sa-9", name: "Sibuk Sekali", active_project_count: 6, avatar_url: "http://localhost/a.png" }),
+          ])
+        )
+      )
+    );
+    setup();
+    expect(await screen.findByText("Tinggi")).toBeInTheDocument();
+    expect(screen.getByText("6 proyek")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Sibuk Sekali" })).toHaveAttribute("src", "http://localhost/a.png");
+  });
+
+  it("menampilkan keadaan kosong bila tidak ada SA tersedia", async () => {
+    server.use(http.get(api("/sa/available"), () => HttpResponse.json(successEnvelope([]))));
+    setup();
+    expect(await screen.findByText("Tidak ada SA yang tersedia saat ini.")).toBeInTheDocument();
+  });
+
+  it("mengaktifkan tombol konfirmasi setelah SA dipilih, mengirim sa_id, lalu memanggil onSuccess", async () => {
+    let body: unknown;
+    let auth: string | null = null;
+    sediakanKandidat();
+    server.use(
+      http.post(api("/projects/:id/assign"), async ({ request, params }) => {
+        body = await request.json();
+        auth = request.headers.get("Authorization");
+        expect(params.id).toBe("11111111-1111-4111-8111-111111111111");
+        return HttpResponse.json(successEnvelope({ id_project: "x", assigned_sa: "sa-2", assigned_at: "", status: "Assigned" }));
+      })
+    );
+    const { user, onSuccess, onClose } = setup();
+    await user.click(await screen.findByRole("button", { name: /Eka Putri/ }));
+    const confirm = screen.getByRole("button", { name: "Konfirmasi Assignment" });
+    expect(confirm).toBeEnabled();
+    await user.click(confirm);
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    expect(body).toEqual({ sa_id: "sa-2", lead_sa_id: users.Lead_SA.id });
+    expect(auth).toBe("Bearer access-Lead_SA");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("menampilkan status 'Mengassign...' dan menonaktifkan tombol saat request berjalan", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.post(api("/projects/:id/assign"), async () => {
+        await gate;
+        return HttpResponse.json(successEnvelope({}));
+      })
+    );
+    const { user, onSuccess } = setup();
+    await user.click(await screen.findByRole("button", { name: /Budi Santoso/ }));
+    await user.click(screen.getByRole("button", { name: "Konfirmasi Assignment" }));
+
+    expect(await screen.findByRole("button", { name: /Mengassign/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Batal" })).toBeDisabled();
+    release();
+    await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+  });
+
+  it("menampilkan pesan error server dan tidak memanggil onSuccess", async () => {
+    server.use(
+      http.post(api("/projects/:id/assign"), () =>
+        HttpResponse.json(errorEnvelope("SA sudah penuh"), { status: 409 })
+      )
+    );
+    const { user, onSuccess } = setup();
+    await user.click(await screen.findByRole("button", { name: /Budi Santoso/ }));
+    await user.click(screen.getByRole("button", { name: "Konfirmasi Assignment" }));
+
+    expect(await screen.findByText("SA sudah penuh")).toBeInTheDocument();
+    expect(onSuccess).not.toHaveBeenCalled();
+    // tombol kembali aktif untuk mencoba ulang
+    expect(screen.getByRole("button", { name: "Konfirmasi Assignment" })).toBeEnabled();
+  });
+
+  it("memakai pesan fallback ketika error server tanpa pesan", async () => {
+    server.use(http.post(api("/projects/:id/assign"), () => new HttpResponse("oops", { status: 500 })));
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: /Budi Santoso/ }));
+    await user.click(screen.getByRole("button", { name: "Konfirmasi Assignment" }));
+    expect(await screen.findByText("Request gagal dengan status 500")).toBeInTheDocument();
+  });
+
+  it("menutup modal lewat tombol Tutup, Batal, dan klik backdrop", async () => {
+    const { user, onClose } = setup();
+    await screen.findByText("Budi Santoso");
+    await user.click(screen.getByRole("button", { name: "Tutup modal" }));
+    await user.click(screen.getByRole("button", { name: "Batal" }));
+    expect(onClose).toHaveBeenCalledTimes(2);
+    const backdrop = document.querySelector('[aria-hidden="true"]') as HTMLElement;
+    await user.click(backdrop);
+    expect(onClose).toHaveBeenCalledTimes(3);
+  });
+
+  it("tidak memanggil API assign bila belum ada SA terpilih", async () => {
+    const assign = vi.fn();
+    server.use(http.post(api("/projects/:id/assign"), () => { assign(); return HttpResponse.json(successEnvelope({})); }));
+    const { user } = setup();
+    await screen.findByText("Budi Santoso");
+    await user.click(screen.getByRole("button", { name: "Konfirmasi Assignment" }));
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("daftar SA gagal dimuat: pesan error (bukan 'Tidak ada SA'), coba lagi memuat ulang, konfirmasi tetap nonaktif", async () => {
+    server.use(gagalLaluBerhasil("/sa/available", [makeAvailableSA({ name: "Pulih Santoso" })]));
+    const { user } = setup();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Gagal memuat daftar SA.");
+    expect(screen.queryByText("Tidak ada SA yang tersedia saat ini.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Konfirmasi Assignment" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Coba lagi" }));
+
+    expect(await screen.findByText("Pulih Santoso")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  describe("dropdown Lead SA (#135)", () => {
+    it("menampilkan dropdown 'Lead SA' yang hanya berisi user berrole Lead_SA", async () => {
+      sediakanKandidat();
+      setup();
+      const dropdown = await screen.findByLabelText("Lead SA");
+      const opsi = within(dropdown).getAllByRole("option").map((o) => o.textContent);
+      expect(opsi).toEqual(expect.arrayContaining(["Lead SA Demo", "Lead Kedua"]));
+      expect(opsi).not.toContain("Eka Putri");
+    });
+
+    it("Lead_SA yang meng-assign: default dropdown = dirinya, dan lead_sa_id dirinya terkirim", async () => {
+      sediakanKandidat();
+      const diterima = tangkapAssign();
+      const { user, onSuccess } = setup();
+      const dropdown = await screen.findByLabelText("Lead SA");
+      expect(dropdown).toHaveValue(users.Lead_SA.id);
+
+      await user.click(screen.getByRole("button", { name: /Eka Putri/ }));
+      await user.click(screen.getByRole("button", { name: "Konfirmasi Assignment" }));
+
+      await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+      expect(diterima.body).toEqual({ sa_id: "sa-2", lead_sa_id: users.Lead_SA.id });
+    });
+
+    it("Lead_SA bisa memilih Lead SA lain, dan pilihan itulah yang terkirim", async () => {
+      sediakanKandidat();
+      const diterima = tangkapAssign();
+      const { user, onSuccess } = setup();
+      await user.selectOptions(await screen.findByLabelText("Lead SA"), "lead-2");
+
+      await user.click(screen.getByRole("button", { name: /Eka Putri/ }));
+      await user.click(screen.getByRole("button", { name: "Konfirmasi Assignment" }));
+
+      await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+      expect(diterima.body).toEqual({ sa_id: "sa-2", lead_sa_id: "lead-2" });
+    });
+
+    it("Admin non-Lead_SA: tidak ada default, konfirmasi nonaktif sampai Lead SA dipilih, lalu lead_sa_id terkirim", async () => {
+      sediakanKandidat();
+      const diterima = tangkapAssign();
+      const { user, onSuccess } = setup(makePendingProject(), "Admin");
+      const dropdown = await screen.findByLabelText("Lead SA");
+      expect(dropdown).toHaveValue("");
+
+      await user.click(screen.getByRole("button", { name: /Eka Putri/ }));
+      const konfirmasi = screen.getByRole("button", { name: "Konfirmasi Assignment" });
+      expect(konfirmasi).toBeDisabled();
+
+      await user.selectOptions(dropdown, "lead-2");
+      expect(konfirmasi).toBeEnabled();
+      await user.click(konfirmasi);
+
+      await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+      expect(diterima.body).toEqual({ sa_id: "sa-2", lead_sa_id: "lead-2" });
+    });
+  });
+});

@@ -3,8 +3,9 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { fetcher } from "@/lib/fetcher";
+import { LoadError } from "@/components/LoadError";
 import { ActivityLogForm } from "@/components/ActivityLogForm";
+import { getAllProjects, type ProjectListItem } from "@/lib/api/projects";
 
 /**
  * Halaman Activity Log
@@ -19,11 +20,6 @@ import { ActivityLogForm } from "@/components/ActivityLogForm";
  * Requirements: 8.1
  */
 
-interface ProjectItem {
-  id_project: string;
-  project_name: string;
-  status?: string;
-}
 
 interface Project {
   id: string;
@@ -43,9 +39,14 @@ export default function ActivityLogsPage() {
 function ActivityLogsContent() {
   const searchParams = useSearchParams();
   const defaultProjectId = searchParams.get("project") ?? undefined;
-  const { data: rawProjects, isLoading: projectsLoading } = useSWR<ProjectItem[]>(
-    "/projects",
-    fetcher
+  const {
+    data: rawProjects,
+    isLoading: projectsLoading,
+    error: projectsError,
+    mutate: mutateProjects,
+  } = useSWR<ProjectListItem[]>(
+    "projects:all",
+    getAllProjects,
   );
 
   // API mengembalikan id_project; form butuh { id, project_name, status }
@@ -101,6 +102,8 @@ function ActivityLogsContent() {
             <div className="h-10 bg-neutral-200 rounded w-1/2" />
             <div className="h-24 bg-neutral-200 rounded w-full" />
           </div>
+        ) : projectsError && !rawProjects ? (
+          <LoadError message="Gagal memuat daftar proyek." onRetry={() => mutateProjects()} />
         ) : (
           <ActivityLogForm
             projects={projects}

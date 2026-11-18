@@ -7,7 +7,8 @@ panggilan jaringan nyata.
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +18,7 @@ from app.services.folder_provisioner import (
     INVALID_FOLDER_CHARS,
     FolderProvisioner,
     FolderProvisioningError,
+    settings,
 )
 
 # =============================================================================
@@ -31,7 +33,11 @@ class FakeProject:
     customer_name: str = "PT Acme Indonesia"
     project_name: str = "Data Platform Migration"
     id_project: str = "PRJ-001"
-
+    customer: SimpleNamespace = field(
+        default_factory=lambda: SimpleNamespace(gdrive_folder_id="customer-folder")
+    )
+    gdrive_folder_number: int = 1
+    gdrive_folder_id: str | None = None
 
 @pytest.fixture
 def provisioner():
@@ -46,6 +52,10 @@ def mock_drive_service():
 
     # Mock files().create()
     create_mock = MagicMock()
+    # Mock files().list() for child-folder lookups.
+    list_mock = MagicMock()
+    list_mock.execute.return_value = {"files": [], "nextPageToken": None}
+    service.files.return_value.list.return_value = list_mock
     create_mock.execute.return_value = {"id": "folder_id_123"}
     service.files.return_value.create.return_value = create_mock
 
@@ -70,9 +80,10 @@ def mock_drive_service():
 
 
 @pytest.fixture
-def provisioner_with_service(provisioner, mock_drive_service):
+def provisioner_with_service(provisioner, mock_drive_service, monkeypatch):
     """Provisioner dengan mock Drive service yang sudah di-inject."""
     provisioner._drive_service = mock_drive_service
+    monkeypatch.setattr(settings, "GDRIVE_PARENT_FOLDER_ID", "drive-root")
     return provisioner
 
 
@@ -342,16 +353,105 @@ class TestLockSolutionsFolder:
 class TestUnlockSolutionsFolder:
     """Test unlock (kembalikan akses Viewer Sales) ke folder Solutions."""
 
-    @pytest.mark.asyncio
     async def test_unlock_sukses(self, provisioner_with_service, mock_drive_service):
-        """Unlock berhasil menambahkan kembali permission Viewer untuk Sales."""
+        """Unlock membuat izin reader bila Sales belum punya izin."""
+        perm_list_mock = MagicMock()
+        perm_list_mock.execute.return_value = {"permissions": []}
+        mock_drive_service.permissions.return_value.list.return_value = perm_list_mock
+
         await provisioner_with_service.unlock_solutions_folder(
             solutions_folder_id="sol_folder_001",
             sales_email="sales@company.com",
         )
 
-        # Verifikasi permissions().create dipanggil dengan role reader
-        mock_drive_service.permissions.return_value.create.assert_called()
+        mock_drive_service.permissions.return_value.list.assert_called_once()
+        call = mock_drive_service.permissions.return_value.create.call_args
+        assert call.kwargs["body"]["role"] == "reader"
+
+# =============================================================================
+# Test: reassign_sa_access (#77)
+# =============================================================================
+
+
+def _daftar_izin(mock_drive_service, *izin):
+    """Atur hasil permissions().list: pasangan (id, email)."""
+    perm_list_mock = MagicMock()
+    perm_list_mock.execute.return_value = {
+        "permissions": [{"id": i, "emailAddress": e} for i, e in izin]
+    }
+    mock_drive_service.permissions.return_value.list.return_value = perm_list_mock
+
+
+class TestReassignSaAccess:
+    """SA reassignment never revokes team-wide Editor access."""
+
+    @pytest.mark.asyncio
+    async def test_beri_editor_ke_sa_baru_dan_jangan_cabut_sa_lama(
+        self, provisioner_with_service, mock_drive_service
+    ):
+        _daftar_izin(mock_drive_service, ("perm_lama", "lama@company.com"))
+
+        await provisioner_with_service.reassign_sa_access(
+            master_folder_id="master_001",
+            old_sa_email="lama@company.com",
+            new_sa_email="baru@company.com",
+        )
+
+        buat = mock_drive_service.permissions.return_value.create
+        buat.assert_called_once()
+        assert buat.call_args.kwargs["fileId"] == "master_001"
+        assert buat.call_args.kwargs["body"] == {
+            "type": "user",
+            "role": "writer",
+            "emailAddress": "baru@company.com",
+        }
+        mock_drive_service.permissions.return_value.delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sa_baru_yang_sudah_punya_akses_tidak_dibuat_ulang(
+        self, provisioner_with_service, mock_drive_service
+    ):
+        _daftar_izin(
+            mock_drive_service,
+            ("perm_lama", "lama@company.com"),
+            ("perm_baru", "Baru@Company.com"),
+        )
+
+        await provisioner_with_service.reassign_sa_access("master_001", "lama@company.com", "baru@company.com")
+
+        mock_drive_service.permissions.return_value.create.assert_not_called()
+        mock_drive_service.permissions.return_value.delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sa_lama_tanpa_izin_tidak_ada_yang_dihapus(
+        self, provisioner_with_service, mock_drive_service
+    ):
+        _daftar_izin(mock_drive_service)
+
+        await provisioner_with_service.reassign_sa_access("master_001", "lama@company.com", "baru@company.com")
+
+        mock_drive_service.permissions.return_value.create.assert_called_once()
+        mock_drive_service.permissions.return_value.delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_tanpa_sa_lama_hanya_memberi_akses(
+        self, provisioner_with_service, mock_drive_service
+    ):
+        _daftar_izin(mock_drive_service)
+
+        await provisioner_with_service.reassign_sa_access("master_001", None, "baru@company.com")
+
+        mock_drive_service.permissions.return_value.create.assert_called_once()
+        mock_drive_service.permissions.return_value.delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sa_sama_tidak_mengubah_apa_pun(
+        self, provisioner_with_service, mock_drive_service
+    ):
+        await provisioner_with_service.reassign_sa_access("master_001", "sama@company.com", "SAMA@company.com")
+
+        mock_drive_service.permissions.return_value.create.assert_not_called()
+        mock_drive_service.permissions.return_value.delete.assert_not_called()
 
 
 # =============================================================================

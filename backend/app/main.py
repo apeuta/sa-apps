@@ -12,17 +12,26 @@ from fastapi.responses import JSONResponse
 from app.api.activity_logs import router as activity_logs_router
 from app.api.admin import router as admin_router
 from app.api.assignment import router as assignment_router
+from app.api.utilization import router as utilization_router
 from app.api.auth import router as auth_router
 from app.api.calendar import router as calendar_router
 from app.api.collaborators import router as collaborators_router
 from app.api.documents import router as documents_router
+from app.api.customers import router as customers_router
 from app.api.dq_number import router as dq_number_router
 from app.api.handover import router as handover_router
 from app.api.notifications import router as notifications_router
+from app.api.orang import router as orang_router
 from app.api.projects import router as projects_router
+from app.api.qualification import router as qualification_router
+from app.api.requirement import router as requirement_router
 from app.api.scoring import router as scoring_router
 from app.api.sla import router as sla_router
+from app.api.project_comments import router as project_comments_router
 from app.api.subtasks import router as subtasks_router
+from app.api.subtasks import router_saya as subtasks_saya_router
+from app.api.workload import router as workload_router
+from app.api.tim_sa import router as tim_sa_router
 from app.api.workflow import router as workflow_router
 from app.core.config import settings
 from app.core.database import check_database_health
@@ -31,6 +40,7 @@ from app.core.rate_limiter import RateLimiterMiddleware
 from app.schemas.response import error_response, success_response
 from app.services.gemini_adapter import GeminiAdapter
 from app.services.llm_provider import llm_factory
+from app.services.requirement_generator import sweep_stale_pending_requirements
 from app.services.sla_scheduler import SLAScheduler
 
 logger = logging.getLogger(__name__)
@@ -76,19 +86,28 @@ register_exception_handlers(app)
 # `GET /projects/{project_id}`. Dijaga oleh tests/test_route_shadowing.py.
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(scoring_router, prefix="/api/v1")
+app.include_router(requirement_router, prefix="/api/v1")
 app.include_router(assignment_router, prefix="/api/v1")
+app.include_router(utilization_router, prefix="/api/v1")
 app.include_router(projects_router, prefix="/api/v1")
+app.include_router(orang_router, prefix="/api/v1")
 app.include_router(workflow_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
 app.include_router(dq_number_router, prefix="/api/v1")
+app.include_router(customers_router, prefix="/api/v1")
 app.include_router(activity_logs_router, prefix="/api/v1")
 app.include_router(calendar_router, prefix="/api/v1")
 app.include_router(sla_router, prefix="/api/v1")
+app.include_router(qualification_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(handover_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(collaborators_router, prefix="/api/v1")
 app.include_router(subtasks_router, prefix="/api/v1")
+app.include_router(project_comments_router, prefix="/api/v1")
+app.include_router(subtasks_saya_router, prefix="/api/v1")
+app.include_router(workload_router, prefix="/api/v1")
+app.include_router(tim_sa_router, prefix="/api/v1")
 
 
 @app.on_event("startup")
@@ -114,6 +133,13 @@ async def startup_register_adapters():
         logger.info("GeminiAdapter registered in LLM factory.")
     except Exception as e:
         logger.error(f"Failed to register GeminiAdapter: {e}", exc_info=True)
+
+    # Generate Requirement yang `pending` saat proses sebelumnya mati sudah basi (single-instance,
+    # ADR 0003) -> tandai `failed` agar tombol coba lagi tersedia. Gagal hanya di-log.
+    try:
+        await sweep_stale_pending_requirements()
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Sweep Requirement pending gagal: {e}", exc_info=True)
 
     # Jalankan background scheduler SLA (Flow 2). Toggle lewat SLA_SCHEDULER_ENABLED
     # agar bisa dimatikan di tooling/test. Lihat ADR 0003 + catatan multi-instance

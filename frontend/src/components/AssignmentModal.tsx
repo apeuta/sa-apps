@@ -3,6 +3,9 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
+import { useAuthStore } from "@/store/auth";
+import { LoadError } from "./LoadError";
+import { LeadSaSelect } from "./LeadSaSelect";
 import {
   AvailableSA,
   PendingProject,
@@ -21,10 +24,14 @@ import {
  * Requirements: 4.1, 4.2
  */
 
+type AssignmentProject = Pick<
+  PendingProject,
+  "id_project" | "project_name" | "customer_name" | "bant_score" | "use_case_tags"
+>;
+
 interface AssignmentModalProps {
   /** Proyek yang akan di-assign */
-  project: PendingProject;
-  /** Callback ketika modal ditutup */
+  project: AssignmentProject;
   onClose: () => void;
   /** Callback setelah assignment berhasil */
   onSuccess: () => void;
@@ -35,12 +42,22 @@ export function AssignmentModal({
   onClose,
   onSuccess,
 }: AssignmentModalProps) {
+  const user = useAuthStore((s) => s.user);
   const [selectedSA, setSelectedSA] = useState<string | null>(null);
+  // Default Lead SA = yang meng-assign bila ia Lead_SA; admin non-Lead_SA wajib memilih (ADR 0014)
+  const [selectedLead, setSelectedLead] = useState<string>(
+    user?.role === "Lead_SA" ? user.id : ""
+  );
   const [isAssigning, setIsAssigning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Fetch daftar SA tersedia
-  const { data: saList, isLoading: isLoadingSA } = useSWR<AvailableSA[]>(
+  const {
+    data: saList,
+    isLoading: isLoadingSA,
+    error: saError,
+    mutate: mutateSA,
+  } = useSWR<AvailableSA[]>(
     "/sa/available",
     fetcher
   );
@@ -50,13 +67,13 @@ export function AssignmentModal({
    * Memanggil API assign dan trigger callback on success
    */
   const handleAssign = async () => {
-    if (!selectedSA) return;
+    if (!selectedSA || !selectedLead) return;
 
     setIsAssigning(true);
     setError(null);
 
     try {
-      await assignProject(project.id_project, selectedSA);
+      await assignProject(project.id_project, selectedSA, selectedLead);
       onSuccess();
     } catch (err) {
       const message =
@@ -132,14 +149,18 @@ export function AssignmentModal({
           <div className="mb-4 p-3 bg-neutral-50 rounded-lg">
             <div className="flex items-center gap-4 text-sm">
               <span className="text-neutral-500">BANT Status:</span>
-              <span className={`font-semibold ${
-                project.bant_score >= 60 ? "text-green-600" : "text-amber-600"
-              }`}>
-                {project.bant_score >= 60 ? "Passed" : "Not Passed"}
-              </span>
-              {project.use_case_tags.length > 0 && (
+              {project.bant_score === null ? (
+                <span className="font-semibold text-neutral-500">Belum dinilai</span>
+              ) : (
+                <span className={`font-semibold ${
+                  project.bant_score >= 60 ? "text-green-600" : "text-amber-600"
+                }`}>
+                  {project.bant_score >= 60 ? "Passed" : "Not Passed"}
+                </span>
+              )}
+              {(project.use_case_tags?.length ?? 0) > 0 && (
                 <div className="flex gap-1.5 flex-wrap">
-                  {project.use_case_tags.map((tag) => (
+                  {project.use_case_tags?.map((tag) => (
                     <span
                       key={tag}
                       className="px-2 py-0.5 bg-primary-50 text-primary-600 text-xs rounded-full"
@@ -151,6 +172,13 @@ export function AssignmentModal({
               )}
             </div>
           </div>
+
+          {/* Lead SA proyek */}
+          <LeadSaSelect
+            kandidat={saList ?? []}
+            value={selectedLead}
+            onChange={setSelectedLead}
+          />
 
           {/* Label */}
           <p className="text-sm font-medium text-neutral-700 mb-3">
@@ -173,6 +201,10 @@ export function AssignmentModal({
                 </div>
               ))}
             </div>
+          )}
+
+          {saError && !saList && (
+            <LoadError message="Gagal memuat daftar SA." onRetry={() => mutateSA()} />
           )}
 
           {/* Daftar SA */}
@@ -269,7 +301,7 @@ export function AssignmentModal({
           </button>
           <button
             onClick={handleAssign}
-            disabled={!selectedSA || isAssigning}
+            disabled={!selectedSA || !selectedLead || isAssigning}
             className="px-4 py-2 text-sm font-medium text-white bg-primary-600
                        rounded-lg hover:bg-primary-700 transition-colors duration-100
                        min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed

@@ -6,6 +6,7 @@ import { useSidebarStore } from "@/store/sidebar";
 import { useAuthStore } from "@/store/auth";
 import { logout } from "@/lib/auth";
 import { UserMenu } from "@/components/UserMenu";
+import { isAdmin, isPrivileged, type Actor } from "@/lib/roles";
 
 /**
  * Sidebar Navigation — collapsible (Requirement 19.7)
@@ -69,12 +70,11 @@ function BellIcon({ className }: { className?: string }) {
   );
 }
 
-function SettingsIcon({ className }: { className?: string }) {
+function UsersIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-        d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.573-1.066z" />
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
     </svg>
   );
 }
@@ -94,35 +94,47 @@ const allNavItems: NavItem[] = [
   { label: "Notifikasi", href: "/notifications", icon: BellIcon },
 ];
 
+// Dashboard Lead SA untuk admin yang bukan Lead_SA (beranda mereka mengikuti role fungsionalnya)
+const leadDashboardNavItem: NavItem = {
+  label: "Dashboard Lead SA",
+  href: "/dashboard/lead-sa",
+  icon: DashboardIcon,
+};
+
 // Item navigasi khusus Admin
 const adminNavItems: NavItem[] = [
-  { label: "Settings", href: "/admin/settings", icon: SettingsIcon },
+  { label: "Pengguna", href: "/admin/users", icon: UsersIcon },
 ];
 
 /**
- * Filter item navigasi berdasarkan role user
- * - Sales: Dashboard, Proyek, Notifikasi
- * - SA: Dashboard, Proyek, Activity Log, Dokumen, Notifikasi
- * - Lead_SA: Dashboard, Proyek, Activity Log, Dokumen, Notifikasi
- * - Admin: Semua + Settings
+ * Filter item navigasi berdasarkan role fungsional + flag admin (ADR 0012)
+ * - Sales/Product: Dashboard, Proyek, Notifikasi
+ * - SA/Lead_SA: Dashboard, Proyek, Activity Log, Notifikasi
+ * - Admin (flag): menu role-nya + Dashboard Lead SA (bila bukan Lead_SA); bagian Admin terpisah
  */
-function getNavItemsForRole(role?: string): NavItem[] {
-  switch (role) {
+function getNavItemsForUser(user?: Actor | null): NavItem[] {
+  let items: NavItem[];
+  switch (user?.role) {
     case "Sales":
-      return allNavItems.filter((item) =>
+    case "Product":
+      items = allNavItems.filter((item) =>
         ["Dashboard", "Proyek", "Notifikasi"].includes(item.label)
       );
+      break;
     case "SA":
     case "Lead_SA":
-      return allNavItems;
-    case "Admin":
-      return allNavItems;
+      items = allNavItems;
+      break;
     default:
       // Jika role belum diketahui, tampilkan minimal
       return allNavItems.filter((item) =>
         ["Dashboard", "Proyek"].includes(item.label)
       );
   }
+  if (isAdmin(user) && user?.role !== "Lead_SA") {
+    items = [...items, leadDashboardNavItem];
+  }
+  return items;
 }
 
 export function Sidebar() {
@@ -131,7 +143,7 @@ export function Sidebar() {
   const pathname = usePathname();
 
   // Dapatkan item navigasi sesuai role
-  const navItems = getNavItemsForRole(user?.role);
+  const navItems = getNavItemsForUser(user);
 
   /** Logout: reset store lalu revoke session + redirect ke /login */
   const handleLogout = () => {
@@ -222,12 +234,20 @@ export function Sidebar() {
             );
           })}
 
+          {isPrivileged(user) && (
+            <li>
+              <Link href="/customers" className={`flex items-center gap-3 rounded-lg px-3 min-h-[44px] min-w-[44px] ${isOpen ? "" : "justify-center"} ${pathname.startsWith("/customers") ? "bg-primary-50 text-primary-600 font-medium" : "text-neutral-700 hover:bg-neutral-100 hover:text-primary-600"}`} title="Customer">
+                <UsersIcon className="w-5 h-5 shrink-0" />
+                {isOpen && <span className="text-sm font-medium truncate">Customer</span>}
+              </Link>
+            </li>
+          )}
           {/* Admin-only menu items */}
-          {user?.role === "Admin" && (
+          {isAdmin(user) && (
             <>
               <li className="pt-3 mt-3 border-t border-neutral-100">
                 {isOpen && (
-                  <span className="px-3 text-xs font-semibold text-neutral-400 uppercase">
+                  <span className="px-3 text-xs font-semibold text-neutral-500 uppercase">
                     Admin
                   </span>
                 )}

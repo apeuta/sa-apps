@@ -5,10 +5,12 @@ Validasi input form request pre-sales sesuai requirement 2.1.
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.integration_operation import IntegrationOperationResponse
 
 
 class ProjectCreate(BaseModel):
@@ -57,8 +59,11 @@ class ProjectCreate(BaseModel):
     @field_validator("project_name", "customer_name")
     @classmethod
     def strip_whitespace(cls, v: str) -> str:
-        """Trim whitespace di awal/akhir."""
-        return v.strip()
+        """Trim whitespace di awal/akhir; nama yang hanya berisi spasi dianggap kosong."""
+        v = v.strip()
+        if not v:
+            raise ValueError("Tidak boleh kosong atau hanya spasi")
+        return v
 
 
 class FileUploadResult(BaseModel):
@@ -73,6 +78,92 @@ class FileUploadResult(BaseModel):
     size_bytes: Optional[int] = Field(None, description="Ukuran file dalam bytes")
 
 
+class OrangProyek(BaseModel):
+    """Ringkasan satu orang pada project (id + nama + email)."""
+
+    id: UUID
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+
+class ProjectListPersonResponse(BaseModel):
+    """Ringkasan orang yang disertakan dalam item daftar proyek."""
+
+    id: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class ProjectListItemResponse(BaseModel):
+    """Satu item daftar proyek yang telah dipaginasi."""
+
+    id_project: str
+    project_name: str
+    customer_name: str
+    status: str
+    qualification_state: Optional[str] = None
+    dq_number: Optional[str] = None
+    bant_score: Optional[int] = None
+    use_case_tags: list[str]
+    estimasi_nilai: Optional[str] = None
+    target_submit: Optional[str] = None
+    assigned_sa: Optional[str] = None
+    created_by: Optional[ProjectListPersonResponse] = None
+    product_pic: Optional[ProjectListPersonResponse] = None
+    sales_pic: Optional[ProjectListPersonResponse] = None
+    gdrive_folder_id: Optional[str] = None
+    folder_provisioning_status: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ProjectListPageResponse(BaseModel):
+    """Paginated page returned by GET /projects."""
+
+    items: list[ProjectListItemResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class ProjectDetailResponse(BaseModel):
+    """Detail payload returned by GET /projects/{project_id}."""
+
+    customer_id: Optional[str] = None
+    id_project: str
+    project_name: str
+    customer_name: str
+    status: str
+    qualification_state: Optional[str] = None
+    previous_status: Optional[str] = None
+    lost_reason: Optional[str] = None
+    dq_number: Optional[str] = None
+    bant_score: Optional[int] = None
+    bant_detail: Optional[dict[str, Any]] = None
+    qualification: Optional[dict[str, Any]] = None
+    use_case_tags: list[str] = Field(default_factory=list)
+    estimasi_nilai: Optional[str] = None
+    target_submit: Optional[str] = None
+    created_by: Optional[ProjectListPersonResponse] = None
+    product_pic: Optional[ProjectListPersonResponse] = None
+    sales_pic: Optional[ProjectListPersonResponse] = None
+    lead_sa: Optional[ProjectListPersonResponse] = None
+    assigned_sa: Optional[ProjectListPersonResponse] = None
+    collaborators: list[dict[str, Any]] = Field(default_factory=list)
+    gdrive_folder_id: Optional[str] = None
+    gdrive_inventory_folder_id: Optional[str] = None
+    gdrive_diagram_folder_id: Optional[str] = None
+    gdrive_solutions_folder_id: Optional[str] = None
+    gdrive_folder_number: Optional[int] = None
+    source_documents: list[dict[str, Any]] = Field(default_factory=list)
+    folder_provisioning_status: Optional[str] = None
+    folder_provisioning_operation: Optional[dict[str, Any]] = None
+    integration_operations: list[IntegrationOperationResponse] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
 class ProjectResponse(BaseModel):
     """
     Schema response data proyek yang baru dibuat.
@@ -84,8 +175,15 @@ class ProjectResponse(BaseModel):
     customer_name: str
     target_submit: date
     estimasi_nilai: Decimal
-    status: str = Field(default="New", description="Status awal proyek")
-    sales_pic: UUID = Field(..., description="ID requester yang membuat request (Sales/SA/Lead_SA)")
+    status: str = Field(default="Intake", description="Status awal proyek")
+    qualification_state: str = Field(
+        default="Scoring", description="Gate kualifikasi awal (Scoring, Need Clarification, Qualified)"
+    )
+    created_by: OrangProyek = Field(..., description="Pembuat project")
+    product_pic: OrangProyek = Field(..., description="Product penanggung jawab (selalu ada)")
+    sales_pic: Optional[OrangProyek] = Field(
+        None, description="Sales PIC (opsional; project boleh tanpa Sales)"
+    )
     created_at: datetime
     files: list[FileUploadResult] = Field(
         default_factory=list,
@@ -95,9 +193,15 @@ class ProjectResponse(BaseModel):
         default=False,
         description="True jika scoring engine di-trigger",
     )
-    message_bant: Optional[str] = Field(
+    bant_score: Optional[int] = Field(
         None,
-        description="Pesan jika tidak ada file valid — arahkan ke BANT manual",
+        description="Skor BANT hasil rubrik backend (None bila menunggu analisis file)",
+    )
+    sub_scores: Optional[dict[str, int]] = Field(
+        None, description="Sub-skor BANT per kriteria (budget/authority/need/timeline)"
+    )
+    feedback: Optional[str] = Field(
+        None, description="Penjelasan kriteria lemah bila skor di bawah threshold"
     )
 
     class Config:

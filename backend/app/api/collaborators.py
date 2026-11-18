@@ -6,13 +6,22 @@ untuk melihat proyek (viewer) atau menambah activity log (contributor).
 
 import logging
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import (
+    adalah_privileged,
+    PeranKolaborator,
+    PERAN_REQUESTER,
+    PeranUser,
+    TingkatAkses,
+    ensure_project_access,
+    get_current_user,
+)
 from app.models.project import Project
 from app.models.project_collaborator import ProjectCollaborator
 from app.models.user import User
@@ -42,34 +51,6 @@ async def _verify_project_exists(project_id: str, db: AsyncSession) -> Project:
     return project
 
 
-async def _is_collaborator_or_above(
-    project_id: str, user_id: uuid.UUID, db: AsyncSession
-) -> bool:
-    """
-    Cek apakah user adalah kolaborator, SA yang di-assign, Sales PIC,
-    Lead_SA, atau Admin untuk proyek tertentu.
-    """
-    # Cek langsung: Sales PIC atau assigned SA
-    result = await db.execute(
-        select(Project).where(Project.id_project == project_id)
-    )
-    project = result.scalar_one_or_none()
-    if project and (project.sales_pic == user_id or project.assigned_sa == user_id):
-        return True
-
-    # Cek kolaborator
-    collab_result = await db.execute(
-        select(ProjectCollaborator).where(
-            ProjectCollaborator.id_project == project_id,
-            ProjectCollaborator.user_id == user_id,
-        )
-    )
-    if collab_result.scalar_one_or_none() is not None:
-        return True
-
-    return False
-
-
 @router.get(
     "/{project_id}/collaborators",
     summary="Daftar kolaborator proyek",
@@ -89,17 +70,8 @@ async def list_collaborators(
     """
     project = await _verify_project_exists(project_id, db)
 
-    # Validasi akses
-    is_privileged = current_user.role in ("Lead_SA", "Admin")
-    is_sales_pic = project.sales_pic == current_user.id
-    is_assigned_sa = project.assigned_sa == current_user.id
-    is_existing_collab = await _is_collaborator_or_above(project_id, current_user.id, db)
-
-    if not (is_privileged or is_sales_pic or is_assigned_sa or is_existing_collab):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki akses ke proyek ini.",
-        )
+    # Titik keputusan bersama (BACA): Lead_SA/Admin, Sales PIC, SA ditugaskan, collaborator.
+    await ensure_project_access(db, project, current_user, TingkatAkses.BACA)
 
     # Query kolaborator + join user info
     result = await db.execute(
@@ -147,7 +119,8 @@ async def list_collaborators(
     summary="Tambah kolaborator ke proyek",
     description=(
         "Menambahkan user sebagai kolaborator proyek. "
-        "SA/Sales/Lead_SA/Admin bisa menambahkan kolaborator. "
+        "Hanya Lead_SA, Admin, SA ditugaskan, atau Sales PIC proyek itu yang bisa menambahkan "
+        "kolaborator. "
         "Role: 'viewer' (lihat saja) atau 'contributor' (bisa tambah activity log)."
     ),
 )
@@ -162,20 +135,25 @@ async def add_collaborator(
 
     Flow:
     1. Validasi proyek ada
-    2. Validasi user yang akan ditag ada
-    3. Validasi role kolaborator (viewer / contributor)
-    4. Cek duplikasi
-    5. Simpan ke database
+    2. Validasi akses penambah (Lead_SA/Admin/SA ditugaskan/Sales PIC)
+    3. Validasi user yang akan ditag ada
+    4. Validasi role kolaborator (viewer / contributor)
+    5. Cek duplikasi
+    6. Simpan ke database
     """
     project = await _verify_project_exists(project_id, db)
 
-    # Validasi akses: hanya SA, Sales, Lead_SA, Admin yang bisa add collaborator
-    allowed_roles = ("SA", "Sales", "Lead_SA", "Admin")
+    # Gerbang peran kasar: hanya SA, Sales, Lead_SA, Admin yang bisa add collaborator
+    allowed_roles = tuple(PeranUser)
     if current_user.role not in allowed_roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Anda tidak memiliki izin menambahkan kolaborator.",
         )
+
+    # Relasi ke proyek: hanya Lead_SA/Admin, SA ditugaskan, atau Sales PIC proyek ini.
+    # Dicek sebelum mencari user target agar pihak luar tidak bisa menyelidiki user lain.
+    await ensure_project_access(db, project, current_user, TingkatAkses.TAMBAH_KOLABORATOR)
 
     # Validasi user yang akan ditag ada
     user_result = await db.execute(
@@ -189,29 +167,36 @@ async def add_collaborator(
         )
 
     # === Aturan role penambah terhadap role target ===
-    # - Sales hanya bisa menambahkan sesama Sales
+    # - Sales/Product hanya bisa menambahkan sesama Sales/Product
     # - SA hanya bisa menambahkan sesama SA
     # - Lead_SA / Admin bisa menambahkan role apa pun
-    if current_user.role == "Sales" and target_user.role != "Sales":
+    privileged = adalah_privileged(current_user)
+    if (
+        not privileged
+        and current_user.role in PERAN_REQUESTER
+        and target_user.role not in PERAN_REQUESTER
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Sales hanya dapat menambahkan sesama Sales sebagai kolaborator.",
+            detail="Sales/Product hanya dapat menambahkan sesama Sales/Product sebagai kolaborator.",
         )
-    if current_user.role == "SA" and target_user.role != "SA":
+    if not privileged and current_user.role == "SA" and target_user.role != "SA":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="SA hanya dapat menambahkan sesama SA sebagai kolaborator.",
         )
 
     # Validasi role kolaborator
-    if body.role not in ("viewer", "contributor"):
+    if body.role not in tuple(PeranKolaborator):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Role kolaborator harus 'viewer' atau 'contributor'.",
         )
 
     # Contributor harus SA (karena hanya SA yang bisa buat activity log)
-    if body.role == "contributor" and target_user.role not in ("SA", "Lead_SA", "Admin"):
+    if body.role == PeranKolaborator.CONTRIBUTOR and not (
+        target_user.role == PeranUser.SA or adalah_privileged(target_user)
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Hanya SA yang bisa menjadi contributor (menambah activity log).",
@@ -268,7 +253,11 @@ async def add_collaborator(
 @router.delete(
     "/{project_id}/collaborators/{user_id}",
     summary="Hapus kolaborator dari proyek",
-    description="Menghapus kolaborator dari proyek. Hanya Lead_SA, Admin, atau yang menambahkan yang bisa hapus.",
+    description=(
+        "Menghapus kolaborator dari proyek. Hanya Lead_SA, Admin, SA yang ditugaskan, atau "
+        "Sales PIC proyek yang bisa menghapus. User yang menambahkan kolaborator (added_by) "
+        "tidak otomatis berhak menghapus."
+    ),
 )
 async def remove_collaborator(
     project_id: str,
@@ -279,23 +268,21 @@ async def remove_collaborator(
     """
     Hapus kolaborator dari proyek.
 
-    Akses:
+    Akses (TingkatAkses.HAPUS_KOLABORATOR):
     - Lead_SA / Admin: selalu bisa
-    - User yang menambahkan kolaborator (added_by): bisa
-    - Sales PIC / assigned SA: bisa
+    - Sales PIC / SA yang ditugaskan: bisa
+    - User yang menambahkan kolaborator (added_by): tidak otomatis bisa
     """
     project = await _verify_project_exists(project_id, db)
 
-    # Validasi akses
-    is_privileged = current_user.role in ("Lead_SA", "Admin")
-    is_sales_pic = project.sales_pic == current_user.id
-    is_assigned_sa = project.assigned_sa == current_user.id
-
-    if not (is_privileged or is_sales_pic or is_assigned_sa):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki izin menghapus kolaborator.",
-        )
+    # Titik keputusan bersama (HAPUS_KOLABORATOR): Lead_SA/Admin, Sales PIC, SA ditugaskan.
+    await ensure_project_access(
+        db,
+        project,
+        current_user,
+        TingkatAkses.HAPUS_KOLABORATOR,
+        pesan="Anda tidak memiliki izin menghapus kolaborator.",
+    )
 
     # Cari kolaborator
     collab_result = await db.execute(
@@ -339,7 +326,16 @@ async def remove_collaborator(
     description="Cari user berdasarkan nama atau email. Digunakan untuk autocomplete saat menambah kolaborator.",
 )
 async def search_users(
-    q: str = Query(..., min_length=2, description="Kata kunci pencarian (nama atau email)"),
+    q: Optional[str] = Query(
+        default=None,
+        min_length=2,
+        pattern=r"^[^\x00]*$",  # NUL tak bisa dikirim ke Postgres → 422, bukan 500
+        description="Kata kunci pencarian (nama atau email); wajib bila `role` tidak diberikan",
+    ),
+    role: Optional[PeranUser] = Query(
+        default=None,
+        description="Saring per role fungsional (mis. Product untuk dropdown Product PIC)",
+    ),
     limit: int = Query(default=10, ge=1, le=50),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -348,17 +344,24 @@ async def search_users(
     Cari user berdasarkan nama atau email (case-insensitive).
     Mengembalikan max `limit` hasil.
     """
-    search_pattern = f"%{q}%"
-
-    result = await db.execute(
-        select(User)
-        .where(
-            (User.name.ilike(search_pattern)) | (User.email.ilike(search_pattern))
+    if q is None and role is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Isi kata kunci pencarian (q) atau saring dengan role.",
         )
-        .where(User.id != current_user.id)  # Exclude diri sendiri
-        .order_by(User.name)
-        .limit(limit)
-    )
+    query = select(User).where(User.id != current_user.id)  # Exclude diri sendiri
+    if role is not None:
+        query = query.where(User.role == role)
+    if q is not None:
+        # `%`, `_`, dan `\` pada kata kunci adalah karakter harfiah, bukan wildcard ilike.
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        search_pattern = f"%{escaped}%"
+        query = query.where(
+            (User.name.ilike(search_pattern, escape="\\"))
+            | (User.email.ilike(search_pattern, escape="\\"))
+        )
+
+    result = await db.execute(query.order_by(User.name).limit(limit))
     users = result.scalars().all()
 
     data = [

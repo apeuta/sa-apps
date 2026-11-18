@@ -17,7 +17,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import (
+    PERAN_REQUESTER,
+    TingkatAkses,
+    adalah_privileged,
+    ensure_project_access,
+    get_current_user,
+)
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.handover import HandoverConfigInput, HandoverReadiness, HandoverResponse
@@ -34,7 +40,7 @@ router = APIRouter(tags=["Handover"])
     summary="Cek kesiapan handover proyek",
     description=(
         "Mengembalikan status kesiapan handover: apakah semua prasyarat "
-        "terpenuhi (status Closed-Win, HLD Final, PMO/Delivery dikonfigurasi)."
+        "terpenuhi (status Won, HLD Final, PMO/Delivery dikonfigurasi)."
     ),
 )
 async def get_handover_status(
@@ -58,18 +64,19 @@ async def get_handover_status(
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
 
-    # Validasi akses — minimal SA yang ditugaskan, Lead_SA, atau Admin
-    if current_user.role not in ("Lead_SA", "Admin"):
-        if current_user.role == "SA" and project.assigned_sa != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Anda hanya dapat melihat status handover proyek yang ditugaskan kepada Anda.",
-            )
-        elif current_user.role == "Sales":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Role Sales tidak memiliki akses ke fitur handover.",
-            )
+    # Validasi akses (titik keputusan bersama, TingkatAkses.HANDOVER) — SA yang ditugaskan,
+    # Lead_SA, atau Admin. Sales (termasuk PIC) dan collaborator ditolak.
+    await ensure_project_access(
+        db,
+        project,
+        current_user,
+        TingkatAkses.HANDOVER,
+        pesan=(
+            "Role Sales/Product tidak memiliki akses ke fitur handover."
+            if current_user.role in PERAN_REQUESTER
+            else "Anda hanya dapat melihat status handover proyek yang ditugaskan kepada Anda."
+        ),
+    )
 
     # Cek kesiapan
     readiness = await handover_service.check_handover_readiness(project_id, db)
@@ -100,7 +107,7 @@ async def configure_handover(
     Hanya bisa diakses oleh Lead_SA atau Admin (requirement 17.6).
     """
     # Validasi role — hanya Lead_SA dan Admin
-    if current_user.role not in ("Lead_SA", "Admin"):
+    if not adalah_privileged(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Hanya Lead_SA atau Admin yang dapat mengkonfigurasi handover.",
@@ -151,7 +158,7 @@ async def configure_handover(
     summary="Trigger proses handover proyek",
     description=(
         "Memulai proses handover proyek ke PMO dan Delivery. "
-        "Prasyarat: status Closed-Win, HLD Final, email PMO/Delivery sudah dikonfigurasi. "
+        "Prasyarat: status Won, HLD Final, email PMO/Delivery sudah dikonfigurasi. "
         "Proses: buat folder Final_Deliverables, set permission, kirim notifikasi, update status."
     ),
 )
@@ -168,7 +175,7 @@ async def trigger_handover(
     1. Validasi prasyarat
     2. Provisioning folder + permission GDrive
     3. Kirim notifikasi ke PMO + Delivery
-    4. Update status → "Handover Complete"
+    4. Update status → "Handed Over"
     5. Catat audit log
 
     Requirements: 17.2, 17.3, 17.4, 17.5, 17.7
@@ -185,18 +192,19 @@ async def trigger_handover(
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
 
-    # Validasi akses — SA yang ditugaskan, Lead_SA, atau Admin
-    if current_user.role not in ("Lead_SA", "Admin"):
-        if current_user.role == "SA" and project.assigned_sa != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Anda hanya dapat memicu handover proyek yang ditugaskan kepada Anda.",
-            )
-        elif current_user.role == "Sales":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Role Sales tidak memiliki akses untuk memicu handover.",
-            )
+    # Validasi akses (titik keputusan bersama, TingkatAkses.HANDOVER) — SA yang ditugaskan,
+    # Lead_SA, atau Admin. Sebelum eksekusi handover (notifikasi, ubah status).
+    await ensure_project_access(
+        db,
+        project,
+        current_user,
+        TingkatAkses.HANDOVER,
+        pesan=(
+            "Role Sales/Product tidak memiliki akses untuk memicu handover."
+            if current_user.role in PERAN_REQUESTER
+            else "Anda hanya dapat memicu handover proyek yang ditugaskan kepada Anda."
+        ),
+    )
 
     # Eksekusi handover
     try:
@@ -206,6 +214,9 @@ async def trigger_handover(
             db=db,
         )
     except HandoverError as e:
+        # Handover failure notifications use service-owned sessions. Commit the request's
+        # savepoint before returning the error so those notifications survive this response.
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
@@ -215,7 +226,7 @@ async def trigger_handover(
         data=handover_result,
         message=(
             f"Handover proyek '{handover_result['project_name']}' berhasil. "
-            f"Status diubah ke 'Handover Complete'. "
+            f"Status diubah ke 'Handed Over'. "
             f"Notifikasi terkirim ke PMO ({handover_result['pmo_email']}) "
             f"dan Delivery ({handover_result['delivery_email']})."
         ),

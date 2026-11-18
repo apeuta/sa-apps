@@ -15,24 +15,84 @@ Data yang dibuat:
 """
 
 import asyncio
-import uuid
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
 import hashlib
+import random
+import uuid
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
-from app.models.user import User
-from app.models.project import Project
-from app.models.document import Document
 from app.models.activity_log import ActivityLog
+from app.models.customer import Customer, normalize_customer_name
+from app.models.document import Document
+from app.models.project import Project
+from app.models.user import User
+from app.schemas.qualification_definition import QUESTIONNAIRE_SCHEMA_VERSION
+
+DEMO_ASSIGNMENT_SEED = 169
+DEMO_ASSIGNMENT_VERSION = 1
 
 
 def deterministic_uuid(seed_string: str) -> uuid.UUID:
     """Generate UUID deterministic berdasarkan string (selalu sama untuk input sama)."""
     return uuid.UUID(hashlib.md5(seed_string.encode()).hexdigest())
+
+
+def qualification_answers_for_demo(
+    mrr: int | None, pic_name: str, pic_position: str, pic_email: str, need: str
+) -> dict:
+    """Jawaban demo mengikuti nama field dan pilihan skema kualifikasi aktif."""
+    return {
+        "mrr": mrr,
+        "budget_dialokasikan": "Ya",
+        "pic_nama": pic_name,
+        "pic_jabatan": pic_position,
+        "pic_email": pic_email,
+        "peran_pic": "Pengambil keputusan",
+        "stakeholder_lain": None,
+        "masalah_bisnis": need,
+        "jenis_workload": "Data warehouse/analytics",
+        "lingkungan": "Hybrid",
+        "skala": "40 server, 20 TB",
+        "persyaratan_khusus": None,
+        "target_go_live": "≤ 6 bulan",
+        "kompetitor": None,
+    }
+
+
+def demo_project_assignment_plan(
+    projects_data: list[dict],
+    sales_ids: list[uuid.UUID],
+    sa_ids: list[uuid.UUID],
+    product_ids: list[uuid.UUID],
+) -> dict[str, dict[str, uuid.UUID | None]]:
+    """Susun owner pseudo-random yang seimbang dan stabil untuk fixture demo."""
+    # Ubah version bila algoritme/pola assignment fixture sengaja diganti.
+    rng = random.Random((DEMO_ASSIGNMENT_VERSION << 32) | DEMO_ASSIGNMENT_SEED)
+
+    def pilih_berimbang(owners: list[uuid.UUID], jumlah: int) -> list[uuid.UUID]:
+        if not owners and jumlah:
+            raise ValueError("Daftar user owner demo tidak boleh kosong.")
+        urutan = [owners[index % len(owners)] for index in range(jumlah)]
+        rng.shuffle(urutan)
+        return urutan
+
+    eligible_sa = [project for project in projects_data if project.get("sa") is not None]
+    sales_assignment = pilih_berimbang(sales_ids, len(projects_data))
+    sa_assignment = iter(pilih_berimbang(sa_ids, len(eligible_sa)))
+    product_assignment = pilih_berimbang(product_ids, len(projects_data))
+
+    return {
+        project["id_project"]: {
+            "sales_id": sales_assignment[index],
+            "sa_id": next(sa_assignment) if project.get("sa") is not None else None,
+            "product_id": product_assignment[index],
+        }
+        for index, project in enumerate(projects_data)
+    }
 
 
 # ============================================================
@@ -47,10 +107,16 @@ DEMO_USERS = [
         "google_id": "demo-google-id-sales",
     },
     {
-        "email": "demo-sales2@portal-sa.local",
-        "name": "Rina Susanti",
-        "role": "Sales",
-        "google_id": "demo-google-id-sales-002",
+        "email": "demo-sales2@portal-sa.local", "name": "Demo Sales 2",
+        "role": "Sales", "google_id": "demo-google-id-sales-2",
+    },
+    {
+        "email": "demo-product@portal-sa.local", "name": "Demo Product",
+        "role": "Product", "google_id": "demo-google-id-product",
+    },
+    {
+        "email": "demo-product2@portal-sa.local", "name": "Demo Product 2",
+        "role": "Product", "google_id": "demo-google-id-product-2",
     },
     {
         "email": "demo-sa@portal-sa.local",
@@ -59,28 +125,19 @@ DEMO_USERS = [
         "google_id": "demo-google-id-sa",
     },
     {
-        "email": "demo-sa2@portal-sa.local",
-        "name": "Budi Prakoso",
-        "role": "SA",
-        "google_id": "demo-google-id-sa-002",
-    },
-    {
-        "email": "demo-sa3@portal-sa.local",
-        "name": "Ayu Lestari",
-        "role": "SA",
-        "google_id": "demo-google-id-sa-003",
+        "email": "demo-sa2@portal-sa.local", "name": "Demo SA 2",
+        "role": "SA", "google_id": "demo-google-id-sa-2",
     },
     {
         "email": "demo-lead@portal-sa.local",
         "name": "Demo Lead SA",
         "role": "Lead_SA",
+        "is_admin": True,
         "google_id": "demo-google-id-lead-sa",
     },
     {
-        "email": "demo-admin@portal-sa.local",
-        "name": "Demo Admin",
-        "role": "Admin",
-        "google_id": "demo-google-id-admin",
+        "email": "demo-lead2@portal-sa.local", "name": "Demo Lead SA 2",
+        "role": "Lead_SA", "is_admin": True, "google_id": "demo-google-id-lead-sa-2",
     },
 ]
 
@@ -93,9 +150,11 @@ async def get_or_create_user(db: AsyncSession, user_data: dict) -> User:
     existing = result.scalar_one_or_none()
 
     if existing:
-        # Update role jika berubah (untuk konsistensi seed)
-        if existing.role != user_data["role"]:
+        # Update role dan flag admin jika berubah (untuk konsistensi seed)
+        is_admin = user_data.get("is_admin", False)
+        if existing.role != user_data["role"] or existing.is_admin != is_admin:
             existing.role = user_data["role"]
+            existing.is_admin = is_admin
             await db.flush()
         print(f"  [ok] User sudah ada: {user_data['email']} (id: {existing.id})")
         return existing
@@ -107,6 +166,7 @@ async def get_or_create_user(db: AsyncSession, user_data: dict) -> User:
         email=user_data["email"],
         name=user_data["name"],
         role=user_data["role"],
+        is_admin=user_data.get("is_admin", False),
         google_id=user_data["google_id"],
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
@@ -117,11 +177,33 @@ async def get_or_create_user(db: AsyncSession, user_data: dict) -> User:
     return user
 
 
+async def get_or_create_demo_customer(db: AsyncSession, customer_name: str) -> Customer:
+    """Resolve a demo customer's persistent identity from its canonical name."""
+    name = customer_name.strip()
+    normalized_name = normalize_customer_name(name)
+    result = await db.execute(
+        select(Customer).where(Customer.normalized_name == normalized_name)
+    )
+    customer = result.scalar_one_or_none()
+    if customer is not None:
+        return customer
+
+    customer = Customer(
+        id=uuid.uuid4(),
+        name=name,
+        normalized_name=normalized_name,
+    )
+    db.add(customer)
+    await db.flush()
+    return customer
+
+
 async def get_or_create_project(
     db: AsyncSession,
     project_data: dict,
     sales_id: uuid.UUID,
     sa_id: uuid.UUID | None = None,
+    product_id: uuid.UUID | None = None,
 ) -> Project:
     """Cek proyek berdasarkan id_project, buat jika belum ada."""
     result = await db.execute(
@@ -130,8 +212,46 @@ async def get_or_create_project(
     existing = result.scalar_one_or_none()
 
     if existing:
-        # Update bant_detail jika berubah
-        if project_data.get("bant_detail") and existing.bant_detail != project_data["bant_detail"]:
+        # Hanya fixture demo bernama tetap yang ownership-nya disinkronkan saat rerun.
+        if project_data["id_project"].startswith("PRJ-DEMO-"):
+            changed = False
+            customer = await get_or_create_demo_customer(
+                db, project_data["customer_name"]
+            )
+            if existing.customer_id != customer.id:
+                existing.customer_id = customer.id
+                changed = True
+            if existing.customer_name != customer.name:
+                existing.customer_name = customer.name
+                changed = True
+            ownership = {"sales_pic": sales_id, "assigned_sa": sa_id}
+            if product_id is not None:
+                ownership["product_pic"] = product_id
+            for field, value in ownership.items():
+                if getattr(existing, field, None) != value:
+                    setattr(existing, field, value)
+                    changed = True
+            if changed:
+                await db.flush()
+        jawaban = project_data.get("qualification_answers")
+        if jawaban is not None:
+            versi = QUESTIONNAIRE_SCHEMA_VERSION
+            berubah = (
+                existing.qualification_answers != jawaban
+                or existing.qualification_schema_version != versi
+            )
+            if berubah:
+                existing.qualification_answers = jawaban
+                existing.qualification_schema_version = versi
+                await db.flush()
+                print(
+                    f"  [~] Kualifikasi proyek diperbarui: "
+                    f"{project_data['project_name']}"
+                )
+            else:
+                print(f"  [ok] Proyek sudah ada: {project_data['project_name']}")
+        # Pembaruan legacy tetap berlaku hanya untuk payload tanpa jawaban kuesioner.
+        elif project_data.get("bant_detail") and existing.bant_detail != project_data["bant_detail"]:
             existing.bant_detail = project_data["bant_detail"]
             await db.flush()
             print(f"  [~] Proyek diupdate: {project_data['project_name']}")
@@ -139,17 +259,37 @@ async def get_or_create_project(
             print(f"  [ok] Proyek sudah ada: {project_data['project_name']}")
         return existing
 
+    customer = None
+    if project_data["id_project"].startswith("PRJ-DEMO-"):
+        customer = await get_or_create_demo_customer(
+            db, project_data["customer_name"]
+        )
+
     now = datetime.now(timezone.utc)
     project = Project(
         id_project=project_data["id_project"],
         project_name=project_data["project_name"],
-        customer_name=project_data["customer_name"],
+        customer_name=(
+            customer.name if customer is not None else project_data["customer_name"]
+        ),
+        customer_id=customer.id if customer is not None else None,
+        created_by=sales_id,
+        product_pic=product_id or sales_id,
         sales_pic=sales_id,
         assigned_sa=sa_id,
         status=project_data["status"],
+        qualification_state=project_data.get(
+            "qualification_state", "Scoring" if project_data["status"] == "Intake" else "Qualified"
+        ),
         target_submit=project_data["target_submit"],
         bant_score=project_data.get("bant_score"),
-        bant_detail=project_data.get("bant_detail"),
+        qualification_answers=project_data.get("qualification_answers"),
+        qualification_schema_version=(
+            QUESTIONNAIRE_SCHEMA_VERSION
+            if project_data.get("qualification_answers") is not None
+            else None
+        ),
+        bant_detail=None,
         use_case_tags=project_data.get("use_case_tags"),
         dq_number=project_data.get("dq_number"),
         assigned_at=now if sa_id else None,
@@ -248,8 +388,10 @@ async def seed_all():
             sales2 = users["demo-sales2@portal-sa.local"]
             sa1 = users["demo-sa@portal-sa.local"]
             sa2 = users["demo-sa2@portal-sa.local"]
-            sa3 = users["demo-sa3@portal-sa.local"]
+            sa3 = users["demo-sa@portal-sa.local"]
             lead_sa = users["demo-lead@portal-sa.local"]
+            product1 = users["demo-product@portal-sa.local"]
+            product2 = users["demo-product2@portal-sa.local"]
 
             # == 2. Buat Projects ==
             print("\n[2/4] Membuat demo projects...")
@@ -272,7 +414,7 @@ async def seed_all():
                     "id_project": "PRJ-DEMO-002",
                     "project_name": "Cloud Native App Modernization",
                     "customer_name": "PT Maju Bersama Tech",
-                    "status": "Ready",
+                    "status": "Submitted",
                     "target_submit": date(2026, 8, 30),
                     "bant_score": 85,
                     "bant_detail": {"budget": 25, "authority": 25, "need": 20, "timeline": 15, "budget_mrr": 120000000, "pic_name": "Sari Dewi", "pic_position": "VP Engineering", "pic_email": "sari@majubersama.id", "need_description": "Migrasi dari on-prem Kubernetes ke EKS dengan zero downtime. 15 microservices.", "timeline_target": "2026-08-30"},
@@ -285,7 +427,7 @@ async def seed_all():
                     "id_project": "PRJ-DEMO-003",
                     "project_name": "AI Platform Development",
                     "customer_name": "PT Cerdas Teknologi",
-                    "status": "Pending Assignment",
+                    "status": "Awaiting Assignment",
                     "target_submit": date(2026, 10, 1),
                     "bant_score": 62,
                     "bant_detail": {"budget": 20, "authority": 17, "need": 15, "timeline": 10, "budget_mrr": 30000000, "pic_name": "Rudi Hartono", "pic_position": "Head of Data", "pic_email": "rudi@cerdas.tech", "need_description": "Platform ML untuk prediksi churn dan recommendation engine", "timeline_target": "2026-10-01"},
@@ -298,7 +440,8 @@ async def seed_all():
                     "id_project": "PRJ-DEMO-004",
                     "project_name": "Disaster Recovery Setup",
                     "customer_name": "PT Aman Sentosa",
-                    "status": "Need Clarification",
+                    "status": "Intake",
+                    "qualification_state": "Need Clarification",
                     "target_submit": date(2026, 11, 15),
                     "bant_score": 45,
                     "bant_detail": {"budget": 10, "authority": 15, "need": 10, "timeline": 10, "budget_mrr": None, "pic_name": "Bambang S.", "pic_position": "IT Manager", "pic_email": "bambang@aman.co.id", "need_description": "DR setup untuk critical systems", "timeline_target": "2026-11-15"},
@@ -311,7 +454,7 @@ async def seed_all():
                     "id_project": "PRJ-DEMO-005",
                     "project_name": "IoT Data Pipeline",
                     "customer_name": "PT Koneksi Pintar",
-                    "status": "Closed-Win",
+                    "status": "Won",
                     "target_submit": date(2026, 6, 1),
                     "bant_score": 90,
                     "bant_detail": {"budget": 25, "authority": 25, "need": 20, "timeline": 20, "budget_mrr": 80000000, "pic_name": "Dewi Kusuma", "pic_position": "CTO", "pic_email": "dewi@koneksi.io", "need_description": "IoT data pipeline untuk 10K+ sensor devices, real-time analytics", "timeline_target": "2026-06-01"},
@@ -337,7 +480,7 @@ async def seed_all():
                     "id_project": "PRJ-DEMO-007",
                     "project_name": "Real-Time Analytics Dashboard",
                     "customer_name": "PT Media Interaktif",
-                    "status": "Ready",
+                    "status": "Submitted",
                     "target_submit": date(2026, 8, 10),
                     "bant_score": 78,
                     "bant_detail": {"budget": 20, "authority": 20, "need": 20, "timeline": 18, "budget_mrr": 45000000, "pic_name": "Lisa Permata", "pic_position": "Head of Product", "pic_email": "lisa@mediainteraktif.id", "need_description": "Real-time analytics dashboard untuk monitoring user engagement 2M+ DAU", "timeline_target": "2026-08-10"},
@@ -359,16 +502,106 @@ async def seed_all():
                     "sa": sa2.id,
                     "dq_number": None,
                 },
+                {
+                    "id_project": "PRJ-DEMO-009",
+                    "project_name": "Modernisasi ERP dan Integrasi API",
+                    "customer_name": "PT Sinar Pangan",
+                    "status": "Intake",
+                    "qualification_state": "Scoring",
+                    "target_submit": date(2027, 1, 20),
+                    "bant_score": 38,
+                    "bant_detail": {
+                        "budget": 8, "authority": 10, "need": 12, "timeline": 8,
+                        "budget_mrr": None, "pic_name": "Maya Putri",
+                        "pic_position": "IT Manager", "pic_email": "maya@sinarpangan.id",
+                        "need_description": "Integrasi sistem ERP lama dengan platform e-commerce",
+                        "timeline_target": "2027-01-20",
+                    },
+                    "use_case_tags": ["api", "integration", "modernization"],
+                    "sales": sales1.id, "sa": None, "dq_number": None,
+                },
+                {
+                    "id_project": "PRJ-DEMO-010",
+                    "project_name": "Konsolidasi Identitas dan Akses Cloud",
+                    "customer_name": "PT Arunika Finansial",
+                    "status": "Intake",
+                    "qualification_state": "Need Clarification",
+                    "target_submit": date(2027, 2, 10),
+                    "bant_score": 54,
+                    "bant_detail": {
+                        "budget": 14, "authority": 12, "need": 16, "timeline": 12,
+                        "budget_mrr": 20000000, "pic_name": "Fajar Nugroho",
+                        "pic_position": "Security Lead", "pic_email": "fajar@arunika.id",
+                        "need_description": "Konsolidasi identitas untuk beberapa akun cloud dan audit akses",
+                        "timeline_target": "2027-02-10",
+                    },
+                    "use_case_tags": ["security", "identity", "iam"],
+                    "sales": sales2.id, "sa": None, "dq_number": None,
+                },
+                {
+                    "id_project": "PRJ-DEMO-011",
+                    "project_name": "Data Lake untuk Analitik Operasional",
+                    "customer_name": "PT Logistik Cakrawala",
+                    "status": "Intake",
+                    "qualification_state": "Manual Review",
+                    "target_submit": date(2027, 2, 28),
+                    "bant_score": 59,
+                    "bant_detail": {
+                        "budget": 16, "authority": 15, "need": 16, "timeline": 12,
+                        "budget_mrr": 35000000, "pic_name": "Nadia Sari",
+                        "pic_position": "Head of Analytics", "pic_email": "nadia@cakrawala.id",
+                        "need_description": "Data lake untuk menyatukan data operasional dari 12 cabang",
+                        "timeline_target": "2027-02-28",
+                    },
+                    "use_case_tags": ["data-lake", "analytics", "s3"],
+                    "sales": sales1.id, "sa": None, "dq_number": None,
+                },
+                {
+                    "id_project": "PRJ-DEMO-012",
+                    "project_name": "Platform Observability untuk Aplikasi Digital",
+                    "customer_name": "PT Karya Digital",
+                    "status": "Awaiting Assignment",
+                    "target_submit": date(2027, 3, 15),
+                    "bant_score": 68,
+                    "bant_detail": {
+                        "budget": 18, "authority": 18, "need": 17, "timeline": 15,
+                        "budget_mrr": 40000000, "pic_name": "Reza Mahendra",
+                        "pic_position": "VP Engineering", "pic_email": "reza@karyadigital.id",
+                        "need_description": "Observability terpusat untuk 25 layanan microservice",
+                        "timeline_target": "2027-03-15",
+                    },
+                    "use_case_tags": ["observability", "monitoring", "cloudwatch"],
+                    "sales": sales2.id, "sa": None, "dq_number": None,
+                },
             ]
 
+            assignment_plan = demo_project_assignment_plan(
+                projects_data,
+                [sales1.id, sales2.id],
+                [sa1.id, sa2.id],
+                [product1.id, product2.id],
+            )
+
             for proj_data in projects_data:
-                sa = proj_data.pop("sa")
-                sales = proj_data.pop("sales")
+                assignment = assignment_plan[proj_data["id_project"]]
+                sa = assignment["sa_id"]
+                sales = assignment["sales_id"]
+                proj_data.pop("sa")
+                proj_data.pop("sales")
+                detail = proj_data.pop("bant_detail")
+                proj_data["qualification_answers"] = qualification_answers_for_demo(
+                    detail["budget_mrr"],
+                    detail["pic_name"],
+                    detail["pic_position"],
+                    detail["pic_email"],
+                    detail["need_description"],
+                )
                 await get_or_create_project(
                     db,
                     proj_data,
                     sales_id=sales,
                     sa_id=sa,
+                    product_id=assignment["product_id"],
                 )
 
             # == 3. Buat Documents ==
@@ -379,7 +612,7 @@ async def seed_all():
                 {"id_doc": "DOC-002", "id_project": "PRJ-DEMO-001", "doc_type": "BOQ", "status": "Draft", "gdrive_link": "https://drive.google.com/file/d/demo-boq-001", "folder_type": "Solutions", "notes": "Estimasi BOQ Redshift + S3 + Glue"},
                 {"id_doc": "DOC-003", "id_project": "PRJ-DEMO-002", "doc_type": "PropTek", "status": "Reviewed", "gdrive_link": "https://drive.google.com/file/d/demo-proptek-002", "folder_type": "Solutions", "notes": "PropTek sudah di-review lead SA"},
                 {"id_doc": "DOC-004", "id_project": "PRJ-DEMO-002", "doc_type": "BOQ", "status": "Final", "gdrive_link": "https://drive.google.com/file/d/demo-boq-002", "folder_type": "Solutions", "notes": "BOQ final EKS cluster"},
-                {"id_doc": "DOC-005", "id_project": "PRJ-DEMO-005", "doc_type": "HLD", "status": "Final", "gdrive_link": "https://drive.google.com/file/d/demo-hld-005", "folder_type": "Solutions", "notes": "HLD IoT pipeline (Closed-Win)"},
+                {"id_doc": "DOC-005", "id_project": "PRJ-DEMO-005", "doc_type": "HLD", "status": "Final", "gdrive_link": "https://drive.google.com/file/d/demo-hld-005", "folder_type": "Solutions", "notes": "HLD IoT pipeline (Won)"},
                 {"id_doc": "DOC-006", "id_project": "PRJ-DEMO-006", "doc_type": "PropTek", "status": "Draft", "gdrive_link": "https://drive.google.com/file/d/demo-proptek-006", "folder_type": "Solutions", "notes": "Draft Security Compliance"},
                 {"id_doc": "DOC-007", "id_project": "PRJ-DEMO-007", "doc_type": "PropTek", "status": "Reviewed", "gdrive_link": "https://drive.google.com/file/d/demo-proptek-007", "folder_type": "Solutions", "notes": "PropTek analytics dashboard"},
                 {"id_doc": "DOC-008", "id_project": "PRJ-DEMO-008", "doc_type": "BOQ", "status": "Draft", "gdrive_link": "https://drive.google.com/file/d/demo-boq-008", "folder_type": "Solutions", "notes": "BOQ Aurora multi-region"},

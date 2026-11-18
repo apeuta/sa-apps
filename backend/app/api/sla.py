@@ -11,10 +11,12 @@ Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import adalah_privileged, ensure_project_access, get_current_user
+from app.models.project import Project
 from app.models.user import User
 from app.schemas.response import success_response
 from app.services.sla_timer import sla_timer
@@ -46,6 +48,18 @@ async def get_sla_status(
         - is_locked: apakah folder Solutions di-lock
         - is_active: apakah timer masih berjalan
     """
+    # Urutan: proyek ada (404) -> akses BACA (403) -> baru tracker. check_sla_status
+    # menulis (hitung ulang + commit), jadi harus setelah cek akses.
+    project = (
+        await db.execute(select(Project).where(Project.id_project == project_id))
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
+        )
+    await ensure_project_access(db, project, current_user)
+
     sla_status = await sla_timer.check_sla_status(
         project_id=project_id, db=db
     )
@@ -82,12 +96,12 @@ async def process_sla(
 
     Aksi yang di-trigger:
     - H+3: Kirim reminder ke Sales
-    - H+5: Kirim eskalasi ke Sales Manager + auto-lock folder Solutions
+    - H+5: Kirim eskalasi (sekali) ke Lead SA dan Admin + auto-lock folder Solutions
 
     Hanya bisa diakses oleh Admin atau Lead_SA.
     """
     # Hanya Admin atau Lead_SA yang boleh trigger manual
-    if current_user.role not in ("Admin", "Lead_SA"):
+    if not adalah_privileged(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Hanya Admin atau Lead_SA yang dapat memicu SLA processing.",

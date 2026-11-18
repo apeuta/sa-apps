@@ -5,35 +5,69 @@ Menangani penugasan SA, daftar proyek pending, dan ketersediaan SA.
 
 import logging
 import random
+import re
 import string
 import uuid
+from typing import Optional
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.orang import tentukan_lead_sa
+from app.core import status as status_konst
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
-from app.models.activity_log import ActivityLog
+from app.core.dependencies import (
+    PERAN_DAPAT_DITUGASKAN,
+    PeranUser,
+    TingkatAkses,
+    adalah_privileged,
+    ensure_project_access,
+    get_current_user,
+)
+from app.models.integration_operation import IntegrationOperation
+from app.models.document import Document
 from app.models.notification_log import NotificationLog
 from app.models.project import Project
+from app.models.customer import Customer
+from app.models.project_assignment import ProjectAssignment
 from app.models.subtask import Subtask
 from app.models.user import User
+from app.models.sla_tracking import SLATracking
 from app.schemas.assignment import (
     AssignmentResponse,
     AssignRequest,
     ProjectBrief,
     SAAvailability,
 )
-from app.schemas.response import success_response
+from app.schemas.integration_operation import (
+    IntegrationOperationResponse,
+    ManualEmailRepairRequest,
+)
+from app.schemas.response import ErrorResponse, SuccessResponse, success_response
 from app.services.folder_provisioner import (
     FolderProvisioningError,
     folder_provisioner,
 )
+from app.services.integration_operations import (
+    begin_retry,
+    retry_side_effect,
+    run_side_effect,
+    serialize_operation,
+)
 from app.services.sla_timer import sla_timer
+from app.services.workload import hitung_project_aktif_per_sa
 
 logger = logging.getLogger(__name__)
+
+# Status tempat SA utama boleh diganti (ADR 0014): sudah ditugaskan atau menunggu penugasan.
+STATUS_BOLEH_GANTI_SA = (
+    status_konst.AWAITING_ASSIGNMENT,
+    status_konst.ASSIGNED,
+    status_konst.IN_PROGRESS,
+    status_konst.SUBMITTED,
+)
 
 router = APIRouter(tags=["Assignment"])
 
@@ -87,12 +121,69 @@ def _generate_notification_id() -> str:
 
 
 def _require_lead_sa(current_user: User) -> None:
-    """Validasi bahwa user saat ini memiliki role Lead_SA atau Admin."""
-    if current_user.role not in ("Lead_SA", "Admin"):
+    """Validasi bahwa user saat ini Lead_SA atau admin (`is_admin`)."""
+    if not adalah_privileged(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Hanya Lead_SA atau Admin yang dapat melakukan operasi ini.",
         )
+
+
+async def _reserve_project_folder(db: AsyncSession, project: Project) -> None:
+    """Guarda la identidad Customer y un número único antes de crear la carpeta del proyecto."""
+    if project.customer_id is None:
+        raise FolderProvisioningError(
+            f"Project '{project.id_project}' has no Customer identity. Link it to a Customer "
+            "before provisioning its Drive folder."
+        )
+
+    customer_result = await db.execute(
+        select(Customer)
+        .where(Customer.id == project.customer_id)
+        .with_for_update()
+    )
+    customer = customer_result.scalar_one_or_none()
+    if customer is None:
+        raise FolderProvisioningError(
+            f"Customer identity for project '{project.id_project}' no longer exists."
+        )
+    # A concurrent attempt for the same project may have committed while this task waited.
+    await db.refresh(
+        project,
+        attribute_names=["customer_id", "gdrive_folder_id", "gdrive_folder_number"],
+    )
+    project.customer = customer
+
+    # Existing Drive associations are legacy paths: retain them without renaming or moving.
+    if project.gdrive_folder_id is not None:
+        return
+
+    customer_folder_id = await folder_provisioner.ensure_customer_folder(
+        customer.name, customer.gdrive_folder_id
+    )
+    customer.gdrive_folder_id = customer_folder_id
+
+    if project.gdrive_folder_number is None:
+        existing_children = await folder_provisioner.list_folder_children(customer_folder_id)
+        highest_drive_number = max(
+            (
+                int(match.group(1))
+                for child in existing_children
+                if (match := re.match(r"^(\d+)-", child.get("name", "")))
+            ),
+            default=0,
+        )
+        highest_reserved_number = await db.scalar(
+            select(func.max(Project.gdrive_folder_number)).where(
+                Project.customer_id == customer.id
+            )
+        )
+        project.gdrive_folder_number = max(
+            highest_drive_number, highest_reserved_number or 0
+        ) + 1
+
+    # Commit while holding the Customer row lock so overlapping assignments see this reservation.
+    await db.commit()
 
 
 async def _trigger_folder_provisioner(
@@ -143,19 +234,93 @@ async def _trigger_folder_provisioner(
                 )
                 return
 
-            # Tandai pending sebelum memanggil provisioner
+            started_at = datetime.now(timezone.utc)
+            operation = dict(project.folder_provisioning_operation or {})
+            attempts = list(operation.get("attempts", []))
+            attempt = {
+                "attempt": len(attempts) + 1,
+                "status": "pending",
+                "started_at": started_at.isoformat(),
+                "finished_at": None,
+                "outcome": None,
+                "actionable_error": None,
+            }
+            attempts.append(attempt)
+            operation.update(
+                {
+                    "status": "pending",
+                    "attempts": attempts,
+                    "started_at": started_at.isoformat(),
+                    "finished_at": None,
+                    "outcome": None,
+                    "actionable_error": None,
+                }
+            )
             project.folder_provisioning_status = "pending"
+            project.folder_provisioning_operation = operation
             await db.commit()
 
             try:
+                await _reserve_project_folder(db, project)
+
+                team_result = await db.execute(
+                    select(User.email).where(User.role.in_(("SA", "Lead_SA")))
+                )
+                sa_team_emails = tuple(team_result.scalars().all())
+                product_email = None
+                if project.product_pic is not None:
+                    product_result = await db.execute(
+                        select(User.email).where(User.id == project.product_pic)
+                    )
+                    product_email = product_result.scalar_one_or_none()
+
+                async def persist_master_folder_id(folder_id: str) -> None:
+                    if project.gdrive_folder_id not in (None, folder_id):
+                        raise FolderProvisioningError(
+                            "A different Drive project folder is already associated with this project."
+                        )
+                    project.gdrive_folder_id = folder_id
+                    await db.commit()
+
                 result = await folder_provisioner.provision_project_folder(
                     project,
                     sa_email,
                     lead_sa_email,
                     sales_email,
+                    sa_team_emails=sa_team_emails,
+                    product_email=product_email,
+                    dq_number=project.dq_number,
+                    persist_master_folder_id=persist_master_folder_id,
                 )
-            except FolderProvisioningError as e:
+            except Exception as e:  # noqa: BLE001 - kegagalan Drive harus persisten dan non-blocking
+                finished_at = datetime.now(timezone.utc).isoformat()
+                attempt.update(
+                    {
+                        "status": "failed",
+                        "finished_at": finished_at,
+                        "outcome": "Drive provisioning failed",
+                        "actionable_error": (
+                            (
+                                f"{e} "
+                                if isinstance(e, FolderProvisioningError)
+                                else ""
+                            )
+                            + "Review the project’s Drive folders and permissions, then use "
+                            "the authorized manual provision action."
+                        ),
+                    }
+                )
+                operation.update(
+                    {
+                        "status": "failed",
+                        "attempts": attempts,
+                        "finished_at": finished_at,
+                        "outcome": "Drive provisioning failed",
+                        "actionable_error": attempt["actionable_error"],
+                    }
+                )
                 project.folder_provisioning_status = "failed"
+                project.folder_provisioning_operation = operation
                 await db.commit()
                 logger.error(
                     f"[FolderProvisioner] Gagal provision folder proyek "
@@ -163,10 +328,30 @@ async def _trigger_folder_provisioner(
                 )
                 return
 
-            # Sukses — persist kedua id folder + status provisioned
+            finished_at = datetime.now(timezone.utc).isoformat()
+            attempt.update(
+                {
+                    "status": "succeeded",
+                    "finished_at": finished_at,
+                    "outcome": "Project Drive folders provisioned",
+                }
+            )
+            operation.update(
+                {
+                    "status": "succeeded",
+                    "attempts": attempts,
+                    "finished_at": finished_at,
+                    "outcome": "Project Drive folders provisioned",
+                    "actionable_error": None,
+                }
+            )
+            # Sukses — persist master + child IDs and status provisioned
             project.gdrive_folder_id = result.master
+            project.gdrive_inventory_folder_id = result.inventory
+            project.gdrive_diagram_folder_id = result.diagram
             project.gdrive_solutions_folder_id = result.solutions
             project.folder_provisioning_status = "provisioned"
+            project.folder_provisioning_operation = operation
             await db.commit()
 
             logger.info(
@@ -179,11 +364,339 @@ async def _trigger_folder_provisioner(
         )
 
 
+async def _pindahkan_akses_drive_sa(
+    project_id: str,
+    master_folder_id: str,
+    sa_lama_email: Optional[str],
+    sa_baru_email: str,
+    actor_user_id: Optional[uuid.UUID] = None,
+) -> None:
+    """Persist and perform the safe, idempotent Drive SA permission reassign."""
+    await run_side_effect(
+        project_id=project_id,
+        operation_type="drive_permission",
+        action="reassign_sa_access",
+        perform=lambda: folder_provisioner.reassign_sa_access(
+            master_folder_id, sa_lama_email, sa_baru_email
+        ),
+        outcome="Drive editor access matches the assigned SA.",
+        actionable_failure=(
+            "The SA reassignment is saved, but Drive permissions may be stale. "
+            "Retry this idempotent permission update after restoring Drive access."
+        ),
+        actor_user_id=actor_user_id,
+        context={
+            "master_folder_id": master_folder_id,
+            "old_sa_email": sa_lama_email,
+            "new_sa_email": sa_baru_email,
+        },
+        retryable=True,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/integration-operations/{operation_id}/retry",
+    summary="Retry an idempotent integration operation",
+    response_model=SuccessResponse[IntegrationOperationResponse],
+    responses={
+        401: {"model": ErrorResponse[None]},
+        403: {"model": ErrorResponse[None]},
+        404: {"model": ErrorResponse[None]},
+        409: {"model": ErrorResponse[None]},
+        422: {"model": ErrorResponse[list[dict[str, str]]]},
+    },
+)
+async def retry_integration_operation(
+    project_id: str,
+    operation_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retry persisted Drive permission operations with a safe desired state."""
+    _require_lead_sa(current_user)
+    project_result = await db.execute(select(Project).where(Project.id_project == project_id))
+    project = project_result.scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    await ensure_project_access(db, project, current_user, TingkatAkses.BACA)
+
+    result = await db.execute(
+        select(IntegrationOperation).where(
+            IntegrationOperation.id == operation_id,
+            IntegrationOperation.project_id == project_id,
+        )
+    )
+    operation = result.scalar_one_or_none()
+    if operation is None:
+        raise HTTPException(status_code=404, detail="Integration operation not found.")
+    if operation.status != "failed" or not operation.retryable:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This operation cannot be retried safely.",
+        )
+    context = operation.context or {}
+    if operation.operation_type == "drive_permission" and operation.action == "reassign_sa_access":
+        sa_result = await db.execute(select(User).where(User.id == project.assigned_sa))
+        assigned_sa = sa_result.scalar_one_or_none()
+        if (
+            project.gdrive_folder_id != context.get("master_folder_id")
+            or assigned_sa is None
+            or assigned_sa.email.lower() != str(context.get("new_sa_email", "")).lower()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The project assignment changed; reconcile permissions from the current assignment.",
+            )
+
+        async def perform() -> None:
+            await folder_provisioner.reassign_sa_access(
+                project.gdrive_folder_id,
+                context.get("old_sa_email"),
+                assigned_sa.email,
+            )
+
+        outcome = "Drive editor access matches the assigned SA."
+        actionable_failure = (
+            "The SA reassignment is saved, but Drive permissions may be stale. "
+            "Restore Drive access and retry this idempotent permission update."
+        )
+    elif (
+        operation.operation_type == "drive_permission"
+        and operation.action == "document_review_unlock"
+    ):
+        document_result = await db.execute(
+            select(Document).where(
+                Document.id_doc == context.get("document_id"),
+                Document.id_project == project_id,
+            )
+        )
+        document = document_result.scalar_one_or_none()
+        sales_result = await db.execute(select(User).where(User.id == project.sales_pic))
+        sales_user = sales_result.scalar_one_or_none()
+        product_result = await db.execute(select(User).where(User.id == project.product_pic))
+        product_user = product_result.scalar_one_or_none()
+        if (
+            document is None
+            or document.status != "Reviewed"
+            or project.dq_number is None
+            or project.gdrive_solutions_folder_id != context.get("folder_id")
+            or sales_user is None
+            or sales_user.email.lower() != str(context.get("sales_email", "")).lower()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The project or reviewed document state changed; this Drive action is no longer current.",
+            )
+
+        async def perform() -> None:
+            await folder_provisioner.unlock_solutions_folder(
+                project.gdrive_solutions_folder_id,
+                sales_user.email,
+                product_user.email if product_user else None,
+            )
+
+        outcome = "Sales and Product viewer access to the Solutions folder is restored."
+        actionable_failure = (
+            "The document review is saved, but Sales or Product access may remain locked. "
+            "Restore Drive access and retry this idempotent unlock."
+        )
+    elif operation.operation_type == "sla" and operation.action in {
+        "solutions_lock",
+        "solutions_unlock",
+    }:
+        desired_locked = operation.action == "solutions_lock"
+        sla_result = await db.execute(
+            select(SLATracking).where(SLATracking.project_id == project_id)
+        )
+        sla_tracking = sla_result.scalar_one_or_none()
+        if sla_tracking is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The project's SLA tracker is no longer available.",
+            )
+        if (project.dq_number is None) != desired_locked:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The DQ state changed; the recorded SLA permission action is no longer current.",
+            )
+        if not project.gdrive_solutions_folder_id or not project.sales_pic:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The project no longer has the required Solutions folder and Sales PIC.",
+            )
+        sales_result = await db.execute(select(User).where(User.id == project.sales_pic))
+        sales_user = sales_result.scalar_one_or_none()
+        product_result = await db.execute(select(User).where(User.id == project.product_pic))
+        product_user = product_result.scalar_one_or_none()
+        if sales_user is None:
+            raise HTTPException(status_code=409, detail="The project's Sales PIC is unavailable.")
+        product_email = product_user.email if product_user else None
+        if desired_locked:
+            perform = lambda: folder_provisioner.lock_solutions_folder(
+                project.gdrive_solutions_folder_id, sales_user.email, product_email
+            )
+            outcome = "Sales and Product access to the Solutions folder is locked."
+            actionable_failure = (
+                "The SLA lock is still unresolved. Restore Drive access and retry this idempotent lock."
+            )
+        else:
+            perform = lambda: folder_provisioner.unlock_solutions_folder(
+                project.gdrive_solutions_folder_id, sales_user.email, product_email
+            )
+            outcome = "Sales and Product viewer access to the Solutions folder is restored."
+            actionable_failure = (
+                "The DQ number is saved but Sales or Product access may remain locked. "
+                "Restore Drive access and retry this idempotent unlock."
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This operation has no safe manual retry path.",
+        )
+
+    await begin_retry(db, operation)
+    await retry_side_effect(
+        operation.id,
+        perform=perform,
+        outcome=outcome,
+        actionable_failure=actionable_failure,
+    )
+    await db.refresh(operation)
+    if operation.status == "succeeded" and operation.operation_type == "sla":
+        now = datetime.now(timezone.utc)
+        was_locked = sla_tracking.is_locked
+        old_locked_at = sla_tracking.locked_at
+        if desired_locked:
+            sla_tracking.is_locked = True
+            sla_tracking.locked_at = now
+            action = "lock"
+            new_value = {
+                "is_locked": True,
+                "locked_at": now.isoformat(),
+                "reason": "SLA Drive permission retry",
+            }
+        else:
+            sla_tracking.is_locked = False
+            sla_tracking.unlocked_at = now
+            action = "unlock"
+            new_value = {
+                "is_locked": False,
+                "unlocked_at": now.isoformat(),
+                "delay_days": sla_tracking.days_elapsed,
+            }
+        await sla_timer._create_audit_log(
+            entity_type="folder",
+            entity_id=project_id,
+            action=action,
+            old_value={
+                "is_locked": was_locked,
+                "locked_at": old_locked_at.isoformat() if old_locked_at else None,
+            },
+            new_value=new_value,
+            db=db,
+        )
+        await db.commit()
+    elif operation.status == "succeeded" and operation.action == "document_review_unlock":
+        sla_result = await db.execute(
+            select(SLATracking).where(SLATracking.project_id == project_id)
+        )
+        sla_tracking = sla_result.scalar_one_or_none()
+        if sla_tracking is not None and sla_tracking.is_locked:
+            now = datetime.now(timezone.utc)
+            old_locked_at = sla_tracking.locked_at
+            sla_tracking.is_locked = False
+            sla_tracking.unlocked_at = now
+            await sla_timer._create_audit_log(
+                entity_type="folder",
+                entity_id=project_id,
+                action="unlock",
+                old_value={
+                    "is_locked": True,
+                    "locked_at": old_locked_at.isoformat() if old_locked_at else None,
+                },
+                new_value={
+                    "is_locked": False,
+                    "unlocked_at": now.isoformat(),
+                    "delay_days": sla_tracking.days_elapsed,
+                },
+                db=db,
+            )
+            await db.commit()
+    return success_response(
+        data=serialize_operation(operation),
+        message="Integration operation retry recorded.",
+    )
+
+
+@router.post(
+    "/projects/{project_id}/integration-operations/{operation_id}/repair",
+    summary="Record operator-confirmed manual email recovery",
+    response_model=SuccessResponse[IntegrationOperationResponse],
+    responses={
+        401: {"model": ErrorResponse[None]},
+        403: {"model": ErrorResponse[None]},
+        404: {"model": ErrorResponse[None]},
+        409: {"model": ErrorResponse[None]},
+        422: {"model": ErrorResponse[list[dict[str, str]]]},
+    },
+)
+async def record_manual_email_repair(
+    project_id: str,
+    operation_id: uuid.UUID,
+    confirmation: ManualEmailRepairRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Record human-confirmed recovery without contacting the email provider."""
+    _require_lead_sa(current_user)
+    project_result = await db.execute(select(Project).where(Project.id_project == project_id))
+    project = project_result.scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    await ensure_project_access(db, project, current_user, TingkatAkses.BACA)
+
+    result = await db.execute(
+        select(IntegrationOperation)
+        .where(
+            IntegrationOperation.id == operation_id,
+            IntegrationOperation.project_id == project_id,
+        )
+        .with_for_update()
+    )
+    operation = result.scalar_one_or_none()
+    if operation is None:
+        raise HTTPException(status_code=404, detail="Integration operation not found.")
+    if (
+        operation.operation_type != "email_delivery"
+        or operation.status != "failed"
+        or "manual_repair" in (operation.context or {})
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only an unrepaired failed email operation can be recorded as manually resolved.",
+        )
+
+    context = dict(operation.context or {})
+    context["manual_repair"] = {
+        "actor_user_id": str(current_user.id),
+        "repaired_at": datetime.now(timezone.utc).isoformat(),
+        "recipient_checked_not_received": confirmation.recipient_checked_not_received,
+        "manually_delivered_outside_app": confirmation.manually_delivered_outside_app,
+    }
+    operation.context = context
+    await db.commit()
+    await db.refresh(operation)
+    return success_response(
+        data=serialize_operation(operation),
+        message="Operator-confirmed manual email recovery recorded; provider delivery was not confirmed.",
+    )
+
+
 @router.get(
     "/projects/pending-assignment",
     summary="Daftar proyek yang menunggu assignment",
     description=(
-        "Menampilkan proyek-proyek berstatus 'Pending Assignment' "
+        "Menampilkan proyek-proyek berstatus 'Awaiting Assignment' "
         "yang siap ditugaskan ke SA. Hanya untuk Lead_SA."
     ),
 )
@@ -192,15 +705,15 @@ async def get_pending_projects(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Ambil daftar proyek yang berstatus 'Pending Assignment'.
+    Ambil daftar proyek yang berstatus 'Awaiting Assignment'.
     Hanya Lead_SA yang bisa mengakses endpoint ini.
     """
     _require_lead_sa(current_user)
 
-    # Query proyek dengan status "Pending Assignment"
+    # Query proyek dengan status "Awaiting Assignment"
     result = await db.execute(
         select(Project)
-        .where(Project.status == "Pending Assignment")
+        .where(Project.status == status_konst.AWAITING_ASSIGNMENT)
         .order_by(Project.created_at.desc())
     )
     projects = result.scalars().all()
@@ -233,8 +746,9 @@ async def get_pending_projects(
     "/sa/available",
     summary="Daftar SA yang tersedia dengan workload",
     description=(
-        "Menampilkan semua SA yang terdaftar di sistem beserta "
-        "jumlah proyek aktif masing-masing. Hanya untuk Lead_SA."
+        "Menampilkan semua SA yang terdaftar di sistem beserta jumlah proyek aktif "
+        "masing-masing (definisi sama dengan `/workload/beban`: bukan soft-deleted, status bukan "
+        "Closed/Lost/On Hold, SA utama + SA tambahan). Hanya untuk Lead_SA."
     ),
 )
 async def get_available_sa(
@@ -242,30 +756,17 @@ async def get_available_sa(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Ambil daftar SA beserta jumlah proyek aktif (status bukan terminal).
+    Ambil daftar SA beserta jumlah proyek aktif (definisi workload, lihat `hitung_project_aktif_per_sa`).
     Hanya Lead_SA yang bisa mengakses endpoint ini.
     """
     _require_lead_sa(current_user)
 
-    # Status terminal — proyek yang sudah selesai/tidak aktif
-    terminal_statuses = ("Closed-Win", "Handover Complete", "Lost")
-
-    # Query semua user dengan role SA
-    sa_result = await db.execute(select(User).where(User.role == "SA").order_by(User.name))
+    # Query semua kandidat SA: user berrole SA atau Lead_SA (ADR 0012)
+    sa_result = await db.execute(select(User).where(User.role.in_(PERAN_DAPAT_DITUGASKAN)).order_by(User.name))
     sa_users = sa_result.scalars().all()
 
-    # Hitung jumlah proyek aktif per SA menggunakan subquery
-    active_count_subquery = (
-        select(
-            Project.assigned_sa,
-            func.count(Project.id_project).label("active_count"),
-        )
-        .where(Project.status.notin_(terminal_statuses))
-        .where(Project.assigned_sa.isnot(None))
-        .group_by(Project.assigned_sa)
-    )
-    active_count_result = await db.execute(active_count_subquery)
-    active_counts = {row[0]: row[1] for row in active_count_result.all()}
+    # Definisi "project aktif" sama dengan `/workload/beban` (satu sumber di services/workload).
+    active_counts = await hitung_project_aktif_per_sa(db)
 
     # Format response
     sa_data = [
@@ -273,6 +774,7 @@ async def get_available_sa(
             id=sa.id,
             name=sa.name,
             email=sa.email,
+            role=str(sa.role),
             active_project_count=active_counts.get(sa.id, 0),
         ).model_dump(mode="json")
         for sa in sa_users
@@ -284,337 +786,12 @@ async def get_available_sa(
     )
 
 
-@router.get(
-    "/sa/utilization",
-    summary="Utilisasi SA per bulan",
-    description=(
-        "Menampilkan total jam kerja (dari activity logs) per SA per bulan. "
-        "Mendukung filter per tahun dan per individu SA. Hanya untuk Lead_SA."
-    ),
-)
-async def get_sa_utilization(
-    year: int | None = None,
-    sa_id: str | None = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Ambil data utilisasi SA per bulan berdasarkan activity logs.
-
-    Mengembalikan:
-    - Total jam per SA per bulan (berdasarkan created_at di ActivityLog)
-    - Jika year tidak diisi, default tahun berjalan
-    - Jika sa_id diisi, filter untuk SA tertentu saja
-
-    Response format:
-    {
-      "year": 2026,
-      "monthly_data": [
-        {
-          "sa_id": "...",
-          "sa_name": "...",
-          "months": {
-            "1": 40.5, "2": 35.0, ... "12": 0
-          },
-          "total_hours": 320.5
-        }
-      ],
-      "summary": {
-        "months": {"1": 80.5, "2": 70.0, ...},
-        "total_hours": 640.5,
-        "sa_count": 3
-      }
-    }
-    """
-    _require_lead_sa(current_user)
-
-    from datetime import date as date_type
-    from datetime import datetime as dt_type
-
-    try:
-        # Default tahun berjalan
-        target_year = year or date_type.today().year
-
-        # Query semua SA & Lead_SA (keduanya mencatat aktivitas), atau filter per sa_id
-        sa_query = select(User).where(User.role.in_(["SA", "Lead_SA"])).order_by(User.name)
-        if sa_id:
-            try:
-                sa_uuid = uuid.UUID(sa_id)
-                sa_query = sa_query.where(User.id == sa_uuid)
-            except ValueError:
-                pass
-
-        sa_result = await db.execute(sa_query)
-        sa_users = sa_result.scalars().all()
-
-        # Fetch activity logs lalu group di Python
-        year_start = dt_type(target_year, 1, 1, tzinfo=timezone.utc)
-        year_end = dt_type(target_year + 1, 1, 1, tzinfo=timezone.utc)
-
-        log_query = (
-            select(ActivityLog)
-            .where(ActivityLog.created_at >= year_start)
-            .where(ActivityLog.created_at < year_end)
-        )
-        if sa_id:
-            try:
-                sa_uuid = uuid.UUID(sa_id)
-                log_query = log_query.where(ActivityLog.sa_id == sa_uuid)
-            except ValueError:
-                pass
-
-        log_result = await db.execute(log_query)
-        logs = log_result.scalars().all()
-
-        # Group by SA + bulan di Python
-        sa_monthly: dict[uuid.UUID, dict[int, float]] = {}
-        for log in logs:
-            sid = log.sa_id
-            month = log.created_at.month
-            hours = float(log.duration_hours)
-            if sid not in sa_monthly:
-                sa_monthly[sid] = {}
-            sa_monthly[sid][month] = sa_monthly[sid].get(month, 0.0) + hours
-
-        # Format response per SA
-        monthly_data = []
-        summary_months: dict[int, float] = {m: 0.0 for m in range(1, 13)}
-
-        for sa in sa_users:
-            months_data = sa_monthly.get(sa.id, {})
-            sa_months = {str(m): round(months_data.get(m, 0.0), 2) for m in range(1, 13)}
-            sa_total = sum(months_data.values())
-
-            monthly_data.append(
-                {
-                    "sa_id": str(sa.id),
-                    "sa_name": sa.name,
-                    "months": sa_months,
-                    "total_hours": round(sa_total, 2),
-                }
-            )
-
-            for m in range(1, 13):
-                summary_months[m] += months_data.get(m, 0.0)
-
-        summary = {
-            "months": {str(m): round(v, 2) for m, v in summary_months.items()},
-            "total_hours": round(sum(summary_months.values()), 2),
-            "sa_count": len(sa_users),
-        }
-
-        return success_response(
-            data={"year": target_year, "monthly_data": monthly_data, "summary": summary},
-            message=f"Data utilisasi SA untuk tahun {target_year}.",
-        )
-
-    except Exception as e:
-        logger.error(f"Error di /sa/utilization: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
-
-
-@router.get(
-    "/utilization/projects",
-    summary="Utilisasi per proyek",
-    description=(
-        "Menampilkan total jam kerja per proyek beserta personel SA. "
-        "Berguna untuk melihat effort distribution antar proyek. Hanya untuk Lead_SA."
-    ),
-)
-async def get_project_utilization(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Ambil data utilisasi per proyek:
-    - Total jam kerja yang sudah di-log per proyek
-    - Siapa saja SA yang mengerjakan (dari activity logs)
-    - Status proyek saat ini
-
-    Response:
-    [
-      {
-        "id_project": "PRJ-001",
-        "project_name": "...",
-        "customer_name": "...",
-        "status": "Assigned",
-        "total_hours": 16.5,
-        "sa_personnel": [{"sa_id": "...", "sa_name": "...", "hours": 10.0}, ...]
-      }
-    ]
-    """
-    _require_lead_sa(current_user)
-
-    # Query: total jam per proyek
-    # Subquery: jam per SA per proyek
-    sa_hours_query = select(
-        ActivityLog.id_project,
-        ActivityLog.sa_id,
-        func.sum(ActivityLog.duration_hours).label("hours"),
-    ).group_by(ActivityLog.id_project, ActivityLog.sa_id)
-    sa_hours_result = await db.execute(sa_hours_query)
-    sa_hours_rows = sa_hours_result.all()
-
-    # Build lookup: {project_id: [{sa_id, hours}, ...]}
-    project_sa_map: dict[str, list[dict]] = {}
-    for row in sa_hours_rows:
-        pid = row[0]
-        if pid not in project_sa_map:
-            project_sa_map[pid] = []
-        project_sa_map[pid].append({"sa_id": row[1], "hours": float(row[2])})
-
-    # Query semua proyek yang punya activity logs
-    project_ids = list(project_sa_map.keys())
-    if not project_ids:
-        return success_response(data=[], message="Belum ada data activity log.")
-
-    projects_result = await db.execute(select(Project).where(Project.id_project.in_(project_ids)))
-    projects = {p.id_project: p for p in projects_result.scalars().all()}
-
-    # Query semua SA users untuk nama
-    all_sa_ids = set()
-    for entries in project_sa_map.values():
-        for entry in entries:
-            all_sa_ids.add(entry["sa_id"])
-
-    sa_users_result = await db.execute(select(User).where(User.id.in_(list(all_sa_ids))))
-    sa_name_map = {u.id: u.name for u in sa_users_result.scalars().all()}
-
-    # Build response
-    result_data = []
-    for pid, sa_entries in project_sa_map.items():
-        project = projects.get(pid)
-        if not project:
-            continue
-
-        total_hours = sum(e["hours"] for e in sa_entries)
-        personnel = [
-            {
-                "sa_id": str(e["sa_id"]),
-                "sa_name": sa_name_map.get(e["sa_id"], "Unknown"),
-                "hours": round(e["hours"], 2),
-            }
-            for e in sa_entries
-        ]
-        # Sort personnel by hours descending
-        personnel.sort(key=lambda x: x["hours"], reverse=True)
-
-        result_data.append(
-            {
-                "id_project": pid,
-                "project_name": project.project_name,
-                "customer_name": project.customer_name,
-                "status": project.status,
-                "total_hours": round(total_hours, 2),
-                "sa_personnel": personnel,
-            }
-        )
-
-    # Sort by total_hours descending
-    result_data.sort(key=lambda x: x["total_hours"], reverse=True)
-
-    return success_response(
-        data=result_data,
-        message=f"Data utilisasi untuk {len(result_data)} proyek.",
-    )
-
-
-@router.get(
-    "/utilization/summary",
-    summary="Ringkasan utilisasi per work_type & fase proyek",
-    description=(
-        "Agregasi jam kerja (activity logs) per bulan: Project vs Non-Project, "
-        "serta breakdown fase proyek (Pre/Implementation/Post). Hanya untuk Lead_SA. "
-        "Mencakup aktivitas SA dan Lead_SA."
-    ),
-)
-async def get_utilization_summary(
-    year: int | None = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Ringkasan utilisasi dua dimensi untuk dashboard Lead SA.
-
-    Response:
-    {
-      "year": 2026,
-      "work_type": {
-        "months": {"1": {"Project": 10.0, "Non-Project": 2.0}, ...},
-        "totals": {"Project": 120.0, "Non-Project": 24.0},
-        "grand_total": 144.0
-      },
-      "project_phase": {
-        "totals": {"Pre-Implementation": 100.0, "Implementation": 15.0, "Post-Implementation": 5.0},
-        "total": 120.0
-      }
-    }
-    """
-    _require_lead_sa(current_user)
-
-    from datetime import date as date_type
-    from datetime import datetime as dt_type
-
-    target_year = year or date_type.today().year
-    year_start = dt_type(target_year, 1, 1, tzinfo=timezone.utc)
-    year_end = dt_type(target_year + 1, 1, 1, tzinfo=timezone.utc)
-
-    log_result = await db.execute(
-        select(ActivityLog)
-        .where(ActivityLog.created_at >= year_start)
-        .where(ActivityLog.created_at < year_end)
-    )
-    logs = log_result.scalars().all()
-
-    # Dimensi 1: work_type per bulan
-    months_wt: dict[int, dict[str, float]] = {
-        m: {"Project": 0.0, "Non-Project": 0.0} for m in range(1, 13)
-    }
-    totals_wt: dict[str, float] = {"Project": 0.0, "Non-Project": 0.0}
-
-    # Dimensi 2: project_phase (hanya Project)
-    phase_totals: dict[str, float] = {
-        "Pre-Implementation": 0.0,
-        "Implementation": 0.0,
-        "Post-Implementation": 0.0,
-    }
-
-    for log in logs:
-        hours = float(log.duration_hours)
-        wt = log.work_type if log.work_type in ("Project", "Non-Project") else "Project"
-        month = log.created_at.month
-
-        months_wt[month][wt] += hours
-        totals_wt[wt] += hours
-
-        if wt == "Project" and log.project_phase in phase_totals:
-            phase_totals[log.project_phase] += hours
-
-    work_type_data = {
-        "months": {str(m): {k: round(v, 2) for k, v in months_wt[m].items()} for m in range(1, 13)},
-        "totals": {k: round(v, 2) for k, v in totals_wt.items()},
-        "grand_total": round(sum(totals_wt.values()), 2),
-    }
-    project_phase_data = {
-        "totals": {k: round(v, 2) for k, v in phase_totals.items()},
-        "total": round(sum(phase_totals.values()), 2),
-    }
-
-    return success_response(
-        data={
-            "year": target_year,
-            "work_type": work_type_data,
-            "project_phase": project_phase_data,
-        },
-        message=f"Ringkasan utilisasi tahun {target_year}.",
-    )
-
 
 @router.post(
     "/projects/{project_id}/assign",
     summary="Assign SA ke proyek",
     description=(
-        "Menugaskan SA ke proyek yang berstatus 'Pending Assignment'. "
+        "Menugaskan SA ke proyek yang berstatus 'Awaiting Assignment'. "
         "Update status menjadi 'Assigned', kirim notifikasi ke SA, "
         "dan trigger folder provisioning. Hanya untuk Lead_SA."
     ),
@@ -631,7 +808,7 @@ async def assign_sa_to_project(
 
     Flow:
     1. Validasi role Lead_SA
-    2. Validasi proyek ada dan berstatus "Pending Assignment"
+    2. Validasi proyek ada dan berstatus "Awaiting Assignment"
     3. Validasi SA ada dan role-nya "SA"
     4. Update proyek: status="Assigned", assigned_sa, assigned_at
     5. Insert notifikasi ke SA yang ditugaskan
@@ -639,7 +816,7 @@ async def assign_sa_to_project(
     """
     _require_lead_sa(current_user)
 
-    # === 1. Validasi proyek ada dan berstatus "Pending Assignment" ===
+    # === 1. Validasi proyek ada dan berstatus "Awaiting Assignment" ===
     project_result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = project_result.scalar_one_or_none()
 
@@ -649,12 +826,12 @@ async def assign_sa_to_project(
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
 
-    if project.status != "Pending Assignment":
+    if project.status != status_konst.AWAITING_ASSIGNMENT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Proyek tidak bisa di-assign karena statusnya '{project.status}'. "
-                f"Hanya proyek berstatus 'Pending Assignment' yang bisa di-assign."
+                f"Hanya proyek berstatus 'Awaiting Assignment' yang bisa di-assign."
             ),
         )
 
@@ -668,14 +845,18 @@ async def assign_sa_to_project(
             detail=f"SA dengan ID '{body.sa_id}' tidak ditemukan.",
         )
 
-    if sa_user.role != "SA":
+    if sa_user.role not in PERAN_DAPAT_DITUGASKAN:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"User '{sa_user.name}' memiliki role '{sa_user.role}', "
-                f"bukan 'SA'. Hanya user dengan role SA yang bisa ditugaskan."
+                f"bukan 'SA' atau 'Lead_SA'. Hanya user dengan role SA atau Lead_SA "
+                f"yang bisa ditugaskan."
             ),
         )
+
+    # === 2a. Tentukan Lead_SA proyek (wajib sejak Assigned; ADR 0014) ===
+    lead_sa_id = await tentukan_lead_sa(db, body.lead_sa_id, current_user)
 
     # === 2b. Lookup email Sales (requester) untuk provisioning folder ===
     sales_result = await db.execute(select(User).where(User.id == project.sales_pic))
@@ -684,8 +865,9 @@ async def assign_sa_to_project(
 
     # === 3. Update proyek ===
     now = datetime.now(timezone.utc)
-    project.status = "Assigned"
+    project.status = status_konst.ASSIGNED
     project.assigned_sa = body.sa_id
+    project.lead_sa = lead_sa_id
     project.assigned_at = now
     project.updated_at = now
     # Tandai provisioning akan berjalan (background task men-set 'provisioned'/'failed')
@@ -783,13 +965,14 @@ async def assign_sa_to_project(
     "/projects/{project_id}/reassign",
     summary="Reassign SA ke proyek",
     description=(
-        "Mengubah SA yang ditugaskan pada proyek yang sudah berstatus 'Assigned' atau 'Ready'. "
+        "Mengubah SA yang ditugaskan pada proyek yang sudah berstatus 'Assigned', 'In Progress', atau 'Submitted'. "
         "Hanya Lead_SA dan Admin yang dapat melakukan reassignment."
     ),
 )
 async def reassign_sa_to_project(
     project_id: str,
     body: AssignRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -798,10 +981,15 @@ async def reassign_sa_to_project(
 
     Flow:
     1. Validasi role Lead_SA atau Admin
-    2. Validasi proyek ada dan berstatus 'Assigned' atau 'Ready'
+    2. Validasi proyek ada dan berstatus 'Assigned', 'In Progress', 'Submitted', atau 'Awaiting Assignment'
     3. Validasi SA baru ada dan role-nya 'SA'
     4. Update proyek: assigned_sa ke SA baru
     5. Insert notifikasi ke SA baru
+    6. Drive: SA baru diberi akses Editor, SA lama dicabut (bila folder sudah ada)
+    7. Dari 'Awaiting Assignment': mulai timer SLA + provisioning folder (setara assign)
+
+    Timer SLA yang sudah berjalan TIDAK direset (keputusan 2026-11-10) dan subtask tidak
+    dipindahkan dari SA lama.
     """
     _require_lead_sa(current_user)
 
@@ -815,12 +1003,13 @@ async def reassign_sa_to_project(
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
 
-    if project.status not in ("Assigned", "Ready", "Pending Assignment"):
+    if project.status not in STATUS_BOLEH_GANTI_SA:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Proyek tidak bisa di-reassign karena statusnya '{project.status}'. "
-                f"Hanya proyek berstatus 'Assigned', 'Ready', atau 'Pending Assignment' "
+                f"Hanya proyek berstatus 'Assigned', 'In Progress', 'Submitted', "
+                f"atau 'Awaiting Assignment' "
                 f"yang bisa di-reassign."
             ),
         )
@@ -835,25 +1024,59 @@ async def reassign_sa_to_project(
             detail=f"SA dengan ID '{body.sa_id}' tidak ditemukan.",
         )
 
-    if sa_user.role != "SA":
+    if sa_user.role not in PERAN_DAPAT_DITUGASKAN:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"User '{sa_user.name}' memiliki role '{sa_user.role}', "
-                f"bukan 'SA'. Hanya user dengan role SA yang bisa ditugaskan."
+                f"bukan 'SA' atau 'Lead_SA'. Hanya user dengan role SA atau Lead_SA "
+                f"yang bisa ditugaskan."
             ),
         )
+
+    # `lead_sa` wajib sejak Assigned (ADR 0014): isi bila kosong; yang sudah ada tidak ditimpa
+    # (penggantian lewat PATCH /projects/{id}/people). Admin non-Lead_SA wajib memilih pada alur
+    # assign awal (dari Awaiting Assignment); pada proyek lama yang sudah Assigned/Submitted tanpa
+    # lead_sa, reassign tetap diizinkan dan admin tidak diam-diam menjadi lead_sa.
+    if project.lead_sa is None and (
+        body.lead_sa_id is not None
+        or project.status == status_konst.AWAITING_ASSIGNMENT
+        or current_user.role == PeranUser.LEAD_SA
+    ):
+        project.lead_sa = await tentukan_lead_sa(db, body.lead_sa_id, current_user)
 
     # === 3. Update proyek ===
     now = datetime.now(timezone.utc)
     old_sa_id = project.assigned_sa
+    dari_pending = project.status == status_konst.AWAITING_ASSIGNMENT
     project.assigned_sa = body.sa_id
     project.assigned_at = now
     project.updated_at = now
+    # SA utama tidak diulang di SA tambahan (ADR 0014): bila SA baru sebelumnya SA tambahan,
+    # ia naik menjadi utama dan keluar dari `project_assignments`.
+    await db.execute(
+        delete(ProjectAssignment).where(
+            ProjectAssignment.id_project == project_id, ProjectAssignment.user_id == body.sa_id
+        )
+    )
 
-    # Jika status masih Pending Assignment, ubah ke Assigned
-    if project.status == "Pending Assignment":
-        project.status = "Assigned"
+    # Email SA lama (untuk mencabut akses Drive). FK `projects.assigned_sa` menjamin user ada.
+    sa_lama_email: Optional[str] = None
+    if old_sa_id is not None and old_sa_id != body.sa_id:
+        sa_lama_email = (
+            await db.execute(select(User.email).where(User.id == old_sa_id))
+        ).scalar_one()
+
+    # Jika status masih Awaiting Assignment, ubah ke Assigned (setara assign: tandai provisioning)
+    sales_email: Optional[str] = None
+    if dari_pending:
+        project.status = status_konst.ASSIGNED
+        # `sales_pic` opsional (ADR 0014): tanpa Sales, email kosong (sama seperti assign).
+        if project.sales_pic is not None:
+            sales_email = (
+                await db.execute(select(User.email).where(User.id == project.sales_pic))
+            ).scalar_one_or_none()
+        project.folder_provisioning_status = "pending"
 
     # === 4. Insert notifikasi ke SA baru ===
     notification = NotificationLog(
@@ -886,7 +1109,38 @@ async def reassign_sa_to_project(
         f"oleh {current_user.email} (sebelumnya: {old_sa_id})"
     )
 
-    # === 5. Build response ===
+    # === 5. Dari Awaiting Assignment: timer SLA + provisioning folder (setara assign) ===
+    if dari_pending:
+        try:
+            await sla_timer.start_timer(
+                project_id=project_id, assigned_at=project.assigned_at, db=db
+            )
+        except Exception as e:
+            logger.warning(f"Gagal memulai SLA timer untuk proyek {project_id}: {e}")
+        if sales_email is not None:
+            background_tasks.add_task(
+                _trigger_folder_provisioner,
+                project_id,
+                sa_user.email,
+                current_user.email,
+                sales_email,
+            )
+        else:  # tanpa Sales (ADR 0014); penerima akses Drive mengikuti orang di tiket #120
+            logger.warning(
+                f"Proyek {project_id} tanpa Sales PIC; folder provisioning tidak dijadwalkan."
+            )
+    elif project.gdrive_folder_id:
+        # Folder sudah ada: pindahkan akses Editor dari SA lama ke SA baru.
+        background_tasks.add_task(
+            _pindahkan_akses_drive_sa,
+            project_id,
+            project.gdrive_folder_id,
+            sa_lama_email,
+            sa_user.email,
+            current_user.id,
+        )
+
+    # === 6. Build response ===
     return success_response(
         data={
             "id_project": project.id_project,
@@ -904,9 +1158,9 @@ async def reassign_sa_to_project(
     "/projects/{project_id}/provision-folder",
     summary="Provision ulang folder proyek",
     description=(
-        "Men-trigger ulang provisioning folder Google Drive untuk proyek yang "
-        "folder-nya belum ter-provision (gdrive_folder_id masih kosong). "
-        "Idempoten: menolak (409) bila folder sudah ada. Hanya untuk Lead_SA atau Admin."
+        "Men-trigger ulang provisioning folder Google Drive untuk proyek yang belum berhasil "
+        "diprovision; kegagalan parsial dengan nomor tersimpan dilanjutkan pada folder yang sama. "
+        "Mengembalikan 409 setelah sukses. Hanya untuk Lead_SA atau Admin."
     ),
 )
 async def provision_folder(
@@ -921,10 +1175,9 @@ async def provision_folder(
     Flow:
     1. Validasi role Lead_SA/Admin.
     2. Validasi proyek ada (404).
-    3. Idempotency: jika gdrive_folder_id sudah terisi -> 409 Conflict.
-    4. Jika kosong: set folder_provisioning_status='pending' (commit) lalu
-       jadwalkan _trigger_folder_provisioner dengan email SA assigned (lookup
-       assigned_sa), Lead_SA (current_user.email), dan Sales (lookup sales_pic).
+    3. Reject an associated folder unless a failed attempt has a persisted number to resume.
+    4. Set folder_provisioning_status='pending' (commit), then schedule the same provisioner
+       with the assigned SA, requesting Lead SA, and Sales PIC emails.
 
     Memakai jalur persist yang sama dengan assignment (background task mem-persist
     gdrive_folder_id + gdrive_solutions_folder_id + status).
@@ -941,14 +1194,18 @@ async def provision_folder(
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
 
-    # === 2. Idempotency guard: folder sudah ada -> tolak ===
-    if project.gdrive_folder_id is not None:
+    # === 2. Idempotency guard: allow failed partial work only when its number is reserved ===
+    resumable_partial_folder = (
+        project.gdrive_folder_number is not None
+        and project.folder_provisioning_status == "failed"
+    )
+    if project.gdrive_folder_id is not None and not resumable_partial_folder:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"Folder proyek '{project_id}' sudah ter-provision "
                 f"(gdrive_folder_id='{project.gdrive_folder_id}'). "
-                f"Re-provision hanya untuk proyek yang folder-nya belum ada."
+                "Re-provision hanya untuk proyek yang belum berhasil diprovision."
             ),
         )
 

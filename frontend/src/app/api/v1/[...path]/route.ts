@@ -66,7 +66,9 @@ async function proxyRequest(
   const queryString = searchParams ? `?${searchParams}` : "";
   const backendUrl = `${BACKEND_URL}/api/v1/${path}${queryString}`;
 
-  console.log(`[API Proxy] ${method} /api/v1/${path} → ${backendUrl}`);
+  // Log hanya method + path. Jangan cetak query string (kode OAuth sekali pakai, state), header
+  // Location, atau body: semuanya bisa memuat token (#80).
+  console.log(`[API Proxy] ${method} /api/v1/${path}`);
 
   try {
     // Build headers — forward semua kecuali host
@@ -88,7 +90,7 @@ async function proxyRequest(
 
     const response = await fetch(backendUrl, fetchOptions);
 
-    console.log(`[API Proxy] ← ${response.status} ${response.statusText}`);
+    console.log(`[API Proxy] ← ${response.status} ${response.statusText} (${method} /api/v1/${path})`);
 
     // Forward response headers
     const responseHeaders = new Headers();
@@ -107,32 +109,35 @@ async function proxyRequest(
     // frontend page. Jadi kita perlu redirect ke /auth/callback dengan data.
     if (path === "auth/callback") {
       // Calendar Auth Flow: backend membalas 3xx redirect ke
-      // {frontend_url}#gcal_token=... (atau #gcal_error=...).
+      // {frontend_url}#gcal_code=... (atau #gcal_error=...).
       // Karena proxy pakai redirect:"manual", redirect itu TIDAK diikuti —
-      // kita harus teruskan Location header ke browser agar token (di URL hash)
+      // kita teruskan Location agar kode handoff singkat sampai ke browser.
       // sampai ke halaman calendar. Tanpa ini, flow jatuh ke cabang error
       // di bawah dan user salah diarahkan ke /login.
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
         if (location) {
-          console.log(`[API Proxy] ← auth/callback redirect (calendar flow) → ${location}`);
-          return NextResponse.redirect(location);
+          const tujuan = new URL(location, FRONTEND_URL);
+          const parameter = new URLSearchParams(tujuan.search);
+          const fragment = new URLSearchParams(tujuan.hash.slice(1));
+          const memuatToken = [...parameter.keys(), ...fragment.keys()].some((key) =>
+            /token/i.test(key),
+          );
+          if (tujuan.origin !== new URL(FRONTEND_URL).origin || memuatToken) {
+            console.error("[API Proxy] auth/callback redirect ditolak (tujuan tidak aman)");
+            return NextResponse.redirect(new URL("/login?error=auth_failed", FRONTEND_URL));
+          }
+          console.log(`[API Proxy] ← auth/callback redirect (calendar flow)`);
+          return NextResponse.redirect(tujuan);
         }
       }
 
       if (response.status === 200) {
         try {
           const data = JSON.parse(body);
-          if (data.tokens && data.user) {
-            // Taruh token di URL hash (fragment), bukan query string. Fragment
-            // tidak dikirim ke server sehingga token tidak bocor ke access log
-            // proxy/backend. Pola ini konsisten dengan calendar flow (#gcal_token).
-            const params = new URLSearchParams({
-              access_token: data.tokens.access_token,
-              refresh_token: data.tokens.refresh_token,
-              user: encodeURIComponent(JSON.stringify(data.user)),
-            });
-            const redirectUrl = `${FRONTEND_URL}/auth/callback#${params.toString()}`;
+          if (data.handoff_code) {
+            const params = new URLSearchParams({ code: data.handoff_code });
+            const redirectUrl = `${FRONTEND_URL}/auth/callback?${params.toString()}`;
             console.log(`[API Proxy] ← auth/callback sukses, redirect ke /auth/callback`);
             return NextResponse.redirect(redirectUrl);
           }

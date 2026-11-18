@@ -12,23 +12,22 @@ import { fetcher, apiRequest } from "../fetcher";
 // === Tipe Data ===
 
 /** Proyek yang menunggu assignment */
-export interface PendingProject {
+export interface ProjectBrief {
   id_project: string;
   project_name: string;
   customer_name: string;
-  bant_score: number;
-  use_case_tags: string[];
   status: string;
+  bant_score: number | null;
+  use_case_tags: string[] | null;
+  assigned_sa: string | null;
+  assigned_at: string | null;
   target_submit: string;
   gdrive_folder_id: string | null;
   folder_provisioning_status: "pending" | "provisioned" | "failed" | null;
-  created_at: string;
-  sales_pic: {
-    id: string;
-    name: string;
-    email: string;
-  };
 }
+
+/** Proyek yang menunggu assignment (`GET /projects/pending-assignment`). */
+export type PendingProject = ProjectBrief;
 
 /** SA yang tersedia untuk assignment */
 export interface AvailableSA {
@@ -37,14 +36,16 @@ export interface AvailableSA {
   email: string;
   avatar_url: string | null;
   active_project_count: number;
+  /** Peran kandidat ("SA" atau "Lead_SA"); dipakai menyaring dropdown Lead SA. */
+  role: "SA" | "Lead_SA";
 }
 
-/** Response setelah assignment berhasil */
+/** Response `POST /projects/{id}/assign` dari backend. */
 export interface AssignmentResponse {
-  id_project: string;
-  assigned_sa: string;
-  assigned_at: string;
-  status: string;
+  project: ProjectBrief;
+  assigned_sa_name: string;
+  notification_sent: boolean;
+  folder_provisioning_triggered: boolean;
 }
 
 /** Ringkasan proyek per status (untuk overview) */
@@ -56,7 +57,7 @@ export interface ProjectStatusSummary {
 // === API Functions ===
 
 /**
- * Ambil daftar proyek berstatus "Pending Assignment"
+ * Ambil daftar proyek berstatus "Awaiting Assignment"
  * Digunakan di dashboard Lead_SA untuk antrian assignment
  */
 export async function getPendingAssignment(): Promise<PendingProject[]> {
@@ -77,15 +78,17 @@ export async function getAvailableSA(): Promise<AvailableSA[]> {
  *
  * @param projectId - ID proyek yang akan di-assign
  * @param saId - ID SA yang ditugaskan
+ * @param leadSaId - ID Lead SA proyek (wajib bila yang meng-assign bukan Lead_SA)
  * @returns Data assignment yang berhasil
  */
 export async function assignProject(
   projectId: string,
-  saId: string
+  saId: string,
+  leadSaId?: string
 ): Promise<AssignmentResponse> {
   return apiRequest<AssignmentResponse>(`/projects/${projectId}/assign`, {
     method: "POST",
-    body: { sa_id: saId },
+    body: leadSaId ? { sa_id: saId, lead_sa_id: leadSaId } : { sa_id: saId },
   });
 }
 
@@ -95,15 +98,17 @@ export async function assignProject(
  *
  * @param projectId - ID proyek yang akan di-reassign
  * @param saId - ID SA baru
+ * @param leadSaId - hanya dikirim bila proyek belum punya lead_sa (yang sudah ada tidak ditimpa)
  * @returns Data reassignment yang berhasil
  */
 export async function reassignProject(
   projectId: string,
-  saId: string
+  saId: string,
+  leadSaId?: string
 ): Promise<{ id_project: string; assigned_sa: string; assigned_sa_name: string; status: string }> {
   return apiRequest(`/projects/${projectId}/reassign`, {
     method: "POST",
-    body: { sa_id: saId },
+    body: leadSaId ? { sa_id: saId, lead_sa_id: leadSaId } : { sa_id: saId },
   });
 }
 

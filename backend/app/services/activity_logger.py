@@ -25,6 +25,7 @@ from app.models.activity_log import ActivityLog
 from app.models.project import Project
 from app.models.subtask import Subtask
 from app.services.llm_provider import LLMResponse, llm_factory
+from app.services.status_proyek import majukan_ke_in_progress
 from app.utils.guardrails import PolishResult, sanitize_text_input, validate_llm_json
 
 logger = logging.getLogger(__name__)
@@ -132,8 +133,9 @@ class ActivityLogger:
                 id_subtask menunjuk subtask dari proyek lain.
         """
         # Validasi project hanya untuk aktivitas Project
+        project: Optional[Project] = None
         if work_type == "Project":
-            await self._validate_project(id_project)
+            project = await self._validate_project(id_project)
         else:
             # Non-Project: pastikan tidak terkait proyek/fase/subtask
             id_project = None
@@ -169,6 +171,9 @@ class ActivityLogger:
         )
 
         self.db.add(activity_log)
+        # Log Project pertama memindahkan `Assigned` → `In Progress` (satu transaksi dengan log).
+        if project is not None:
+            majukan_ke_in_progress(self.db, project, sa_id, "activity_log")
         await self.db.commit()
         await self.db.refresh(activity_log)
 
@@ -234,7 +239,7 @@ class ActivityLogger:
             logger.error(f"AI polishing exception: {e}")
             return None
 
-    async def retry_polish(self, id_log: str, sa_id: uuid.UUID) -> ActivityLog:
+    async def retry_polish(self, id_log: str, sa_id: uuid.UUID) -> tuple[ActivityLog, bool]:
         """
         Re-trigger AI polishing untuk entry yang gagal (requirement 8.6).
 
@@ -245,7 +250,8 @@ class ActivityLogger:
             sa_id: UUID SA yang meminta retry (untuk validasi ownership).
 
         Returns:
-            ActivityLog yang sudah di-update.
+            Pasangan (ActivityLog, berhasil). Bila polish ulang gagal, hasil polish yang sudah
+            ada dipertahankan (tidak ditimpa `None`) dan `berhasil` bernilai False.
 
         Raises:
             ValueError: Jika log tidak ditemukan atau bukan milik SA.
@@ -264,16 +270,16 @@ class ActivityLogger:
         # Re-trigger polishing
         ai_polished_notes = await self.polish_notes(activity_log.raw_notes)
 
-        # Update record
-        activity_log.ai_polished_notes = ai_polished_notes
-        await self.db.commit()
-        await self.db.refresh(activity_log)
+        # Update record hanya bila polish ulang berhasil; kegagalan tidak boleh menghapus hasil lama.
+        berhasil = ai_polished_notes is not None
+        if berhasil:
+            activity_log.ai_polished_notes = ai_polished_notes
+            await self.db.commit()
+            await self.db.refresh(activity_log)
 
-        logger.info(
-            f"Retry polish untuk log {id_log}: {'berhasil' if ai_polished_notes else 'gagal lagi'}"
-        )
+        logger.info(f"Retry polish untuk log {id_log}: {'berhasil' if berhasil else 'gagal lagi'}")
 
-        return activity_log
+        return activity_log, berhasil
 
     async def get_project_story(
         self,
@@ -375,6 +381,7 @@ class ActivityLogger:
         duration_hours: Decimal,
         subtask_category: str,
         raw_notes: str = "",
+        project_phase: str = "Pre-Implementation",
     ) -> ActivityLog:
         """
         Map event Google Calendar ke proyek sebagai activity log (requirement 9.3).
@@ -386,6 +393,8 @@ class ActivityLogger:
             duration_hours: Durasi dari event calendar.
             subtask_category: Kategori subtask.
             raw_notes: Catatan (opsional, default kosong).
+            project_phase: Fase proyek (wajib untuk aktivitas Project; default
+                Pre-Implementation, sama dengan default mayoritas kerja pre-sales).
 
         Returns:
             ActivityLog yang dibuat dari mapping event.
@@ -404,6 +413,7 @@ class ActivityLogger:
         return await self.create_log(
             sa_id=sa_id,
             id_project=id_project,
+            project_phase=project_phase,
             subtask_category=subtask_category,
             duration_hours=duration_hours,
             raw_notes=raw_notes or "[Mapped dari Google Calendar event]",

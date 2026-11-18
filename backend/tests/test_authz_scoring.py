@@ -2,10 +2,10 @@
 Unit tests untuk authorization Fase 0.6 (B8 & B9).
 
 Memvalidasi:
-- B8 scoring reads (GET bant-result & recommendations): butuh authentication saja,
-  terbuka untuk user terautentikasi manapun.
-- B8 score-manual (POST): write-set ketat — hanya Sales PIC, assigned SA, atau
-  Lead_SA/Admin. Collaborator sengaja DITOLAK (boundary halus).
+- B8 scoring reads (GET bant-result & recommendations): akses BACA proyek (tiket #88, spec #87):
+  Lead_SA/Admin/Sales PIC/SA ditugaskan/collaborator; user terautentikasi tak terkait → 403.
+- B8 score-manual (POST, override #30): hanya Lead_SA/Admin. Sales PIC, assigned SA,
+  dan collaborator DITOLAK (403).
 - B9 PATCH /projects/{id}: general access set — privileged, Sales PIC, assigned SA,
   atau collaborator. User tak terkait ditolak.
 
@@ -25,6 +25,7 @@ from app.core.dependencies import get_current_user
 from app.main import app
 from app.models.project_collaborator import ProjectCollaborator
 from app.schemas.scoring import BANTResult, BANTSubScores
+from tests._auth_support import terapkan_persona
 
 # =============================================================================
 # Fixtures & Helpers
@@ -37,7 +38,7 @@ def _make_user(role: str = "SA", user_id: uuid.UUID | None = None):
     user.id = user_id or uuid.uuid4()
     user.email = f"{role.lower()}@company.com"
     user.name = f"Test {role}"
-    user.role = role
+    terapkan_persona(user, role)
     return user
 
 
@@ -50,7 +51,7 @@ def _make_project(sales_pic=None, assigned_sa=None):
     project.bant_score = 80
     project.bant_detail = {"budget": 20, "authority": 20, "need": 20, "timeline": 20}
     project.use_case_tags = ["etl"]
-    project.status = "Pending Assignment"
+    project.status = "Awaiting Assignment"
     return project
 
 
@@ -86,18 +87,18 @@ BANT_RESULT = BANTResult(
     total_score=80,
     sub_scores=BANTSubScores(budget=20, authority=20, need=20, timeline=20),
     use_case_tags=["etl"],
-    status="Pending Assignment",
+    status="Awaiting Assignment",
     feedback=None,
 )
 
 
 # =============================================================================
-# B8 — Scoring reads (bant-result & recommendations): auth saja, terbuka
+# B8 — Scoring reads (bant-result & recommendations): akses BACA proyek (#88)
 # =============================================================================
 
 
 class TestScoringReadsAuth:
-    """GET bant-result & recommendations hanya butuh authentication."""
+    """GET bant-result & recommendations butuh akses BACA ke proyek yang diminta."""
 
     def test_bant_result_unauthenticated_401(self):
         """Request tanpa token → 401."""
@@ -107,13 +108,28 @@ class TestScoringReadsAuth:
         response = client.get("/api/v1/projects/PRJ-20250101-ABC123/bant-result")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_bant_result_authed_unrelated_user_200(self):
-        """User terautentikasi tak terkait tetap boleh membaca → 200."""
+    def test_bant_result_user_tak_terkait_boleh_membaca(self):
+        """Keputusan 2026-11-10: semua proyek dapat dibaca siapa pun (sebelumnya 403, #88)."""
         project = _make_project()  # user tak terkait sama sekali
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=_execute_result_scalar(project))
+        # hanya query proyek: membaca terbuka, tidak ada cek collaborator lagi
+        mock_session.execute = AsyncMock(side_effect=[_execute_result_scalar(project)])
         _override_db(mock_session)
         _override_current_user(_make_user(role="SA"))
+
+        client = TestClient(app)
+        response = client.get("/api/v1/projects/PRJ-20250101-ABC123/bant-result")
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_bant_result_sa_ditugaskan_200(self):
+        user = _make_user(role="SA")
+        project = _make_project(assigned_sa=user.id)
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(
+            side_effect=[_execute_result_scalar(project), _execute_result_scalar(None)]
+        )
+        _override_db(mock_session)
+        _override_current_user(user)
 
         client = TestClient(app)
         response = client.get("/api/v1/projects/PRJ-20250101-ABC123/bant-result")
@@ -128,14 +144,29 @@ class TestScoringReadsAuth:
         response = client.get("/api/v1/projects/PRJ-20250101-ABC123/recommendations")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_recommendations_authed_unrelated_user_200(self):
-        """User terautentikasi tak terkait tetap boleh membaca → 200."""
+    def test_recommendations_user_tak_terkait_boleh_membaca(self):
+        """Keputusan 2026-11-10: semua proyek dapat dibaca siapa pun (sebelumnya 403, #88)."""
         project = _make_project()
         project.use_case_tags = []  # jalur cepat: tanpa panggil scoring_engine
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=_execute_result_scalar(project))
+        mock_session.execute = AsyncMock(side_effect=[_execute_result_scalar(project)])
         _override_db(mock_session)
         _override_current_user(_make_user(role="SA"))
+
+        client = TestClient(app)
+        response = client.get("/api/v1/projects/PRJ-20250101-ABC123/recommendations")
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_recommendations_sales_pic_200(self):
+        user = _make_user(role="Sales")
+        project = _make_project(sales_pic=user.id)
+        project.use_case_tags = []  # jalur cepat: tanpa panggil scoring_engine
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(
+            side_effect=[_execute_result_scalar(project), _execute_result_scalar(None)]
+        )
+        _override_db(mock_session)
+        _override_current_user(user)
 
         client = TestClient(app)
         response = client.get("/api/v1/projects/PRJ-20250101-ABC123/recommendations")
@@ -148,11 +179,30 @@ class TestScoringReadsAuth:
 # =============================================================================
 
 
-SCORE_BODY = {"budget": 20, "authority": 20, "need": 20, "timeline": 20}
+SCORE_BODY = {
+    "budget": 20,
+    "authority": 20,
+    "need": 20,
+    "timeline": 20,
+    "reason": "Klarifikasi dengan customer",
+}
 
 
 class TestScoreManualAuthz:
-    """POST score-manual: hanya Sales PIC, assigned SA, atau Lead_SA/Admin."""
+    """POST score-manual (override): hanya Lead_SA/Admin."""
+
+    def _post(self, user, project, role_state="Need Clarification"):
+        project.status = "Intake"
+        project.qualification_state = role_state
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.execute = AsyncMock(return_value=_execute_result_scalar(project))
+        _override_db(mock_session)
+        _override_current_user(user)
+        client = TestClient(app)
+        return client.post(
+            "/api/v1/projects/PRJ-20250101-ABC123/score-manual", json=SCORE_BODY
+        )
 
     def test_unauthenticated_401(self):
         mock_session = AsyncMock()
@@ -164,112 +214,39 @@ class TestScoreManualAuthz:
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
     def test_unrelated_sa_forbidden_403(self):
-        """SA tak terkait (bukan PIC/assigned/privileged) → 403."""
         project = _make_project(sales_pic=uuid.uuid4(), assigned_sa=uuid.uuid4())
-        mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=_execute_result_scalar(project))
-        _override_db(mock_session)
-        _override_current_user(_make_user(role="SA"))
-
-        client = TestClient(app)
-        response = client.post(
-            "/api/v1/projects/PRJ-20250101-ABC123/score-manual", json=SCORE_BODY
-        )
+        response = self._post(_make_user(role="SA"), project)
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_collaborator_forbidden_403(self):
-        """Collaborator sengaja DITOLAK dari write-set score-manual → 403."""
-        collaborator = _make_user(role="SA")
+        """Collaborator tetap DITOLAK → 403."""
         project = _make_project(sales_pic=uuid.uuid4(), assigned_sa=uuid.uuid4())
-
-        mock_session = AsyncMock()
-        # Project di-load dulu; andai pun ada query lanjutan, user tetap collaborator
-        # yang tidak masuk write-set, jadi harus 403 tanpa pernah menjalankan scoring.
-        mock_session.execute = AsyncMock(return_value=_execute_result_scalar(project))
-        _override_db(mock_session)
-        _override_current_user(collaborator)
-
-        client = TestClient(app)
-        response = client.post(
-            "/api/v1/projects/PRJ-20250101-ABC123/score-manual", json=SCORE_BODY
-        )
+        response = self._post(_make_user(role="SA"), project)
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    @patch("app.api.scoring.scoring_engine")
-    def test_sales_pic_allowed(self, mock_engine):
-        """Sales PIC project → diizinkan."""
+    def test_sales_pic_forbidden_403(self):
+        """Sales PIC proyek tidak lagi boleh (berubah dari write-set lama) → 403."""
         pic = _make_user(role="Sales")
         project = _make_project(sales_pic=pic.id, assigned_sa=uuid.uuid4())
-        project.bant_detail = None  # hindari merge metadata agar jalur sederhana
+        response = self._post(pic, project)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
-        mock_engine.score_manual = AsyncMock(return_value=BANT_RESULT)
-        mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=_execute_result_scalar(project))
-        _override_db(mock_session)
-        _override_current_user(pic)
-
-        client = TestClient(app)
-        response = client.post(
-            "/api/v1/projects/PRJ-20250101-ABC123/score-manual", json=SCORE_BODY
-        )
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json()["status"] == "success"
-
-    @patch("app.api.scoring.scoring_engine")
-    def test_assigned_sa_allowed(self, mock_engine):
-        """Assigned SA → diizinkan."""
+    def test_assigned_sa_forbidden_403(self):
+        """Assigned SA tidak lagi boleh (berubah dari write-set lama) → 403."""
         sa = _make_user(role="SA")
         project = _make_project(sales_pic=uuid.uuid4(), assigned_sa=sa.id)
-        project.bant_detail = None
+        response = self._post(sa, project)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
-        mock_engine.score_manual = AsyncMock(return_value=BANT_RESULT)
-        mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=_execute_result_scalar(project))
-        _override_db(mock_session)
-        _override_current_user(sa)
-
-        client = TestClient(app)
-        response = client.post(
-            "/api/v1/projects/PRJ-20250101-ABC123/score-manual", json=SCORE_BODY
-        )
+    def test_lead_sa_allowed(self):
+        """Lead_SA (meski bukan PIC/assigned) → diizinkan."""
+        project = _make_project(sales_pic=uuid.uuid4(), assigned_sa=uuid.uuid4())
+        response = self._post(_make_user(role="Lead_SA"), project)
         assert response.status_code == status.HTTP_200_OK
 
-    @patch("app.api.scoring.scoring_engine")
-    def test_lead_sa_allowed(self, mock_engine):
-        """Lead_SA (privileged) → diizinkan meski bukan PIC/assigned."""
-        lead = _make_user(role="Lead_SA")
+    def test_admin_allowed(self):
         project = _make_project(sales_pic=uuid.uuid4(), assigned_sa=uuid.uuid4())
-        project.bant_detail = None
-
-        mock_engine.score_manual = AsyncMock(return_value=BANT_RESULT)
-        mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=_execute_result_scalar(project))
-        _override_db(mock_session)
-        _override_current_user(lead)
-
-        client = TestClient(app)
-        response = client.post(
-            "/api/v1/projects/PRJ-20250101-ABC123/score-manual", json=SCORE_BODY
-        )
-        assert response.status_code == status.HTTP_200_OK
-
-    @patch("app.api.scoring.scoring_engine")
-    def test_admin_allowed(self, mock_engine):
-        """Admin (privileged) → diizinkan."""
-        admin = _make_user(role="Admin")
-        project = _make_project(sales_pic=uuid.uuid4(), assigned_sa=uuid.uuid4())
-        project.bant_detail = None
-
-        mock_engine.score_manual = AsyncMock(return_value=BANT_RESULT)
-        mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=_execute_result_scalar(project))
-        _override_db(mock_session)
-        _override_current_user(admin)
-
-        client = TestClient(app)
-        response = client.post(
-            "/api/v1/projects/PRJ-20250101-ABC123/score-manual", json=SCORE_BODY
-        )
+        response = self._post(_make_user(role="Admin"), project)
         assert response.status_code == status.HTTP_200_OK
 
 
@@ -286,10 +263,14 @@ class TestUpdateProjectAuthz:
         project = _make_project(sales_pic=uuid.uuid4(), assigned_sa=uuid.uuid4())
         mock_session = AsyncMock()
         # Pertama: load project. Kedua: cek collaborator → None (bukan collaborator).
+        # Ketiga: cek SA tambahan (`project_assignments`) → tidak ada baris.
+        tanpa_penugasan = MagicMock()
+        tanpa_penugasan.first = MagicMock(return_value=None)
         mock_session.execute = AsyncMock(
             side_effect=[
                 _execute_result_scalar(project),
                 _execute_result_scalar(None),
+                tanpa_penugasan,
             ]
         )
         _override_db(mock_session)
@@ -341,10 +322,11 @@ class TestUpdateProjectAuthz:
         assert response.status_code == status.HTTP_200_OK
 
     def test_collaborator_allowed(self):
-        """Collaborator termasuk general access set → diizinkan update."""
+        """Collaborator contributor boleh update (viewer ditolak: tiket #91)."""
         collaborator = _make_user(role="SA")
         project = _make_project(sales_pic=uuid.uuid4(), assigned_sa=uuid.uuid4())
         collab_row = MagicMock(spec=ProjectCollaborator)
+        collab_row.role = "contributor"
         mock_session = AsyncMock()
         # load project, lalu cek collaborator → ketemu row.
         mock_session.execute = AsyncMock(

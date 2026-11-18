@@ -1,0 +1,608 @@
+import { act, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HttpResponse, api, errorEnvelope, http, renderWithProviders, server, stubLocation, successEnvelope } from "@/test";
+import { CalendarSync } from "./CalendarSync";
+
+const projects = [
+  { id: "p-1", project_name: "Migrasi Cloud", status: "Intake" },
+  { id: "p-2", project_name: "Rollout Jaringan", status: "Handed Over" },
+];
+
+// Hari "ini" tetap: Sabtu, 15 Maret 2025 (waktu lokal) agar grid/rentang deterministik.
+const NOW = new Date(2025, 2, 15, 10, 0, 0);
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+});
+
+function setup(props: Partial<React.ComponentProps<typeof CalendarSync>> = {}) {
+  return renderWithProviders(<CalendarSync projects={projects} {...props} />, { role: "SA" });
+}
+
+const gcalEvent = (over: Record<string, unknown> = {}) => ({
+  id: "ev-1",
+  summary: "Rapat Kickoff",
+  description: "Bahas ruang lingkup",
+  start: { dateTime: "2025-03-15T09:00:00" },
+  end: { dateTime: "2025-03-15T10:30:00" },
+  ...over,
+});
+
+function useCalendarSync(items: unknown) {
+  const captured: { body?: unknown; auth?: string | null } = {};
+  const events = Array.isArray(items)
+    ? items.flatMap((item: Record<string, unknown>) => {
+        if (typeof item.id !== "string") return [];
+        const start = (item.start || {}) as { date?: string; dateTime?: string };
+        const end = (item.end || {}) as { date?: string; dateTime?: string };
+        const isAllDay = !!start.date && !start.dateTime;
+        return [{
+          gcal_event_id: item.id,
+          title: typeof item.summary === "string" ? item.summary : "(No Title)",
+          description: typeof item.description === "string" ? item.description : undefined,
+          start: isAllDay ? start.date : start.dateTime || "",
+          end: isAllDay ? end.date || "" : end.dateTime || "",
+          is_all_day: isAllDay,
+        }];
+      })
+    : [];
+  server.use(
+    http.post(api("/calendar/sync"), async ({ request }) => {
+      captured.body = await request.json();
+      captured.auth = request.headers.get("Authorization");
+      return HttpResponse.json(successEnvelope({ events, total_events: events.length }));
+    })
+  );
+  return captured;
+}
+
+async function syncWithSession(user: ReturnType<typeof setup>["user"], items: unknown) {
+  const captured = useCalendarSync(items);
+  await user.click(screen.getByRole("button", { name: "Sync Calendar" }));
+  return captured;
+}
+
+const toast = () => screen.findByRole("alert");
+const calendarOperation = (over: Record<string, unknown> = {}) => ({
+  id: "operation-1",
+  operation_type: "calendar",
+  project_id: null,
+  action: "sync_calendar",
+  status: "succeeded",
+  attempts: [{
+    attempt: 1,
+    status: "succeeded",
+    started_at: "2025-03-15T10:00:00Z",
+    finished_at: "2025-03-15T10:00:01Z",
+    outcome: "Loaded 1 events from Google Calendar.",
+    actionable_error: null,
+  }],
+  started_at: "2025-03-15T10:00:00Z",
+  finished_at: "2025-03-15T10:00:01Z",
+  outcome: "Loaded 1 events from Google Calendar.",
+  actionable_error: null,
+  retryable: false,
+  context: { action: "sync_calendar" },
+  ...over,
+});
+
+it("menampilkan status, jumlah percobaan, waktu, dan hasil sync yang tersimpan", async () => {
+  const operation = calendarOperation();
+  server.use(
+    http.post(api("/calendar/sync"), () =>
+      HttpResponse.json(successEnvelope({ events: [], total_events: 0, integration_operation: operation })),
+    ),
+  );
+  const { user } = setup();
+  await user.click(screen.getByRole("button", { name: "Sync Calendar" }));
+  expect(await screen.findByText("Status operasi: Berhasil")).toBeInTheDocument();
+  expect(screen.getByText("ID operasi: operation-1")).toBeInTheDocument();
+  expect(screen.getByText("2025-03-15T10:00:00Z")).toBeInTheDocument();
+  expect(screen.getByText("2025-03-15T10:00:01Z")).toBeInTheDocument();
+  expect(screen.getByText("Percobaan: 1")).toBeInTheDocument();
+  expect(screen.getByText(/Loaded 1 events from Google Calendar\./)).toBeInTheDocument();
+});
+
+it("menampilkan kegagalan sync dan instruksi pemulihan tanpa menandainya berhasil", async () => {
+  const operation = calendarOperation({
+    action: "sync_calendar",
+    status: "failed",
+    attempts: [{
+      attempt: 1,
+      status: "failed",
+      started_at: "2025-03-15T10:00:00Z",
+      finished_at: "2025-03-15T10:00:02Z",
+      outcome: "Calendar sync failed before events could be loaded.",
+      actionable_error: "Check Calendar permissions and run Sync again.",
+    }],
+    outcome: "Calendar sync failed before events could be loaded.",
+    actionable_error: "Check Calendar permissions and run Sync again.",
+  });
+  server.use(
+    http.post(api("/calendar/sync"), () =>
+      HttpResponse.json(errorEnvelope("Calendar unavailable", { integration_operation: operation }), { status: 502 }),
+    ),
+  );
+  const { user } = setup();
+  await user.click(screen.getByRole("button", { name: "Sync Calendar" }));
+  expect(await screen.findByText("Status operasi: Gagal")).toBeInTheDocument();
+  expect(screen.getByText("2025-03-15T10:00:00Z")).toBeInTheDocument();
+  expect(screen.getByText("2025-03-15T10:00:02Z")).toBeInTheDocument();
+  expect(screen.getByText(/Check Calendar permissions and run Sync again\./)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Sync Calendar" })).toBeEnabled();
+  expect(screen.queryByText("Status operasi: Berhasil")).not.toBeInTheDocument();
+});
+
+describe("CalendarSync — tampilan awal & navigasi bulan", () => {
+  it("menampilkan bulan/tahun berjalan, label hari, tanggal terpilih hari ini, dan petunjuk sync", () => {
+    setup();
+    expect(screen.getByRole("heading", { name: "Maret 2025" })).toBeInTheDocument();
+    for (const w of ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"]) expect(screen.getByText(w)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "31" })).toBeInTheDocument(); // Maret 2025 punya 31 hari
+    expect(screen.queryByRole("button", { name: "32" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Sabtu, 15 Maret 2025/)).toBeInTheDocument();
+    expect(screen.getByText(/Klik "Sync Calendar" untuk memuat event/)).toBeInTheDocument();
+    expect(screen.getByText("Belum ada event. Sinkronkan calendar terlebih dahulu.")).toBeInTheDocument();
+  });
+
+  it("navigasi bulan sebelumnya/berikutnya, lintas tahun, dan kembali dengan 'Hari Ini'", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Bulan sebelumnya" }));
+    expect(screen.getByRole("heading", { name: "Februari 2025" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Bulan sebelumnya" }));
+    await user.click(screen.getByRole("button", { name: "Bulan sebelumnya" }));
+    expect(screen.getByRole("heading", { name: "Desember 2024" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Hari Ini" }));
+    expect(screen.getByRole("heading", { name: "Maret 2025" })).toBeInTheDocument();
+
+    for (let i = 0; i < 10; i++) await user.click(screen.getByRole("button", { name: "Bulan berikutnya" }));
+    expect(screen.getByRole("heading", { name: "Januari 2026" })).toBeInTheDocument();
+  });
+
+  it("memilih tanggal lain mengubah label panel detail dan 'Hari Ini' mengembalikannya", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "20" }));
+    expect(screen.getByText(/Kamis, 20 Maret 2025/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Hari Ini" }));
+    expect(screen.getByText(/Sabtu, 15 Maret 2025/)).toBeInTheDocument();
+  });
+});
+
+describe("CalendarSync — sync Google Calendar", () => {
+  it("tanpa sesi: meminta otorisasi Google", async () => {
+    server.use(
+      http.post(api("/calendar/sync"), () =>
+        HttpResponse.json(errorEnvelope("Calendar session not found"), { status: 401 }),
+      ),
+    );
+    const loc = stubLocation("http://localhost/activity-logs/calendar");
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Sync Calendar" }));
+    await waitFor(() => expect(loc.href).toBe("https://accounts.google.com/o/oauth2/auth?x=1"));
+    expect(screen.getByRole("alert")).toHaveTextContent("Mengarahkan ke Google untuk otorisasi Calendar...");
+  });
+
+  it("tanpa sesi dan auth-url gagal: toast error", async () => {
+    server.use(
+      http.post(api("/calendar/sync"), () =>
+        HttpResponse.json(errorEnvelope("Calendar session not found"), { status: 401 }),
+      ),
+      http.get(api("/calendar/auth-url"), () => HttpResponse.json(errorEnvelope("x"), { status: 500 })),
+    );
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Sync Calendar" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Gagal memulai otorisasi Google Calendar"));
+  });
+
+  it("mengambil event lewat backend tanpa mengirim token Google dan menampilkan event", async () => {
+    const { user } = setup();
+    const captured = await syncWithSession(user, [gcalEvent()]);
+
+    expect(await toast()).toHaveTextContent("Calendar tersinkronisasi — 1 event ditemukan");
+    expect(captured.body).toEqual({});
+    expect(captured.body).not.toHaveProperty("access_token");
+    expect(captured.auth).toBe("Bearer access-SA");
+    expect(screen.getByRole("heading", { name: "Rapat Kickoff", level: 5 })).toBeInTheDocument();
+    expect(screen.getByText(/09[.:]00 – 10[.:]30/)).toBeInTheDocument();
+    expect(screen.getByText("Bahas ruang lingkup")).toBeInTheDocument();
+    expect(screen.queryByText(/Klik "Sync Calendar" untuk memuat event/)).not.toBeInTheDocument();
+  });
+
+  it("menandai tanggal yang punya event dengan titik dan menampilkan event saat dipilih", async () => {
+    const { user } = setup();
+    await syncWithSession(user, [
+      gcalEvent({ id: "a", summary: "A", start: { dateTime: "2025-03-18T08:00:00" }, end: { dateTime: "2025-03-18T09:00:00" } }),
+      gcalEvent({ id: "b", summary: "B", start: { dateTime: "2025-03-18T10:00:00" }, end: { dateTime: "2025-03-18T11:00:00" } }),
+      gcalEvent({ id: "c", summary: "C", start: { dateTime: "2025-03-18T12:00:00" }, end: { dateTime: "2025-03-18T13:00:00" } }),
+      gcalEvent({ id: "d", summary: "D", start: { dateTime: "2025-03-18T14:00:00" }, end: { dateTime: "2025-03-18T15:00:00" } }),
+    ]);
+    await toast();
+    const day18 = screen.getByRole("button", { name: "18" });
+    expect(day18.querySelectorAll("span > span")).toHaveLength(3);
+    expect(screen.getByText("Tidak ada event pada tanggal ini")).toBeInTheDocument();
+    await user.click(day18);
+    expect(screen.getAllByRole("heading", { level: 5 }).map((h) => h.textContent)).toEqual(["A", "B", "C", "D"]);
+  });
+
+  it("event seharian dan event tanpa judul tetap ditampilkan", async () => {
+    const { user } = setup();
+    await syncWithSession(user, [
+      { id: "ad", summary: "Libur", start: { date: "2025-03-15" }, end: { date: "2025-03-16" } },
+      { id: "nt", start: { dateTime: "2025-03-15T13:00:00" }, end: { dateTime: "2025-03-15T14:00:00" } },
+    ]);
+    await toast();
+    expect(screen.getByText("All Day")).toBeInTheDocument();
+    expect(screen.getByText("Seharian")).toBeInTheDocument();
+    expect(screen.getByText("(No Title)")).toBeInTheDocument();
+  });
+
+  it("melewati event tanpa id atau tanggal valid", async () => {
+    const { user } = setup();
+    await syncWithSession(user, [
+      { summary: "Tanpa ID", start: { dateTime: "2025-03-15T09:00:00" }, end: { dateTime: "2025-03-15T10:00:00" } },
+      { id: "x", summary: "Tanggal rusak", start: {}, end: {} },
+      gcalEvent({ id: "ok", summary: "Valid" }),
+    ]);
+    expect(await toast()).toHaveTextContent("2 event ditemukan");
+    expect(screen.getByText("Valid")).toBeInTheDocument();
+    expect(screen.queryByText("Tanpa ID")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tanggal rusak")).not.toBeInTheDocument();
+  });
+
+  it("tidak ada event: pesan khusus dan keadaan kosong", async () => {
+    const { user } = setup();
+    await syncWithSession(user, []);
+    expect(await toast()).toHaveTextContent("Calendar tersinkronisasi, tidak ada event pada rentang 7 hari ini");
+    expect(screen.getByText("Tidak ada event pada tanggal ini")).toBeInTheDocument();
+  });
+
+  it("respons tanpa event diperlakukan sebagai kosong", async () => {
+    const { user } = setup();
+    await syncWithSession(user, undefined);
+    expect(await toast()).toHaveTextContent("tidak ada event");
+  });
+
+  it.each([401, 403])("Google %i: pengguna diminta mengotorisasi ulang tanpa token browser", async (status) => {
+    server.use(
+      http.post(api("/calendar/sync"), () =>
+        HttpResponse.json(errorEnvelope("Token Google Calendar kedaluwarsa. Silakan sync ulang untuk otorisasi."), { status }),
+      ),
+    );
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Sync Calendar" }));
+    expect(await toast()).toHaveTextContent("Token Google Calendar kedaluwarsa. Silakan sync ulang untuk otorisasi.");
+    expect(localStorage.getItem("google_calendar_token")).toBeNull();
+  });
+
+  it("Google 500: toast berisi status, tanpa menyimpan token", async () => {
+    server.use(
+      http.post(api("/calendar/sync"), () =>
+        HttpResponse.json(errorEnvelope("Google Calendar API error (500): backend error"), { status: 502 }),
+      ),
+    );
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Sync Calendar" }));
+    expect(await toast()).toHaveTextContent("Gagal sync calendar (Google 500).");
+    expect(localStorage.getItem("google_calendar_token")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sync Calendar" })).toBeEnabled();
+  });
+
+  it("kegagalan jaringan menampilkan pesan error", async () => {
+    server.use(http.post(api("/calendar/sync"), () => HttpResponse.error()));
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Sync Calendar" }));
+    expect(await toast()).toHaveTextContent(/Failed to fetch|fetch failed|Network/i);
+  });
+
+  it("menampilkan 'Syncing...' dan menonaktifkan tombol selama request", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.post(api("/calendar/sync"), async () => {
+        await gate;
+        return HttpResponse.json(successEnvelope({ events: [], total_events: 0 }));
+      }),
+    );
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Sync Calendar" }));
+    expect(await screen.findByRole("button", { name: /Syncing/ })).toBeDisabled();
+    release();
+    await toast();
+    expect(screen.getByRole("button", { name: "Sync Calendar" })).toBeEnabled();
+  });
+});
+
+describe("CalendarSync — callback OAuth lewat URL hash", () => {
+  it("menukar gcal_code lewat POST; hanya sesi server yang dibuat, token Google tidak dikembalikan", async () => {
+    const captured: { auth?: string | null } = {};
+    server.use(
+      http.post(api("/auth/calendar/exchange"), ({ request }) => {
+        captured.auth = request.headers.get("Authorization");
+        return HttpResponse.json({ connected: true });
+      }),
+    );
+    stubLocation("http://localhost/activity-logs/calendar?x=1#gcal_code=once-code");
+    const replace = vi.spyOn(window.history, "replaceState");
+    setup();
+    expect(await toast()).toHaveTextContent("Google Calendar terhubung. Klik Sync Calendar untuk memuat event.");
+    expect(localStorage.getItem("google_calendar_token")).toBeNull();
+    expect(captured.auth).toBe("Bearer access-SA");
+    expect(replace).toHaveBeenCalledWith(null, "", "/activity-logs/calendar?x=1");
+  });
+  it("legacy #gcal_token dibersihkan tetapi tidak dipercaya", async () => {
+    localStorage.setItem("google_calendar_token", "lama");
+    stubLocation("http://localhost/activity-logs/calendar?x=1#gcal_token=ya29.abc%2Fdef");
+    const replace = vi.spyOn(window.history, "replaceState");
+    setup();
+    expect(await toast()).toHaveTextContent("Otorisasi Google Calendar perlu diulang.");
+    expect(localStorage.getItem("google_calendar_token")).toBeNull();
+    expect(replace).toHaveBeenCalledWith(null, "", "/activity-logs/calendar?x=1");
+  });
+
+  it("#gcal_error menghapus token lama dan menampilkan toast error", async () => {
+    localStorage.setItem("google_calendar_token", "lama");
+    stubLocation("http://localhost/activity-logs/calendar#gcal_error=access_denied");
+    const replace = vi.spyOn(window.history, "replaceState");
+    setup();
+    expect(await toast()).toHaveTextContent("Otorisasi Google Calendar gagal. Silakan coba lagi.");
+    expect(localStorage.getItem("google_calendar_token")).toBeNull();
+    expect(replace).toHaveBeenCalled();
+  });
+
+  it("hash lain diabaikan", () => {
+    stubLocation("http://localhost/activity-logs/calendar#section");
+    setup();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(localStorage.getItem("google_calendar_token")).toBeNull();
+  });
+  it("membersihkan access token lama dari localStorage", () => {
+    localStorage.setItem("google_calendar_token", "token-lama");
+    stubLocation("http://localhost/activity-logs/calendar");
+    setup();
+    expect(localStorage.getItem("google_calendar_token")).toBeNull();
+  });
+});
+
+describe("CalendarSync — mapping event ke subtask", () => {
+  async function openMapping(items: unknown[] = [gcalEvent()], projectList = projects) {
+    const utils = setup({ projects: projectList });
+    await syncWithSession(utils.user, items);
+    await toast();
+    await utils.user.click(screen.getByRole("button", { name: "Map ke Subtask" }));
+    return { ...utils, modal: screen.getByRole("heading", { name: "Map Event ke Subtask" }).parentElement as HTMLElement };
+  }
+
+  function captureMap() {
+    const c: { body?: Record<string, unknown>; auth?: string | null } = {};
+    server.use(
+      http.post(api("/calendar/map"), async ({ request }) => {
+        c.body = (await request.json()) as Record<string, unknown>;
+        c.auth = request.headers.get("Authorization");
+        return HttpResponse.json(successEnvelope({}), { status: 201 });
+      })
+    );
+    return c;
+  }
+
+  it("modal terisi dari event: judul, durasi dihitung (1.5), catatan dari deskripsi", async () => {
+    await openMapping();
+    expect(screen.getByText("Rapat Kickoff", { selector: "p" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Durasi (jam)")).toHaveValue(1.5);
+    expect(screen.getByLabelText("Catatan")).toHaveValue("Bahas ruang lingkup");
+    expect(screen.getByLabelText(/^Fase Proyek/)).toHaveValue("Pre-Implementation");
+  });
+
+  it("durasi: event seharian = 8 jam; selisih tidak positif = 1 jam; dibulatkan ke 0.25", async () => {
+    const first = await openMapping([{ id: "ad", summary: "Libur", start: { date: "2025-03-15" }, end: { date: "2025-03-16" } }]);
+    expect(screen.getByLabelText("Durasi (jam)")).toHaveValue(8);
+    first.unmount();
+
+    const second = await openMapping([gcalEvent({ end: { dateTime: "2025-03-15T08:00:00" } })]);
+    expect(screen.getByLabelText("Durasi (jam)")).toHaveValue(1);
+    second.unmount();
+
+    await openMapping([gcalEvent({ end: { dateTime: "2025-03-15T09:20:00" } })]);
+    expect(screen.getByLabelText("Durasi (jam)")).toHaveValue(0.25 * Math.round((20 / 60) * 4));
+  });
+
+  it("proyek tanpa daftar: peringatan 'Tidak ada proyek tersedia'", async () => {
+    await openMapping([gcalEvent()], []);
+    expect(screen.getByText("Tidak ada proyek tersedia untuk di-mapping.")).toBeInTheDocument();
+  });
+
+  it("memilih proyek menyesuaikan fase dari status; fase bisa diubah manual", async () => {
+    const { user } = await openMapping();
+    await user.selectOptions(screen.getByLabelText(/^Proyek/), "p-2");
+    expect(screen.getByLabelText(/^Fase Proyek/)).toHaveValue("Implementation");
+    await user.selectOptions(screen.getByLabelText(/^Fase Proyek/), "Post-Implementation");
+    expect(screen.getByLabelText(/^Fase Proyek/)).toHaveValue("Post-Implementation");
+  });
+
+  it("validasi Project: proyek dan subtask wajib → toast error tanpa request", async () => {
+    const hit = vi.fn();
+    server.use(http.post(api("/calendar/map"), () => { hit(); return HttpResponse.json(successEnvelope({})); }));
+    const { user } = await openMapping();
+    await user.click(screen.getByRole("button", { name: "Simpan Mapping" }));
+    expect(await screen.findByText("Proyek dan subtask wajib dipilih")).toBeInTheDocument();
+    expect(hit).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Map Event ke Subtask" })).toBeInTheDocument();
+  });
+
+  it("validasi Non-Project: subtask wajib; daftar subtask berganti dan proyek disembunyikan", async () => {
+    const { user } = await openMapping();
+    await user.click(screen.getByRole("button", { name: "Non-Project" }));
+    expect(screen.queryByLabelText(/^Proyek/)).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Training" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Assessment" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Simpan Mapping" }));
+    expect(await screen.findByText("Subtask wajib dipilih")).toBeInTheDocument();
+  });
+
+  it("berpindah Non-Project → Project mengosongkan subtask dan menampilkan lagi proyek", async () => {
+    const { user } = await openMapping();
+    await user.selectOptions(screen.getByLabelText(/^Proyek/), "p-1");
+    await user.selectOptions(screen.getByLabelText(/^Subtask/), "Assessment");
+    await user.click(screen.getByRole("button", { name: "Non-Project" }));
+    await user.click(screen.getByRole("button", { name: "Project" }));
+    expect(screen.getByLabelText(/^Proyek/)).toHaveValue(""); // project_id direset saat melewati Non-Project
+    expect(screen.getByLabelText(/^Subtask/)).toHaveValue("");
+  });
+
+  it("sukses (Project): body lengkap, modal menutup, event ditandai sudah di-mapping, toast sukses", async () => {
+    const c = captureMap();
+    const { user } = await openMapping();
+    await user.selectOptions(screen.getByLabelText(/^Proyek/), "p-1");
+    await user.selectOptions(screen.getByLabelText(/^Subtask/), "Customer Meeting");
+    await user.click(screen.getByRole("button", { name: "Simpan Mapping" }));
+
+    expect(await screen.findByText("Event berhasil di-mapping ke subtask proyek")).toBeInTheDocument();
+    expect(c.body).toEqual({
+      gcal_event_id: "ev-1",
+      work_type: "Project",
+      subtask_category: "Customer Meeting",
+      duration_hours: 1.5,
+      raw_notes: "Bahas ruang lingkup",
+      event_title: "Rapat Kickoff",
+      event_description: "Bahas ruang lingkup",
+      is_all_day: false,
+      event_start: "2025-03-15T09:00:00",
+      event_end: "2025-03-15T10:30:00",
+      project_id: "p-1",
+      project_phase: "Pre-Implementation",
+    });
+    expect(c.auth).toBe("Bearer access-SA");
+    expect(screen.queryByRole("heading", { name: "Map Event ke Subtask" })).not.toBeInTheDocument();
+    expect(screen.getByText("✓ Sudah di-mapping")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Map ke Subtask" })).not.toBeInTheDocument();
+  });
+
+  it("sukses (Non-Project): tanpa project_id/project_phase; catatan/durasi kosong menjadi undefined", async () => {
+    const c = captureMap();
+    const { user } = await openMapping([gcalEvent({ description: undefined })]);
+    await user.click(screen.getByRole("button", { name: "Non-Project" }));
+    await user.selectOptions(screen.getByLabelText(/^Subtask/), "Training");
+    await user.clear(screen.getByLabelText("Durasi (jam)"));
+    await user.click(screen.getByRole("button", { name: "Simpan Mapping" }));
+    await screen.findByText("Event berhasil di-mapping ke subtask proyek");
+    expect(c.body).not.toHaveProperty("project_id");
+    expect(c.body).not.toHaveProperty("project_phase");
+    expect(c.body).toMatchObject({ work_type: "Non-Project", subtask_category: "Training" });
+    expect(c.body!.duration_hours).toBeUndefined();
+    expect(c.body!.raw_notes).toBeUndefined();
+    expect(c.body!.event_description).toBeUndefined();
+  });
+
+  it("catatan yang diubah dikirim ter-trim", async () => {
+    const c = captureMap();
+    const { user } = await openMapping();
+    await user.selectOptions(screen.getByLabelText(/^Proyek/), "p-1");
+    await user.selectOptions(screen.getByLabelText(/^Subtask/), "Assessment");
+    await user.clear(screen.getByLabelText("Catatan"));
+    await user.type(screen.getByLabelText("Catatan"), "  baru  ");
+    await user.click(screen.getByRole("button", { name: "Simpan Mapping" }));
+    await screen.findByText("Event berhasil di-mapping ke subtask proyek");
+    expect(c.body!.raw_notes).toBe("baru");
+  });
+
+  it("menampilkan 'Mapping...' selama request", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(http.post(api("/calendar/map"), async () => { await gate; return HttpResponse.json(successEnvelope({})); }));
+    const { user } = await openMapping();
+    await user.selectOptions(screen.getByLabelText(/^Proyek/), "p-1");
+    await user.selectOptions(screen.getByLabelText(/^Subtask/), "Assessment");
+    await user.click(screen.getByRole("button", { name: "Simpan Mapping" }));
+    expect(await screen.findByRole("button", { name: /Mapping\.\.\./ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Batal" })).toBeDisabled();
+    release();
+    await screen.findByText("✓ Sudah di-mapping");
+  });
+
+  it("error server: toast error, modal tetap terbuka, event belum ditandai", async () => {
+    server.use(http.post(api("/calendar/map"), () => HttpResponse.json(errorEnvelope("Event sudah pernah di-mapping"), { status: 409 })));
+    const { user } = await openMapping();
+    await user.selectOptions(screen.getByLabelText(/^Proyek/), "p-1");
+    await user.selectOptions(screen.getByLabelText(/^Subtask/), "Assessment");
+    await user.click(screen.getByRole("button", { name: "Simpan Mapping" }));
+    expect(await screen.findByText("Event sudah pernah di-mapping")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Map Event ke Subtask" })).toBeInTheDocument();
+    expect(screen.queryByText("✓ Sudah di-mapping")).not.toBeInTheDocument();
+  });
+  it("failure remains attached to the affected mapping operation and can be retried by the user", async () => {
+    const failedOperation = calendarOperation({
+      action: "map_event_to_project",
+      project_id: "p-1",
+      status: "failed",
+      attempts: [{
+        attempt: 1,
+        started_at: "2025-03-15T10:00:00Z",
+        finished_at: "2025-03-15T10:00:02Z",
+        outcome: "The Calendar event was not mapped.",
+        actionable_error: "Check the activity log, then review the event details before trying again.",
+      }],
+      outcome: "The Calendar event was not mapped.",
+      actionable_error: "Check the activity log, then review the event details before trying again.",
+      context: { gcal_event_id: "ev-1", work_type: "Project", activity_log_id: "log-1" },
+    });
+    server.use(
+      http.post(api("/calendar/map"), () =>
+        HttpResponse.json(errorEnvelope("Mapping was not saved", { integration_operation: failedOperation }), { status: 400 }),
+      ),
+    );
+    const { user } = await openMapping();
+    await user.selectOptions(screen.getByLabelText(/^Proyek/), "p-1");
+    await user.selectOptions(screen.getByLabelText(/^Subtask/), "Assessment");
+    await user.click(screen.getByRole("button", { name: "Simpan Mapping" }));
+    expect(await screen.findByText("Status operasi: Gagal")).toBeInTheDocument();
+    expect(screen.getByText(/Check the activity log, then review the event details before trying again\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Simpan Mapping" })).toBeEnabled();
+    expect(screen.queryByText("✓ Sudah di-mapping")).not.toBeInTheDocument();
+  });
+
+  it("successful mapping displays its persisted operation result", async () => {
+    const completedOperation = calendarOperation({
+      action: "map_event_to_project",
+      project_id: "p-1",
+      context: { gcal_event_id: "ev-1", work_type: "Project", activity_log_id: "log-1" },
+      outcome: "Calendar event ev-1 was mapped to the project activity log.",
+      attempts: [{
+        status: "succeeded",
+        started_at: "2025-03-15T10:00:00Z",
+        finished_at: "2025-03-15T10:00:02Z",
+        outcome: "Calendar event ev-1 was mapped to the project activity log.",
+        actionable_error: null,
+      }],
+    });
+    server.use(
+      http.post(api("/calendar/map"), () =>
+        HttpResponse.json(successEnvelope({ integration_operation: completedOperation }), { status: 201 }),
+      ),
+    );
+    const { user } = await openMapping();
+    await user.selectOptions(screen.getByLabelText(/^Proyek/), "p-1");
+    await user.selectOptions(screen.getByLabelText(/^Subtask/), "Assessment");
+    await user.click(screen.getByRole("button", { name: "Simpan Mapping" }));
+    expect(await screen.findByText("Status operasi: Berhasil")).toBeInTheDocument();
+    expect(screen.getByText(/Calendar event ev-1 was mapped to the project activity log\./)).toBeInTheDocument();
+    expect(screen.getByText("Proyek: p-1")).toBeInTheDocument();
+  });
+
+  it("Batal menutup modal tanpa request", async () => {
+    const { user } = await openMapping();
+    await user.click(within(screen.getByRole("heading", { name: "Map Event ke Subtask" }).parentElement!).getByRole("button", { name: "Batal" }));
+    expect(screen.queryByRole("heading", { name: "Map Event ke Subtask" })).not.toBeInTheDocument();
+  });
+});
+
+describe("CalendarSync — toast", () => {
+  it("toast hilang otomatis setelah 3 detik", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: NOW });
+    stubLocation("http://localhost/x#gcal_token=t");
+    setup();
+    expect(await toast()).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});

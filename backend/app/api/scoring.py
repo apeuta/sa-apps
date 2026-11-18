@@ -3,40 +3,46 @@ API endpoints untuk BANT Scoring.
 Menyediakan endpoints untuk scoring manual dan mengambil hasil scoring proyek.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import status as status_konst
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import ensure_project_access, get_current_user, require_privileged
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.response import success_response
-from app.schemas.scoring import ManualBANTInput
-from app.services.scoring_engine import scoring_engine
+from app.schemas.scoring import BANTOverrideInput
+from app.services.requirement_generator import generate_pending_requirement
+from app.services.scoring_engine import OVERRIDE_ALLOWED_STATES, scoring_engine
 
 router = APIRouter(prefix="/projects", tags=["Scoring"])
 
 
 @router.post(
     "/{project_id}/score-manual",
-    summary="Manual BANT Scoring",
-    description="Input skor BANT manual dari Sales (4 kriteria, skala 0-25 per kriteria).",
+    summary="Override Skor BANT (Lead_SA/Admin)",
+    description=(
+        "Override skor BANT oleh Lead_SA/Admin: 4 sub-skor (0-25) + alasan wajib. "
+        "Hanya untuk proyek Intake dengan qualification_state Need Clarification / Manual Review. "
+        "Gate 60 diterapkan dan perubahan dicatat di audit log."
+    ),
 )
 async def score_manual(
     project_id: str,
-    body: ManualBANTInput,
-    current_user: User = Depends(get_current_user),
+    body: BANTOverrideInput,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_privileged),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Endpoint scoring BANT manual.
+    Override skor BANT.
 
-    Sales mengisi 4 kriteria BANT (Budget, Authority, Need, Timeline)
-    dengan skala 0-25 per kriteria. Total skor = jumlah 4 kriteria (0-100).
-    Threshold: >= 60 → Pending Assignment, < 60 → Need Clarification.
+    Total skor = jumlah 4 sub-skor (0-100) dan menimpa skor final. Threshold:
+    >= 60 → Awaiting Assignment (Qualified), < 60 → Intake + Need Clarification. Nilai lama/baru,
+    pelaku, dan alasan ditulis ke audit log dalam transaksi yang sama.
     """
-    # Validasi proyek ada
     result = await db.execute(select(Project).where(Project.id_project == project_id))
     project = result.scalar_one_or_none()
 
@@ -46,56 +52,37 @@ async def score_manual(
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
 
-    # Authorization write-set: Sales PIC, assigned SA, atau privileged.
-    # Collaborator TIDAK diizinkan menjalankan scoring manual, jadi kita cek
-    # eksplisit di sini (bukan via ensure_project_access yang mengizinkan collaborator).
-    is_privileged = current_user.role in ("Lead_SA", "Admin")
-    is_sales_pic = project.sales_pic == current_user.id
-    is_assigned_sa = project.assigned_sa == current_user.id
-
-    if not (is_privileged or is_sales_pic or is_assigned_sa):
+    if (
+        project.status != status_konst.INTAKE
+        or project.qualification_state not in OVERRIDE_ALLOWED_STATES
+    ):
         raise HTTPException(
-            status_code=403,
-            detail="Anda tidak memiliki akses untuk melakukan scoring manual pada proyek ini.",
+            status_code=400,
+            detail=(
+                f"Override skor hanya untuk proyek Intake dengan qualification_state "
+                f"Need Clarification atau Manual Review. Keadaan proyek saat ini: "
+                f"status '{project.status}', qualification_state "
+                f"'{project.qualification_state}'."
+            ),
         )
 
-    # Lakukan scoring manual
-    bant_result = await scoring_engine.score_manual(
+    bant_result = await scoring_engine.override_score(
         project_id=project_id,
         budget=body.budget,
         authority=body.authority,
         need=body.need,
         timeline=body.timeline,
+        reason=body.reason,
+        performed_by=current_user.id,
         db=db,
     )
-
-    # Simpan metadata deskriptif ke bant_detail (jika ada)
-    # Metadata ini ditampilkan di halaman detail proyek
-    metadata = {}
-    if body.budget_detail and body.budget_detail.mrr is not None:
-        metadata["budget_mrr"] = body.budget_detail.mrr
-    if body.authority_detail:
-        if body.authority_detail.name:
-            metadata["pic_name"] = body.authority_detail.name
-        if body.authority_detail.position:
-            metadata["pic_position"] = body.authority_detail.position
-        if body.authority_detail.email:
-            metadata["pic_email"] = body.authority_detail.email
-    if body.need_detail:
-        metadata["need_description"] = body.need_detail
-    if body.timeline_detail:
-        metadata["timeline_target"] = body.timeline_detail
-
-    if metadata:
-        # Merge dengan existing bant_detail (sub-skor numerik)
-        existing_detail = project.bant_detail or {}
-        existing_detail.update(metadata)
-        project.bant_detail = existing_detail
-        await db.commit()
+    if project.requirement_generation_status == "pending":
+        # Override membuat proyek lolos gate pertama kali → generate Requirement (#33).
+        background_tasks.add_task(generate_pending_requirement, project_id)
 
     return success_response(
         data=bant_result.model_dump(),
-        message=f"BANT scoring manual berhasil. Total skor: {bant_result.total_score}.",
+        message=f"Override skor BANT berhasil. Total skor: {bant_result.total_score}.",
     )
 
 
@@ -123,6 +110,9 @@ async def get_bant_result(
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
 
+    # Akses BACA (spec #87): sebelum membaca/mengolah data proyek apa pun
+    await ensure_project_access(db, project, current_user)
+
     # Cek apakah sudah punya skor BANT
     if project.bant_score is None and project.bant_detail is None:
         return success_response(
@@ -144,6 +134,7 @@ async def get_bant_result(
         "sub_scores": sub_scores,
         "use_case_tags": project.use_case_tags or [],
         "status": project.status,
+        "qualification_state": project.qualification_state,
         "feedback": None,
     }
 
@@ -165,7 +156,7 @@ async def get_bant_result(
 @router.get(
     "/{project_id}/recommendations",
     summary="Get Similar Project Recommendations",
-    description="Mencari proyek Closed-Win yang mirip berdasarkan use_case_tags (RAG).",
+    description="Mencari proyek Won yang mirip berdasarkan use_case_tags (RAG).",
 )
 async def get_recommendations(
     project_id: str,
@@ -174,7 +165,7 @@ async def get_recommendations(
 ):
     """
     Endpoint RAG recommendation.
-    Mencari proyek Closed-Win yang memiliki kecocokan use_case_tags.
+    Mencari proyek Won yang memiliki kecocokan use_case_tags.
     Diurutkan descending berdasarkan jumlah tag cocok, max 5 hasil.
     Menyertakan info dokumen (tipe, link GDrive) dari proyek referensi.
     """
@@ -187,6 +178,9 @@ async def get_recommendations(
             status_code=404,
             detail=f"Proyek dengan ID '{project_id}' tidak ditemukan.",
         )
+
+    # Akses BACA (spec #87): sebelum membaca/mengolah data proyek apa pun
+    await ensure_project_access(db, project, current_user)
 
     use_case_tags = project.use_case_tags or []
 
@@ -204,7 +198,7 @@ async def get_recommendations(
         db=db,
     )
 
-    # Req 15.6: Tidak ada proyek Closed-Win dengan tag cocok
+    # Req 15.6: Tidak ada proyek Won dengan tag cocok
     if not recommendations:
         return success_response(
             data=[],

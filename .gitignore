@@ -64,3 +64,23 @@ Redshift_Beginner_Presentation_Guide.md
 Redshift_Beginner_Slide_Deck.md
 Redshift_Presentation_Outline.md
 .kiro/steering/
+
+# Laporan cakupan test frontend
+frontend/coverage/
+coverage/
+
+# Artefak cakupan test
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+coverage.json
+coverage-*.data
+coverage-*.xml
+cov-*.data
+cov-in/
+gerbang.txt
+
+# Secret lokal: env turunan (.env.local, .env.drive-live, dst.); template tetap di-track.
+.env.*
+!.env.example

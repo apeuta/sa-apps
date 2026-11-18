@@ -7,11 +7,15 @@ Format .env untuk list fields:
 - CORS_ORIGINS=http://localhost:3000,http://example.com  (comma-separated)
 """
 
-from pydantic import field_validator
+import json
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 # Placeholder lama yang tidak boleh dipakai sebagai secret produksi.
 _INSECURE_JWT_PLACEHOLDER = "change-this-secret-key-in-production"
+# Peran user yang valid; harus selaras dengan CHECK `chk_users_role` (app/models/user.py).
+VALID_ROLES = ("Sales", "Product", "SA", "Lead_SA")
 # Nilai ENVIRONMENT yang valid.
 _VALID_ENVIRONMENTS = {"development", "staging", "production"}
 
@@ -42,6 +46,10 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 100
+    # Jumlah proxy tepercaya di depan backend yang MENAMBAH entri ke X-Forwarded-For.
+    # 0 (default) = XFF diabaikan, IP klien = peer socket. N > 0 = IP klien = entri ke-N dari
+    # KANAN rantai XFF (entri kiri bisa dipalsukan klien). Lihat deployment.md.
+    TRUSTED_PROXY_HOPS: int = Field(default=0, ge=0)
 
     # SLA Scheduler — background scheduler internal ringan (ADR 0003).
     # Menjalankan process_sla_actions() secara periodik saat backend naik.
@@ -65,7 +73,9 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 24
     JWT_REFRESH_EXPIRE_HOURS: int = 168  # 7 hari untuk refresh token
     ALLOWED_DOMAINS: str = ""  # Comma-separated: "domain1.com,domain2.com"
-    ROLE_MAPPING: str = "{}"  # JSON string: {"email@domain.com": "Admin", "*@domain.com": "SA"}
+    ROLE_MAPPING: str = "{}"  # JSON string: {"email@domain.com": "Lead_SA", "*@domain.com": "SA"}
+    # Email (comma-separated, tanpa wildcard) yang menjadi admin (`is_admin`) saat pertama login.
+    ADMIN_EMAILS: str = ""
 
     # Frontend
     FRONTEND_URL: str = "http://localhost:3000"  # URL frontend untuk redirect setelah OAuth
@@ -77,13 +87,14 @@ class Settings(BaseSettings):
 
     # LLM Provider — Abstraction layer untuk multi-provider AI
     LLM_PROVIDER: str = "gemini"  # Provider aktif: gemini, openai, anthropic
-    LLM_MODEL_NAME: str = "gemini-1.5-flash"  # Model default yang digunakan
+    LLM_MODEL_NAME: str = "gemini-3.8-flash"  # Model default yang digunakan
     LLM_API_ENDPOINT: str = "https://generativelanguage.googleapis.com/v1"
     LLM_TIMEOUT_SECONDS: int = 30  # Timeout per request ke LLM
     LLM_MAX_RETRIES: int = 3  # Jumlah retry saat gagal
 
     # Guardrails LLM
     LLM_MAX_INPUT_CHARS: int = 20000  # batas karakter input teks
+    LLM_MAX_SOURCE_CHARS: int = 60000  # anggaran karakter total sumber untuk generate Requirement
     LLM_MAX_DOCUMENT_BYTES: int = 10_485_760  # 10 MB batas byte dokumen
     GUARDRAIL_PII_DETECTION_ENABLED: bool = True  # toggle PII_Detector
 
@@ -92,9 +103,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
 
-    # Google Drive
+    # Google Drive. Parent must be a folder in a Shared Drive writable by the service account.
     GDRIVE_SERVICE_ACCOUNT_KEY: str = ""
-
+    GDRIVE_PARENT_FOLDER_ID: str = ""
     # Google Calendar
     GCAL_WEBHOOK_ENDPOINT: str = ""
 
@@ -115,6 +126,35 @@ class Settings(BaseSettings):
                 f"ENVIRONMENT tidak valid: harus salah satu dari {sorted(_VALID_ENVIRONMENTS)}."
             )
         return normalized
+
+    @field_validator("ROLE_MAPPING")
+    @classmethod
+    def _validate_role_mapping(cls, v: str) -> str:
+        """
+        Fail fast bila ada nilai peran di luar VALID_ROLES. Peran asing melanggar CHECK
+        `chk_users_role` saat user baru disimpan dan membuat login 500.
+
+        Hanya NILAI PERAN pada objek JSON yang diperiksa. Kosong, JSON rusak, atau bukan objek
+        tetap diterima (dianggap mapping kosong oleh `AuthService.role_mapping`); compose.yaml
+        meneruskan string kosong bila variabel tidak diisi.
+        """
+        try:
+            dimuat = json.loads(v)
+        except (json.JSONDecodeError, TypeError):
+            return v
+        if not isinstance(dimuat, dict):
+            return v
+        salah = [
+            f"{kunci!r}: {peran!r}"
+            for kunci, peran in dimuat.items()
+            if not isinstance(peran, str) or peran not in VALID_ROLES
+        ]
+        if salah:
+            raise ValueError(
+                f"ROLE_MAPPING berisi peran tidak valid ({'; '.join(salah)}). "
+                f"Peran yang valid: {', '.join(VALID_ROLES)} (huruf besar-kecil harus sama)."
+            )
+        return v
 
     @field_validator("JWT_SECRET_KEY")
     @classmethod
@@ -141,6 +181,11 @@ class Settings(BaseSettings):
         Hard block: produksi selalu False apa pun flag DEMO_MODE.
         """
         return self.DEMO_MODE and self.ENVIRONMENT != "production"
+
+    @property
+    def admin_emails_list(self) -> list[str]:
+        """Parse ADMIN_EMAILS comma-separated menjadi list email huruf kecil."""
+        return [e.strip().lower() for e in self.ADMIN_EMAILS.split(",") if e.strip()]
 
     @property
     def allowed_domains_list(self) -> list[str]:

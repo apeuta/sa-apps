@@ -4,11 +4,13 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuthStore } from "@/store/auth";
+import { setAccessToken } from "@/lib/fetcher";
 
 /**
  * Halaman Demo Login Portal SA
  *
- * Menampilkan tombol demo login per role (Sales, SA, Lead SA, Admin).
+ * Menampilkan tombol demo login per role (Sales, Product, SA, Lead SA, Admin).
+ * Persona "Admin" = SA dengan flag admin (ADR 0012), bukan role tersendiri.
  * Klik tombol demo → POST ke /auth/demo-login → simpan token → redirect dashboard.
  *
  * Halaman ini terpisah dari /login (yang hanya menampilkan Google OAuth).
@@ -29,6 +31,11 @@ const DEMO_ROLES = [
     color: "bg-blue-600 hover:bg-blue-700 focus:ring-blue-500",
   },
   {
+    role: "Product",
+    label: "Login sebagai Product Manager",
+    color: "bg-cyan-600 hover:bg-cyan-700 focus:ring-cyan-500",
+  },
+  {
     role: "SA",
     label: "Login sebagai SA",
     color: "bg-green-600 hover:bg-green-700 focus:ring-green-500",
@@ -37,11 +44,6 @@ const DEMO_ROLES = [
     role: "Lead_SA",
     label: "Login sebagai Lead SA",
     color: "bg-purple-600 hover:bg-purple-700 focus:ring-purple-500",
-  },
-  {
-    role: "Admin",
-    label: "Login sebagai Admin",
-    color: "bg-red-600 hover:bg-red-700 focus:ring-red-500",
   },
 ] as const;
 
@@ -83,6 +85,7 @@ function DemoContent() {
 
       const response = await fetch(`${apiUrl}/auth/demo-login`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role }),
       });
@@ -105,14 +108,7 @@ function DemoContent() {
 
       // Simpan token ke localStorage
       const accessToken = tokens.access_token;
-      const refreshToken = tokens.refresh_token;
-
-      if (accessToken) {
-        localStorage.setItem("access_token", accessToken);
-      }
-      if (refreshToken) {
-        localStorage.setItem("refresh_token", refreshToken);
-      }
+      if (accessToken) setAccessToken(accessToken);
 
       // Simpan user info ke Zustand auth store
       if (userData) {
@@ -121,6 +117,7 @@ function DemoContent() {
           email: userData.email,
           full_name: userData.name || userData.full_name,
           role: userData.role,
+          is_admin: userData.is_admin === true,
           avatar_url: userData.avatar_url,
         });
       }

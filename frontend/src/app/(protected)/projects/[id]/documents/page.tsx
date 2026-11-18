@@ -1,18 +1,22 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { Fragment, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
 import { useAuthStore } from "@/store/auth";
 import { DocumentForm } from "@/components/DocumentForm";
-import { DQNumberInput } from "@/components/DQNumberInput";
 import { RAGPanel } from "@/components/RAGPanel";
+import { RequirementItemsView } from "@/components/RequirementItemsView";
+import { RequirementSourceChangedBanner } from "@/components/RequirementSourceChangedBanner";
+import { RequirementRegenerateSection } from "@/components/RequirementRegenerateSection";
+import { RequirementItemsEditor } from "@/components/RequirementItemsEditor";
+import { isPrivileged } from "@/lib/roles";
+import { useAksesProyek } from "@/lib/useAksesProyek";
 import {
   createDocument,
   getProjectDocuments,
   updateDocumentStatus,
-  updateDQNumber,
   type Document,
   type DocStatus,
   type CreateDocumentInput,
@@ -68,6 +72,7 @@ interface ProjectDetail {
   status: string;
   dq_number: string | null;
   use_case_tags?: string[];
+  assigned_sa?: { id: string | null } | null;
 }
 
 export default function DocumentsPage() {
@@ -79,7 +84,6 @@ export default function DocumentsPage() {
   const [showForm, setShowForm] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState<string | null>(null);
-  const [isDQSubmitting, setIsDQSubmitting] = useState(false);
   const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   // Fetch daftar dokumen
@@ -96,8 +100,14 @@ export default function DocumentsPage() {
   const {
     data: project,
     error: projError,
-    mutate: mutateProject,
   } = useSWR<ProjectDetail>(`/projects/${projectId}`, fetcher);
+
+  // Hak tulis per hubungan (lib/akses): backend tetap penentu. Edit butir Requirement =
+  // KELOLA_REQUIREMENT (SA ditugaskan utama/tambahan, Lead_SA, Admin).
+  const { bisa } = useAksesProyek(projectId);
+  const canEditRequirement = bisa("kelola_requirement");
+  const canAddDocument = bisa("tulis"); // TingkatAkses.TULIS
+  const canManageStatus = bisa("kelola"); // TingkatAkses.KELOLA
 
   // Toast helper
   const showToast = useCallback((type: "success" | "error", message: string) => {
@@ -147,28 +157,8 @@ export default function DocumentsPage() {
     [mutateDocuments, showToast]
   );
 
-  /**
-   * Handle submit DQ Number
-   */
-  const handleDQSubmit = useCallback(
-    async (dqNumber: string) => {
-      setIsDQSubmitting(true);
-      try {
-        await updateDQNumber(projectId, dqNumber);
-        await mutateProject();
-        showToast("success", "DQ Number berhasil disimpan");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Gagal menyimpan DQ Number";
-        showToast("error", message);
-      } finally {
-        setIsDQSubmitting(false);
-      }
-    },
-    [projectId, mutateProject, showToast]
-  );
-
   // Cek apakah user bisa mengubah status dokumen Final
-  const canChangeFinalStatus = user?.role === "Lead_SA" || user?.role === "Admin";
+  const canChangeFinalStatus = isPrivileged(user);
 
   // Cek apakah proyek sudah punya use_case_tags (sudah scoring)
   const projectHasTags = !!(project?.use_case_tags?.length);
@@ -200,6 +190,11 @@ export default function DocumentsPage() {
 
       {/* DQ Number Section — dipindahkan ke halaman detail proyek */}
 
+      <RequirementRegenerateSection
+        projectId={projectId}
+        onChanged={() => mutateDocuments()}
+      />
+
       {/* Daftar Dokumen */}
       <div className="bg-white border border-neutral-200 rounded-lg">
         {/* Header section */}
@@ -207,15 +202,17 @@ export default function DocumentsPage() {
           <h2 className="text-base font-semibold text-neutral-800">
             Daftar Dokumen
           </h2>
-          <button
-            onClick={() => setShowForm(true)}
-            className="px-4 py-2 rounded-lg font-medium text-white text-sm
-                       bg-primary-600 hover:bg-primary-700 active:bg-primary-800
-                       transition-colors duration-100 min-h-[44px]"
-            aria-label="Tambah dokumen baru"
-          >
-            + Tambah Dokumen
-          </button>
+          {canAddDocument && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="px-4 py-2 rounded-lg font-medium text-white text-sm
+                         bg-primary-600 hover:bg-primary-700 active:bg-primary-800
+                         transition-colors duration-100 min-h-[44px]"
+              aria-label="Tambah dokumen baru"
+            >
+              + Tambah Dokumen
+            </button>
+          )}
         </div>
 
         {/* Loading skeleton */}
@@ -277,11 +274,11 @@ export default function DocumentsPage() {
                 {documents.map((doc) => {
                   const nextStatus = getNextStatus(doc.status);
                   const canChange =
-                    doc.status === "Final" ? canChangeFinalStatus : true;
+                    doc.status === "Final" ? canChangeFinalStatus : canManageStatus;
 
                   return (
+                    <Fragment key={doc.id_doc}>
                     <tr
-                      key={doc.id_doc}
                       className="border-b border-neutral-50 hover:bg-neutral-50 transition-colors"
                     >
                       {/* Tipe dokumen */}
@@ -298,8 +295,9 @@ export default function DocumentsPage() {
                         </span>
                       </td>
 
-                      {/* Link GDrive — clickable */}
+                      {/* Link GDrive — kosong untuk Requirement (konten turunan AI) */}
                       <td className="px-4 py-3">
+                        {doc.gdrive_link ? (
                         <a
                           href={doc.gdrive_link}
                           target="_blank"
@@ -311,6 +309,9 @@ export default function DocumentsPage() {
                           <span className="truncate">Buka di Drive</span>
                           <span aria-hidden="true">↗</span>
                         </a>
+                        ) : (
+                          <span className="text-xs text-neutral-400">—</span>
+                        )}
                       </td>
 
                       {/* Catatan */}
@@ -351,6 +352,30 @@ export default function DocumentsPage() {
                         )}
                       </td>
                     </tr>
+                    {/* Requirement: butir per kategori, read-only */}
+                    {doc.doc_type === "Requirement" && (
+                      <tr className="border-b border-neutral-50 bg-neutral-50/50">
+                        <td colSpan={5} className="px-4 py-3">
+                          {doc.source_changed && canEditRequirement && (
+                            <RequirementSourceChangedBanner
+                              projectId={projectId}
+                              onChanged={() => mutateDocuments()}
+                            />
+                          )}
+                          {canEditRequirement && doc.status !== "Final" ? (
+                            <RequirementItemsEditor
+                              projectId={projectId}
+                              doc={doc}
+                              onChanged={() => mutateDocuments()}
+                              onError={(msg) => showToast("error", msg)}
+                            />
+                          ) : (
+                            <RequirementItemsView doc={doc} />
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>

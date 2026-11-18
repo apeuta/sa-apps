@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import useSWR from "swr";
 import { fetcher, apiRequest } from "@/lib/fetcher";
+import { useAksesProyek } from "@/lib/useAksesProyek";
 
 /**
  * Komponen Project Story — timeline activity log untuk satu proyek.
@@ -63,6 +64,9 @@ interface ProjectStoryProps {
 const PAGE_SIZE = 20;
 
 export function ProjectStory({ projectId }: ProjectStoryProps) {
+  // Polish ulang = TingkatAkses.TULIS (SA ditugaskan, contributor, Lead_SA, Admin); PIC, viewer,
+  // dan pengguna tak terkait boleh membaca Story tetapi tidak menulis.
+  const bisaMenulis = useAksesProyek(projectId).bisa("tulis");
   const [filterCategory, setFilterCategory] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -289,7 +293,7 @@ export function ProjectStory({ projectId }: ProjectStoryProps) {
                     </div>
                   )}
                 </div>
-              ) : (
+              ) : bisaMenulis ? (
                 <button
                   type="button"
                   onClick={() => handlePolish(log.id_log)}
@@ -300,7 +304,7 @@ export function ProjectStory({ projectId }: ProjectStoryProps) {
                 >
                   {polishingIds.has(log.id_log) ? "Memproses..." : "Polish Ulang"}
                 </button>
-              )}
+              ) : null}
             </li>
           ))}
         </ul>

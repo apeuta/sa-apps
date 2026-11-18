@@ -23,9 +23,9 @@ Tool yang dikelola saat ini:
 | pnpm | 12 |
 | uv | 0.13 |
 
-Versi di-pin ke major agar selaras dengan Dockerfile. **Docker tetap menjadi sumber kebenaran untuk build produksi** (`python:3.12-slim`, `node:26-alpine`); mise menyediakan toolchain lokal yang setara untuk development. Ketika Anda menaikkan versi tool, perbarui `mise.toml` dan Dockerfile terkait bersamaan agar tidak drift.
+Versi di-pin ke major agar selaras dengan Dockerfile. **Docker tetap menjadi sumber kebenaran untuk build produksi** (`python:3.14-slim`, `node:26-alpine`); mise menyediakan toolchain lokal yang setara untuk development. Ketika Anda menaikkan versi tool, perbarui `mise.toml` dan Dockerfile terkait bersamaan agar tidak drift.
 
-Python **tidak** dikelola mise. Interpreter dikelola uv dan versinya mengikuti `backend/.python-version` (3.12); `uv sync` di `backend/` mengunduhnya otomatis. Saat menaikkan versi Python, ubah `backend/.python-version` dan Dockerfile bersamaan.
+Python **tidak** dikelola mise. Interpreter dikelola uv dan versinya mengikuti `backend/.python-version` (3.14); `uv sync` di `backend/` mengunduhnya otomatis. Saat menaikkan versi Python, ubah `backend/.python-version` dan Dockerfile bersamaan.
 
 pnpm adalah package manager untuk `frontend/` (lockfile `pnpm-lock.yaml`). Dikelola via mise untuk development lokal; di Docker dipasang eksplisit via `npm i -g pnpm@12` (tanpa corepack, versi di-pin sama dengan mise).
 
@@ -132,6 +132,7 @@ Stage file secara spesifik daripada semuanya sekaligus, agar perubahan yang tida
 2. Jaga judul PR tetap ringkas (gaya conventional-commit) dan gunakan deskripsi untuk meringkas:
    - apa yang berubah dan mengapa,
    - apa yang telah diverifikasi (build, test, pengecekan manual),
+   - **perilaku baru atau yang diubah beserta nama test yang melindunginya** (lihat "Test-first" di bawah),
    - apa pun yang sengaja ditinggalkan atau terblokir.
 3. Sebuah PR harus lolos verification gate (di bawah) sebelum ditandai siap di-review.
 4. Minimal satu review sebelum merge. Tanggapi feedback review dengan commit baru (hindari force-push menimpa review yang sedang berjalan); squash saat merge jika history-nya noisy.
@@ -139,16 +140,98 @@ Stage file secara spesifik daripada semuanya sekaligus, agar perubahan yang tida
 
 ---
 
+## Test-first
+
+Setiap perilaku baru (fungsi, method, endpoint, komponen, aturan bisnis, cabang kondisi) memiliki test yang **ditulis lebih dulu** dan terbukti gagal sebelum kodenya ditulis. Dengan begitu, saat PR masuk ke `main`, syarat lulusnya sudah jelas dan sudah terbukti. Aturan lengkap untuk agen ada di [`AGENTS.md`](AGENTS.md) bagian "Test-first"; kontrak mutu test (ambang cakupan, larangan melemahkan test) di [`CONSTRAINTS.md`](CONSTRAINTS.md).
+
+Alur kerja:
+
+1. **Merah** — tulis test untuk perilaku yang dimaksud, jalankan, dan pastikan gagal karena alasan yang benar (bukan salah import atau salah setup). Bug fix dimulai dari test regresi yang mereproduksi bug.
+2. **Hijau** — tulis kode seminimal mungkin sampai test lolos.
+3. **Refaktor** — rapikan dengan test tetap hijau. Refaktor murni tidak boleh mengubah test yang ada.
+
+Pilih jenis test sesuai risikonya:
+
+| Yang diubah | Jenis test |
+| ----------- | ---------- |
+| Logika murni, validasi, perhitungan | Unit (backend tanpa DB; frontend `lib`/store) |
+| SQL, constraint, authz per peran, transaksi | Integrasi di Postgres sungguhan (`-m integration`) |
+| Perubahan schema | Test migration (upgrade, downgrade, constraint) |
+| UI dan alur pengguna | React Testing Library + MSW |
+| Layanan eksternal (Gemini, Drive, Gmail, Calendar) | Fake di boundary; tidak pernah memanggil layanan sungguhan |
+
+Pengecualian hanya untuk perubahan dokumentasi murni atau konfigurasi tanpa perilaku; sebutkan alasannya di deskripsi PR. Untuk kode yang sulit diuji, ubah desainnya agar bisa diuji.
+
+Yang ditegakkan CI hari ini: semua test lolos dan cakupan **total** baris ≥ 90% / cabang ≥ 80%. Angka total tidak menjamin tiap perubahan membawa test-nya, jadi **reviewer memeriksa checklist test di template PR** dan boleh menolak PR yang perilaku barunya belum terlindungi.
+
+---
+
 ## Verification Gate
 
-Belum ada CI otomatis (**CI direncanakan** — lihat daftar lintas-fitur di [`docs/ROADMAP.md`](docs/ROADMAP.md)). Sampai itu ada, verifikasi dilakukan manual dan menjadi tanggung jawab author sebelum meminta review:
+CI (backend dan frontend) ada di [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (lihat bagian "CI" di bawah); gerbang cakupan di sana memblok job yang gagal. Verifikasi manual tetap menjadi tanggung jawab author sebelum meminta review:
 
 - **Backend** — test suite lolos dan app bisa di-import/start dengan bersih. Setup test dan dependency ada di `backend/pyproject.toml`; test ada di `backend/tests/`.
-- **Frontend** — proyek lolos type-check dan build tanpa error (`pnpm install`, lalu `pnpm run lint` dan `pnpm run build`). Script ada di `frontend/package.json`.
+- **Frontend** — proyek lolos type-check dan build tanpa error (`pnpm install --frozen-lockfile`, lalu `pnpm exec tsc --noEmit`, `pnpm test:coverage`, dan `pnpm run build`; `pnpm lint` tidak berfungsi di Next 16). Script ada di `frontend/package.json`.
 - **Full stack** — jika perubahan memengaruhi runtime wiring (migration, env var, service startup), konfirmasi stack bisa naik via Docker Compose dan endpoint `/health` melaporkan healthy.
 - **Pengecekan sesuai scope** — verifikasi perubahan terhadap perilaku yang dimaksud, bukan sekadar command keluar tanpa error. Untuk perubahan UI, cek perilakunya di browser; untuk perubahan logika, jalankan code path terkait atau test-nya.
 
 Sebuah perubahan belum "selesai" hanya karena command berjalan tanpa error. Perubahan selesai ketika terbukti memenuhi tujuannya.
+
+
+### Loop verifikasi bertingkat (hemat waktu dan konteks)
+
+Jalankan tingkat terkecil yang cukup, dan naik hanya saat tingkat di bawahnya hijau:
+
+1. **Merah/hijau**: hanya test yang berubah. `mise run verify-backend tests/test_x.py::test_y` (tambahkan `--integration` untuk test integrasi) atau `mise run verify-frontend src/.../x.test.tsx`.
+2. **Selesai satu bagian**: satu direktori atau berkas test terkait, plus `tsc` untuk frontend.
+3. **Sebelum lapor atau buka PR, sekali saja**: `mise run verify-backend -- --full` (unit + integrasi + gerbang cakupan gabungan dan gerbang cakupan diff, sama dengan CI) dan `mise run verify-frontend -- --full` (tsc + cakupan + cakupan diff + build). Gerbang diff membandingkan dengan `origin/main`; `git fetch origin` dulu.
+
+Jangan menjalankan `--cov` atau suite penuh di tiap iterasi; CI menegakkan gerbang cakupan. Task `mise` menulis output penuh ke log dan hanya menampilkan ringkasan atau ekor kegagalan. `new-worktree` menggantikan langkah manual di `docs/agents/worktree-dan-delegasi.md`: `mise run new-worktree <type> <slug>`. Argumen task diteruskan setelah `--`.
+
+### Membaca kode dengan hemat
+
+- Cari dulu (`grep -n`, pencarian simbol), lalu baca rentang baris yang relevan. Jangan mencetak berkas besar utuh (`cat`, `sed -n` tanpa batas): test integrasi, `conftest.py`, dan komponen `tsx` mudah melewati 20 KB.
+- Batasi output perintah (`| head -80`, `-q`, `--tb=short`).
+- Untuk fixture dan helper test backend, mulai dari [`backend/tests/README.md`](backend/tests/README.md).
+- Untuk tiket, ambil secukupnya: `gh issue view N --json title,body`. Jangan menarik ulang tiket induk yang sudah diringkas di brief.
+
+### CI (backend dan frontend)
+
+Workflow `CI` berjalan pada pull request, push ke branch selain `main`, dan manual (`workflow_dispatch`). Run lama pada branch yang sama dibatalkan otomatis. Tidak ada secret yang dibutuhkan.
+
+- **Backend — test unit**: `pytest` tanpa DB, dengan cakupan baris+cabang.
+- **Backend — test integrasi (Postgres 18)**: `pytest -m integration` terhadap service container `postgres:18-alpine`.
+- **Backend — ringkasan cakupan gabungan**: menggabungkan cakupan unit + integrasi dan menampilkannya per modul di tab **Summary** run (juga artifact `coverage-xml-gabungan`). Langkah **Gerbang cakupan** di job ini **memblok**: job gagal bila cakupan gabungan baris < 90% atau cabang < 80% (dua ambang terpisah, `backend/scripts/cakupan_gerbang.py`). Jadikan job ini required check di branch protection. Cara membaca kegagalan: [`CONSTRAINTS.md`](CONSTRAINTS.md) bagian 6.
+
+- **Frontend — tsc, test + cakupan, build**: `pnpm install --frozen-lockfile` (Node 26, pnpm 12, cache pnpm store), `pnpm exec tsc --noEmit`, `pnpm test:coverage`, lalu `pnpm run build`. Langkah **Test + gerbang cakupan** **memblok**: gagal bila cakupan total baris < 90% atau cabang < 80% (`coverage.thresholds` di `frontend/vitest.config.mts`) atau ada test gagal. Berkas individual di bawah ambang hanya muncul sebagai peringatan di Summary. Laporan cakupan HTML/lcov diunggah sebagai artifact `cakupan-frontend`. Jadikan job ini required check di branch protection.
+
+- **Gerbang cakupan diff (baris yang diubah)** (id `cakupan-diff`, tiket #98): hanya pada `pull_request`; pada push dan `workflow_dispatch` job ini dilewati (skipped) karena tidak ada base PR. Memakai artifact `coverage-xml-gabungan` (backend) dan `cakupan-frontend` (lcov) lalu `backend/scripts/gerbang_cakupan_diff.py` (`diff-cover`) menilai hanya baris yang diubah terhadap merge-base dengan branch dasar. **Memblok**: baris yang diubah tercakup < 90%, atau (backend) cabang < 80%. Sisi tanpa perubahan kode produk (`backend/app`, `frontend/src` non-test) dilewati otomatis; PR dokumentasi/konfigurasi lolos dengan pesan "gerbang dilewati". Label PR `cakupan-dikecualikan` melewati gerbang ini saja, hanya dengan persetujuan pemilik (`CONSTRAINTS.md` bagian 4); pasang label lalu Re-run job. Ambang, batasan cabang, dan cara membaca kegagalan: [`CONSTRAINTS.md`](CONSTRAINTS.md) bagian 1 dan 6. Pemilik menjadikan job ini required check di ruleset `Core`. Lokal: `mise run verify-backend -- --full` / `mise run verify-frontend -- --full` (base `DIFF_BASE`, default `origin/main`).
+
+Membaca hasil: buka tab **Checks** di PR (atau **Actions**), lihat status tiap job; log `term-missing` menunjukkan baris yang belum tercakup; tabel cakupan gabungan ada di Summary job ringkasan.
+
+Mereproduksi lokal (detail Postgres sementara ada di [`backend/README.md`](backend/README.md)):
+
+```bash
+cd backend
+uv sync --frozen
+uv run pytest -q -W ignore --cov=app --cov-branch --cov-report=term-missing   # job unit
+export TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@127.0.0.1:55432/postgres
+uv run pytest -q -W ignore -m integration --cov=app --cov-branch              # job integrasi
+```
+
+Untuk gerbang gabungan yang setara CI (`coverage combine` + `scripts/cakupan_gerbang.py`), ikuti bagian "Gerbang cakupan" di [`backend/README.md`](backend/README.md).
+
+Mereproduksi frontend lokal (setara job `frontend`):
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm exec tsc --noEmit
+pnpm test:coverage    # exit != 0 bila gerbang 90/80 dilanggar; baca pesan "does not meet global threshold"
+pnpm run build
+```
+
+Job baru ditambahkan sebagai job tersendiri di bawah `jobs:` pada `ci.yml`.
 
 ---
 
@@ -179,19 +262,20 @@ Image Docker dirilis ke registry via `mise run publish [backend|frontend]` (wrap
 - Simpan semua secret di environment variable; jangan pernah hardcode. `.env` di-ignore git — perbarui `.env.example` (hanya key, tanpa nilai asli) ketika Anda menambah variable baru.
 - Perlakukan apa pun yang menangani auth, token, CORS, atau credential eksternal sebagai security-sensitive: catat di deskripsi PR apa yang Anda verifikasi.
 - Tandai setiap dependency pihak ketiga baru di PR, di-pin ke versi yang exact.
+- **Akses proyek.** Setiap endpoint yang menerima id proyek (langsung, atau lewat dokumen, activity log, event kalender, atau subtask) wajib memutuskan akses lewat satu titik: `ensure_project_access(db, project, user, TingkatAkses.…)` di `backend/app/core/dependencies.py`, dipanggil setelah proyek dimuat dan sebelum efek samping apa pun (penulisan, notifikasi, LLM, Drive). Jangan membuat pemeriksa sendiri per router. Test penjaga `backend/tests/test_penjaga_akses_rute.py` akan gagal bila ada rute berisi id proyek tanpa pemanggilan itu; pengecualian hanya sah dengan alasan spesifik dan nomor `SAH-n`. Matriks dan langkah menambah endpoint ada di [`backend/README.md`](backend/README.md#kebijakan-akses-proyek). Perubahan aturan akses butuh test integrasi peran × aksi (403 tanpa efek samping) dan penjelasan eksplisit di PR untuk setiap test lama yang diubah.
 
 ---
 
 <!-- BEGIN: current-overhaul-workflow (sementara — hapus ketika overhaul MVP selesai) -->
 ## Workflow Overhaul Saat Ini (sementara)
 
-_Ditambahkan 2026-10-12. Bagian ini mendokumentasikan proses untuk overhaul MVP yang sedang berjalan, dilacak di [`docs/ROADMAP.md`](docs/ROADMAP.md). Hapus bagian ini begitu overhaul mendarat._
+_Ditambahkan 2026-10-12. Bagian ini mendokumentasikan proses untuk overhaul MVP yang sedang berjalan, dilacak di [`docs/ROADMAP.md`](docs/ROADMAP.md) (indeks; rincian per fase di `docs/roadmap/`). Hapus bagian ini begitu overhaul mendarat._
 
 Overhaul dikerjakan **satu fase roadmap per branch**:
 
 - Nama branch: `feat/phase-<N>-<slug>` (mis. `feat/phase-0-security-hardening`), di-branch dari `main` terbaru.
 - Scope: satu fase per branch — bisa di-review dan di-revert sebagai satu unit. Fase berikutnya di-branch hanya setelah fase sebelumnya di-merge ke `main`.
-- Setiap fase diverifikasi terhadap **kriteria selesai**-nya di `docs/ROADMAP.md` sebelum PR dibuka.
+- Setiap fase diverifikasi terhadap **kriteria selesai**-nya di `docs/roadmap/fase-<N>.md` sebelum PR dibuka.
 - Checkbox roadmap (`- [ ]` → `- [x]`) di-update di branch yang sama dengan pekerjaan yang di-track-nya, agar roadmap tetap menjadi progress tracker yang hidup.
 - Pacing: satu fase per waktu. Sebuah fase diselesaikan dan di-review sebelum fase berikutnya dimulai. Fase yang independen (sesuai diagram dependency di roadmap) hanya di-parallelize atas kesepakatan eksplisit.
 

@@ -1,9 +1,20 @@
 "use client";
 
+import { useState } from "react";
+import { statusBadgeClass } from "@/lib/status";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
+import { LoadError } from "@/components/LoadError";
 import { SLABadge } from "@/components/SLABadge";
+import { TugasSayaSection } from "@/components/TugasSayaSection";
+import { ProjectPagination } from "@/components/ProjectPagination";
+import {
+  PROJECT_LIST_PAGE_SIZE,
+  projectListUrl,
+  type ProjectListItem,
+  type ProjectListPage,
+} from "@/lib/api/projects";
 
 /**
  * Dashboard SA (Solutions Architect)
@@ -19,39 +30,13 @@ import { SLABadge } from "@/components/SLABadge";
  */
 
 /** Tipe proyek dari backend (endpoint GET /api/v1/projects untuk SA) */
-interface SAProject {
-  id_project: string;
-  project_name: string;
-  customer_name: string;
-  status: string;
-  dq_number: string | null;
-  updated_at: string;
+interface SAProject extends ProjectListItem {
   /** Jumlah dokumen berstatus Final */
   doc_final_count: number;
   /** Total dokumen proyek */
   doc_total_count: number;
-  /** SLA days elapsed (null jika tidak aktif) */
   sla_days_elapsed: number | null;
-  /** Apakah folder Solutions terkunci */
   sla_is_locked: boolean;
-}
-
-/** Warna badge berdasarkan status proyek */
-function getStatusBadgeStyle(status: string): string {
-  switch (status) {
-    case "Assigned":
-      return "bg-blue-100 text-blue-800";
-    case "Ready":
-      return "bg-green-100 text-green-800";
-    case "Closed-Win":
-      return "bg-emerald-100 text-emerald-800";
-    case "Handover Complete":
-      return "bg-teal-100 text-teal-800";
-    case "Lost":
-      return "bg-red-100 text-red-800";
-    default:
-      return "bg-neutral-100 text-neutral-700";
-  }
 }
 
 /** Format tanggal ke format lokal Indonesia */
@@ -74,32 +59,30 @@ interface StatusCount {
   count: number;
 }
 
-/** Warna badge per status proyek */
-const STATUS_BADGE_COLORS: Record<string, string> = {
-  "Pending Assignment": "bg-yellow-100 text-yellow-700",
-  Assigned: "bg-blue-100 text-blue-700",
-  Ready: "bg-green-100 text-green-700",
-  "Closed-Win": "bg-emerald-100 text-emerald-700",
-  "Need Clarification": "bg-orange-100 text-orange-700",
-  New: "bg-neutral-100 text-neutral-700",
-  Lost: "bg-red-100 text-red-700",
-  "Scoring Pending": "bg-purple-100 text-purple-700",
-  "Manual Review Required": "bg-pink-100 text-pink-700",
-  "Handover Complete": "bg-teal-100 text-teal-700",
-};
-
 export default function SADashboard() {
   const router = useRouter();
+  const [page, setPage] = useState(1);
 
-  // Fetch proyek yang ditugaskan ke SA yang login
-  const { data: projects, isLoading } = useSWR<SAProject[]>(
-    "/projects?assigned_to=me&sort=-updated_at",
-    fetcher
-  );
+  // Fetch proyek yang ditugaskan ke SA yang login.
+  const { data: projects, isLoading, error: projectsError, mutate: mutateProjects } =
+    useSWR<ProjectListPage<SAProject>>(
+      projectListUrl({
+        page,
+        pageSize: PROJECT_LIST_PAGE_SIZE,
+        involved: "me",
+        sort: "-updated_at",
+      }),
+      fetcher,
+    );
 
   // Fetch ringkasan status proyek SA
-  const { data: statusSummary, isLoading: isLoadingStatus } = useSWR<StatusCount[]>(
-    "/projects/status-summary?assigned_to=me",
+  const {
+    data: statusSummary,
+    isLoading: isLoadingStatus,
+    error: statusError,
+    mutate: mutateStatus,
+  } = useSWR<StatusCount[]>(
+    "/projects/status-summary?involved=me",
     fetcher
   );
 
@@ -127,6 +110,9 @@ export default function SADashboard() {
         </button>
       </div>
 
+      {/* Tugas Saya: subtask milik SA lintas project (#126) */}
+      <TugasSayaSection />
+
       {/* Overview Proyek */}
       <section>
         <h2 className="text-lg font-semibold text-neutral-800 mb-4">
@@ -146,6 +132,10 @@ export default function SADashboard() {
           </div>
         )}
 
+        {statusError && !statusSummary && (
+          <LoadError message="Gagal memuat ringkasan proyek." onRetry={() => mutateStatus()} />
+        )}
+
         {!isLoadingStatus && statusSummary && (
           <div className="rounded-lg border border-neutral-200 bg-white p-5">
             {statusSummary.length === 0 ? (
@@ -162,7 +152,7 @@ export default function SADashboard() {
                     <span
                       className={`
                         px-2.5 py-1 text-xs font-medium rounded-full
-                        ${STATUS_BADGE_COLORS[item.status] || "bg-neutral-100 text-neutral-600"}
+                        ${statusBadgeClass(item.status)}
                       `}
                     >
                       {item.status}
@@ -190,8 +180,12 @@ export default function SADashboard() {
       {/* Loading skeleton (Requirement 19.5) */}
       {isLoading && <ProjectListSkeleton />}
 
+      {projectsError && !projects && (
+        <LoadError message="Gagal memuat daftar proyek." onRetry={() => mutateProjects()} />
+      )}
+
       {/* Empty state */}
-      {!isLoading && projects && projects.length === 0 && (
+      {!isLoading && projects && projects.items.length === 0 && (
         <div className="rounded-lg border border-neutral-200 bg-white p-12 text-center">
           <div className="mx-auto w-12 h-12 rounded-full bg-neutral-100 flex items-center justify-center mb-4">
             <svg
@@ -215,17 +209,25 @@ export default function SADashboard() {
         </div>
       )}
 
-      {/* Daftar proyek */}
-      {!isLoading && projects && projects.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {projects.map((project) => (
-            <SAProjectCard
-              key={project.id_project}
-              project={project}
-              onNavigate={(path) => router.push(path)}
-            />
-          ))}
-        </div>
+      {!isLoading && projects && projects.items.length > 0 && (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {projects.items.map((project) => (
+              <SAProjectCard
+                key={project.id_project}
+                project={project}
+                onNavigate={(path) => router.push(path)}
+              />
+            ))}
+          </div>
+          <ProjectPagination
+            page={projects.page}
+            pageSize={projects.page_size}
+            total={projects.total}
+            totalPages={projects.total_pages}
+            onPageChange={setPage}
+          />
+        </>
       )}
     </div>
   );
@@ -279,7 +281,7 @@ function SAProjectCard({
         <div className="flex flex-col items-end gap-1 shrink-0">
           {/* Badge Status */}
           <span
-            className={`inline-block px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${getStatusBadgeStyle(project.status)}`}
+            className={`inline-block px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${statusBadgeClass(project.status)}`}
           >
             {project.status}
           </span>
@@ -334,7 +336,7 @@ function SAProjectCard({
       {/* Footer: tanggal update + quick links */}
       <div className="flex items-center justify-between pt-3 border-t border-neutral-100">
         <span className="text-xs text-neutral-400">
-          Update: {formatDate(project.updated_at)}
+          Update: {formatDate(project.updated_at || "")}
         </span>
 
         {/* Quick links */}

@@ -3,15 +3,137 @@
  *
  * Fungsi-fungsi untuk komunikasi dengan backend:
  * - createProject: Submit proyek baru (multipart/form-data)
- * - submitManualBANT: Input skor BANT manual
  * - getBANTResult: Ambil hasil scoring BANT
  */
 
-import { ApiError } from "../fetcher";
+import { apiCall, apiRequest, fetcher } from "../fetcher";
+import { toPayload, type QualificationAnswers, type QualificationSchema } from "../qualification";
 
-// Base URL API backend
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "/api/v1";
+export const PROJECT_LIST_PAGE_SIZE = 20;
+export const PROJECT_LIST_MAX_PAGE_SIZE = 100;
+
+export interface ProjectListPerson {
+  id: string;
+  name: string | null;
+  email: string | null;
+}
+
+export interface ProjectListItem {
+  id_project: string;
+  project_name: string;
+  customer_name: string;
+  status: string;
+  qualification_state?: string | null;
+  dq_number: string | null;
+  bant_score: number | null;
+  use_case_tags: string[];
+  estimasi_nilai?: string | null;
+  target_submit: string | null;
+  assigned_sa?: string | null;
+  created_by?: ProjectListPerson | null;
+  product_pic?: ProjectListPerson | null;
+  sales_pic?: ProjectListPerson | null;
+  gdrive_folder_id?: string | null;
+  folder_provisioning_status?: string | null;
+  created_at?: string | null;
+  updated_at: string | null;
+  sla_days_elapsed?: number | null;
+  sla_is_locked?: boolean;
+  doc_final_count?: number;
+  doc_total_count?: number;
+}
+
+export interface ProjectListPage<T = ProjectListItem> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface IntegrationOperationAttempt {
+  attempt: number;
+  status: "pending" | "succeeded" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  outcome: string | null;
+  actionable_error: string | null;
+}
+
+export interface IntegrationOperationResponse {
+  id: string;
+  operation_type: string;
+  action: string;
+  status: "pending" | "succeeded" | "failed";
+  attempts: IntegrationOperationAttempt[];
+  started_at: string | null;
+  finished_at: string | null;
+  outcome: string | null;
+  actionable_error: string | null;
+  retryable: boolean;
+  project_id?: string | null;
+  context: Record<string, unknown>;
+}
+
+/** Record operator-confirmed manual email recovery; this never retries delivery. */
+export function recordManualEmailRepair(
+  projectId: string,
+  operationId: string,
+): Promise<IntegrationOperationResponse> {
+  return apiRequest<IntegrationOperationResponse>(
+    `/projects/${projectId}/integration-operations/${operationId}/repair`,
+    {
+      method: "POST",
+      body: {
+        recipient_checked_not_received: true,
+        manually_delivered_outside_app: true,
+      },
+    },
+  );
+}
+
+export interface ProjectListParams {
+  page: number;
+  pageSize?: number;
+  involved?: "me";
+  status?: string;
+  search?: string;
+  sort?: string;
+}
+
+export function projectListUrl({
+  page,
+  pageSize = PROJECT_LIST_PAGE_SIZE,
+  involved,
+  status,
+  search,
+  sort = "-updated_at",
+}: ProjectListParams): string {
+  const params = new URLSearchParams();
+  if (involved) params.set("involved", involved);
+  if (status) params.set("status", status);
+  const query = search?.trim();
+  if (query) params.set("search", query);
+  params.set("sort", sort);
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
+  return `/projects?${params.toString()}`;
+}
+
+export async function getAllProjects(): Promise<ProjectListItem[]> {
+  const pageSize = PROJECT_LIST_MAX_PAGE_SIZE;
+  const firstPage = await fetcher<ProjectListPage>(
+    projectListUrl({ page: 1, pageSize }),
+  );
+  const projects = [...firstPage.items];
+  for (let page = 2; page <= firstPage.total_pages; page += 1) {
+    const nextPage = await fetcher<ProjectListPage>(
+      projectListUrl({ page, pageSize }),
+    );
+    projects.push(...nextPage.items);
+  }
+  return projects;
+}
 
 /** Tipe response BANT Result dari backend */
 export interface BANTResult {
@@ -27,37 +149,114 @@ export interface BANTResult {
   feedback?: string | null;
 }
 
-/** Tipe response setelah project dibuat */
-export interface CreateProjectResponse {
-  id_project: string;
-  project_name: string;
-  customer_name: string;
-  status: string;
-  bant_score: number | null;
-}
-
-/** Input untuk BANT manual */
-export interface ManualBANTInput {
+/** Sub-skor BANT per kriteria (0-25) */
+export interface BANTSubScores {
   budget: number;
   authority: number;
   need: number;
   timeline: number;
 }
 
-/** Metadata detail BANT (dikirim bersama skor) */
-export interface BANTMetadataInput {
-  budget_detail?: { mrr: number | null };
-  authority_detail?: { name: string; position: string; email: string };
-  need_detail?: string;
-  timeline_detail?: string;
+/** Per-file processing result returned by POST /projects. */
+export interface ProjectFileResult {
+  filename: string;
+  success: boolean;
+  error?: string | null;
+  size_bytes?: number | null;
 }
 
-/**
- * Helper untuk mendapatkan auth token
- */
-function getAuthToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("access_token");
+/** Tipe response setelah project dibuat (skor dihitung backend dari kuesioner) */
+export interface CreateProjectResponse {
+  id_project: string;
+  project_name: string;
+  customer_name: string;
+  status: string;
+  /** null bila menunggu analisis file */
+  bant_score: number | null;
+  sub_scores: BANTSubScores | null;
+  feedback: string | null;
+  scoring_triggered: boolean;
+  files: ProjectFileResult[];
+}
+
+/** Error validasi per field dari backend (422) */
+export interface FieldError {
+  field: string;
+  reason: string;
+}
+
+/** Ambil daftar error per field dari ApiError 422 (format `{data: [{field, reason}]}`) */
+export function extractFieldErrors(err: unknown): FieldError[] {
+  const data = (err as { data?: { data?: unknown } } | null)?.data?.data;
+  if (!Array.isArray(data)) return [];
+  return data.filter(
+    (e): e is FieldError =>
+      typeof e?.field === "string" && typeof e?.reason === "string"
+  );
+}
+
+export interface CustomerOption {
+  id: string;
+  name: string;
+}
+
+
+export async function createCustomer(name: string): Promise<CustomerOption> {
+  const result = await apiRequest<CustomerOption>("/customers", { body: { name } });
+  return result;
+}
+
+export function renameCustomer(customerId: string, name: string): Promise<CustomerOption> {
+  return apiRequest<CustomerOption>(`/customers/${customerId}`, {
+    method: "PATCH",
+    body: { name },
+  });
+}
+
+export function repairProjectCustomerLink(
+  projectId: string,
+  customerId: string,
+  reason: string,
+): Promise<{ id_project: string; customer_id: string; customer_name: string }> {
+  return apiRequest(`/projects/${projectId}/customer-repair`, {
+    method: "POST",
+    body: { customer_id: customerId, reason },
+  });
+}
+
+export interface ProjectDriveFolderPreview {
+  folder_id: string;
+  name: string;
+  parent_id: string | null;
+  parents: string[];
+  detected_project_number: number | null;
+  inventory_folder_id: string;
+  diagram_folder_id: string;
+  solutions_folder_id: string;
+  parent_mismatch: boolean;
+  expected_customer_folder_id: string | null;
+  reason: string;
+}
+
+export function previewProjectDriveFolder(
+  projectId: string,
+  folderId: string,
+  reason: string,
+): Promise<ProjectDriveFolderPreview> {
+  return apiRequest(`/projects/${projectId}/register-folder/preview`, {
+    body: { folder_id: folderId, reason },
+  });
+}
+
+export function registerProjectDriveFolder(
+  projectId: string,
+  folderId: string,
+  reason: string,
+  preview: ProjectDriveFolderPreview,
+): Promise<unknown> {
+  return apiRequest(`/projects/${projectId}/register-folder`, {
+    body: { folder_id: folderId, reason, confirm: true, preview },
+  });
 }
 
 /**
@@ -70,87 +269,13 @@ function getAuthToken(): string | null {
 export async function createProject(
   data: FormData
 ): Promise<CreateProjectResponse> {
-  const token = getAuthToken();
-
-  const headers: HeadersInit = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  // Jangan set Content-Type — browser akan set boundary untuk multipart/form-data
-
-  const response = await fetch(`${API_BASE_URL}/projects`, {
+  // FormData: apiCall tidak men-set Content-Type (boundary dari browser)
+  const json = await apiCall("/projects", {
     method: "POST",
-    headers,
     body: data,
+    pesanGagal: "Gagal membuat proyek",
   });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => null);
-    throw new ApiError(
-      errorData?.message || `Gagal membuat proyek (status ${response.status})`,
-      response.status,
-      errorData
-    );
-  }
-
-  const json = await response.json();
   return json.data ?? json;
-}
-
-/**
- * Submit skor BANT secara manual
- * Digunakan sebagai fallback ketika tidak ada file attachment
- *
- * @param projectId - ID proyek yang akan di-score
- * @param scores - Objek skor per kriteria BANT (masing-masing 0-25)
- * @returns Hasil BANT scoring
- */
-export async function submitManualBANT(
-  projectId: string,
-  scores: ManualBANTInput,
-  metadata?: BANTMetadataInput
-): Promise<BANTResult> {
-  const token = getAuthToken();
-
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-  };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  // Kirim skor + metadata (metadata opsional, backend tetap terima budget/authority/need/timeline)
-  const body = metadata ? { ...scores, ...metadata } : scores;
-
-  const response = await fetch(
-    `${API_BASE_URL}/projects/${projectId}/score-manual`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    }
-  );
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => null);
-    throw new ApiError(
-      errorData?.message || `Gagal submit skor BANT (status ${response.status})`,
-      response.status,
-      errorData
-    );
-  }
-
-  const json = await response.json();
-  const rawData = json.data ?? json;
-
-  // Map backend response (total_score, sub_scores) ke frontend interface (bant_score, bant_detail)
-  return {
-    bant_score: rawData.total_score ?? rawData.bant_score ?? 0,
-    bant_detail: rawData.sub_scores ?? rawData.bant_detail ?? { budget: 0, authority: 0, need: 0, timeline: 0 },
-    use_case_tags: rawData.use_case_tags ?? [],
-    status: rawData.status ?? "Unknown",
-    feedback: rawData.feedback ?? null,
-  };
 }
 
 /**
@@ -162,32 +287,31 @@ export async function submitManualBANT(
 export async function getBANTResult(
   projectId: string
 ): Promise<BANTResult | null> {
-  const token = getAuthToken();
-
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-  };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(
-    `${API_BASE_URL}/projects/${projectId}/bant-result`,
-    { headers }
-  );
-
-  if (!response.ok) {
-    // 404 berarti belum ada hasil
-    if (response.status === 404) return null;
-
-    const errorData = await response.json().catch(() => null);
-    throw new ApiError(
-      errorData?.message || `Gagal mengambil hasil BANT (status ${response.status})`,
-      response.status,
-      errorData
-    );
-  }
-
-  const json = await response.json();
+  // 404 berarti belum ada hasil
+  const json = await apiCall(`/projects/${projectId}/bant-result`, {
+    pesanGagal: "Gagal mengambil hasil BANT",
+    terimaStatus: [404],
+  });
+  if (json === null) return null;
   return json.data ?? json;
+}
+
+/** Hasil simpan jawaban kuesioner: re-score (total_score, status, feedback) atau koreksi (rescored=false). */
+export interface UpdateAnswersResult {
+  total_score: number | null;
+  status: string;
+  feedback?: string | null;
+  rescored?: boolean;
+}
+
+/** Edit jawaban kuesioner (PUT /projects/{id}/qualification-answers); skor dihitung backend. */
+export function updateQualificationAnswers(
+  projectId: string,
+  schema: QualificationSchema,
+  answers: QualificationAnswers
+): Promise<UpdateAnswersResult> {
+  return apiRequest<UpdateAnswersResult>(`/projects/${projectId}/qualification-answers`, {
+    method: "PUT",
+    body: toPayload(schema, answers),
+  });
 }
